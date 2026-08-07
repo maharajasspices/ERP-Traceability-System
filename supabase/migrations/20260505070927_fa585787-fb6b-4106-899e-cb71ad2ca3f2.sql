@@ -1,0 +1,1 @@
+INSERT INTO public.fms_user_invitations (email, name, role, status) VALUES ('thabile.mnyawe@maharajasspices.co.za', 'Thabile Mnyawe', 'production_supervisor', 'pending') ON CONFLICT DO NOTHING;

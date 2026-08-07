@@ -1,0 +1,2 @@
+ALTER TABLE public.fms_production_batches ALTER COLUMN planned_batch_size TYPE numeric USING planned_batch_size::numeric;
+ALTER TABLE public.fms_production_batches ALTER COLUMN actual_quantity_produced TYPE numeric USING actual_quantity_produced::numeric;

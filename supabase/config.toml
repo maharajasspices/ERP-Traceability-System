@@ -1,0 +1,5 @@
+project_id = "dhafduzlhpartlvsgbqx"
+
+[functions.fms-validate]
+verify_jwt = false
+

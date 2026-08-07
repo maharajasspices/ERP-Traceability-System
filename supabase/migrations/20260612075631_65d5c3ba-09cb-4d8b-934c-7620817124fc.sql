@@ -1,0 +1,2 @@
+DROP POLICY IF EXISTS "FMS users can insert material prices" ON public.fms_supplier_material_prices;
+DROP POLICY IF EXISTS "FMS users can update material prices" ON public.fms_supplier_material_prices;

@@ -1,0 +1,1 @@
+INSERT INTO public.fms_users (user_id, name, role, is_active) VALUES ('c7e66a8e-85f6-404f-b1bf-9ace96c7a168', 'Thabile Mnyawe', 'production_supervisor', true) ON CONFLICT (user_id) DO UPDATE SET role = EXCLUDED.role, is_active = true; UPDATE public.fms_user_invitations SET status = 'accepted', accepted_at = now() WHERE lower(email) LIKE 'thabile.mnyawe@%' AND status = 'pending';

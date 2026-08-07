@@ -1,0 +1,341 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Food Manufacturing Traceability System Design System */
+
+@layer base {
+  :root {
+    /* Brand Colors - Red primary with golden accent */
+    --background: 0 0% 98%;
+    --foreground: 220 20% 15%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 220 20% 15%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 220 20% 15%;
+
+    /* Primary: Brand Red */
+    --primary: 3 79% 53%;
+    --primary-foreground: 0 0% 100%;
+
+    /* Secondary: Warm gray for factory-floor readability */
+    --secondary: 30 10% 94%;
+    --secondary-foreground: 220 20% 20%;
+
+    /* Muted: Subtle backgrounds */
+    --muted: 30 10% 96%;
+    --muted-foreground: 220 10% 45%;
+
+    /* Accent: Golden leaf color */
+    --accent: 42 60% 70%;
+    --accent-foreground: 30 40% 20%;
+
+    /* Status Colors */
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    --success: 142 71% 45%;
+    --success-foreground: 0 0% 100%;
+
+    --warning: 38 92% 50%;
+    --warning-foreground: 0 0% 100%;
+
+    --info: 201 90% 50%;
+    --info-foreground: 0 0% 100%;
+
+    --border: 220 13% 90%;
+    --input: 220 13% 90%;
+    --ring: 3 79% 53%;
+
+    --radius: 0.625rem;
+
+    /* Sidebar - Clean professional */
+    --sidebar-background: 220 20% 15%;
+    --sidebar-foreground: 220 10% 85%;
+    --sidebar-primary: 3 79% 53%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 220 15% 22%;
+    --sidebar-accent-foreground: 220 10% 90%;
+    --sidebar-border: 220 15% 25%;
+    --sidebar-ring: 3 79% 53%;
+
+    /* Custom tokens for this system */
+    --header-height: 4rem;
+    --sidebar-width: 280px;
+    --sidebar-collapsed-width: 80px;
+
+    /* Gradients */
+    --gradient-primary: linear-gradient(135deg, hsl(3, 79%, 53%), hsl(3, 79%, 45%));
+    --gradient-accent: linear-gradient(135deg, hsl(42, 60%, 70%), hsl(42, 50%, 60%));
+    --gradient-surface: linear-gradient(180deg, hsl(0, 0%, 100%), hsl(30, 10%, 98%));
+
+    /* Shadows */
+    --shadow-sm: 0 1px 2px 0 hsl(220 20% 15% / 0.05);
+    --shadow-md: 0 4px 6px -1px hsl(220 20% 15% / 0.08), 0 2px 4px -1px hsl(220 20% 15% / 0.04);
+    --shadow-lg: 0 10px 15px -3px hsl(220 20% 15% / 0.08), 0 4px 6px -2px hsl(220 20% 15% / 0.04);
+    --shadow-card: 0 1px 3px 0 hsl(220 20% 15% / 0.06), 0 1px 2px 0 hsl(220 20% 15% / 0.04);
+  }
+
+  .dark {
+    --background: 220 20% 10%;
+    --foreground: 220 10% 95%;
+
+    --card: 220 18% 14%;
+    --card-foreground: 220 10% 95%;
+
+    --popover: 220 18% 14%;
+    --popover-foreground: 220 10% 95%;
+
+    --primary: 3 75% 58%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 220 15% 20%;
+    --secondary-foreground: 220 10% 90%;
+
+    --muted: 220 15% 18%;
+    --muted-foreground: 220 10% 60%;
+
+    --accent: 42 50% 55%;
+    --accent-foreground: 0 0% 100%;
+
+    --destructive: 0 62% 50%;
+    --destructive-foreground: 0 0% 100%;
+
+    --success: 142 60% 40%;
+    --success-foreground: 0 0% 100%;
+
+    --warning: 38 80% 50%;
+    --warning-foreground: 0 0% 100%;
+
+    --info: 201 80% 50%;
+    --info-foreground: 0 0% 100%;
+
+    --border: 220 15% 25%;
+    --input: 220 15% 25%;
+    --ring: 3 75% 58%;
+
+    --sidebar-background: 220 20% 8%;
+    --sidebar-foreground: 220 10% 85%;
+    --sidebar-primary: 3 75% 58%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 220 15% 15%;
+    --sidebar-accent-foreground: 220 10% 90%;
+    --sidebar-border: 220 15% 18%;
+    --sidebar-ring: 3 75% 58%;
+
+    --shadow-sm: 0 1px 2px 0 hsl(0 0% 0% / 0.3);
+    --shadow-md: 0 4px 6px -1px hsl(0 0% 0% / 0.4), 0 2px 4px -1px hsl(0 0% 0% / 0.2);
+    --shadow-lg: 0 10px 15px -3px hsl(0 0% 0% / 0.4), 0 4px 6px -2px hsl(0 0% 0% / 0.2);
+    --shadow-card: 0 1px 3px 0 hsl(0 0% 0% / 0.3), 0 1px 2px 0 hsl(0 0% 0% / 0.2);
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html {
+    font-family: 'DM Sans', system-ui, sans-serif;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-semibold tracking-tight;
+  }
+}
+
+@layer components {
+  /* Module Cards */
+  .module-card {
+    @apply relative overflow-hidden rounded-xl border border-border bg-card p-6 transition-all duration-300;
+    box-shadow: var(--shadow-card);
+  }
+
+  .module-card:hover {
+    @apply border-primary/30;
+    box-shadow: var(--shadow-md);
+    transform: translateY(-2px);
+  }
+
+  /* Data Tables */
+  .data-table {
+    @apply w-full border-collapse;
+  }
+
+  .data-table th {
+    @apply bg-muted px-4 py-3 text-left text-sm font-semibold text-foreground;
+  }
+
+  .data-table td {
+    @apply border-b border-border px-4 py-3 text-sm;
+  }
+
+  .data-table tr:hover td {
+    @apply bg-muted/50;
+  }
+
+  /* Status Badges */
+  .badge-active {
+    @apply inline-flex items-center rounded-full bg-success/10 px-2.5 py-0.5 text-xs font-medium text-success;
+  }
+
+  .badge-inactive {
+    @apply inline-flex items-center rounded-full bg-muted px-2.5 py-0.5 text-xs font-medium text-muted-foreground;
+  }
+
+  .badge-warning {
+    @apply inline-flex items-center rounded-full bg-warning/10 px-2.5 py-0.5 text-xs font-medium text-warning;
+  }
+
+  .badge-error {
+    @apply inline-flex items-center rounded-full bg-destructive/10 px-2.5 py-0.5 text-xs font-medium text-destructive;
+  }
+
+  /* Print Styles */
+  @media print {
+    .no-print {
+      display: none !important;
+    }
+
+    .print-only {
+      display: block !important;
+    }
+
+    body {
+      background: white !important;
+    }
+
+    .batch-sheet {
+      page-break-after: always;
+    }
+  }
+
+  .print-only {
+    display: none;
+  }
+
+  /* Factory Floor Friendly - Large touch targets */
+  .touch-target {
+    @apply min-h-[44px] min-w-[44px];
+  }
+
+  /* Scrollbar styling - Red theme */
+  ::-webkit-scrollbar {
+    width: 12px;
+    height: 12px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: hsl(0 0% 90%);
+    border-radius: 6px;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: linear-gradient(180deg, hsl(3 79% 53%), hsl(3 79% 40%));
+    border-radius: 6px;
+    border: 2px solid hsl(0 0% 90%);
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(180deg, hsl(3 79% 60%), hsl(3 79% 45%));
+  }
+
+  ::-webkit-scrollbar-corner {
+    background: hsl(0 0% 90%);
+  }
+
+  /* Firefox scrollbar - Red theme */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(3 79% 53%) hsl(0 0% 90%);
+  }
+  
+  /* Dark mode scrollbar */
+  .dark ::-webkit-scrollbar-track {
+    background: hsl(220 15% 15%);
+  }
+  
+  .dark ::-webkit-scrollbar-thumb {
+    background: linear-gradient(180deg, hsl(3 75% 58%), hsl(3 75% 45%));
+    border-color: hsl(220 15% 15%);
+  }
+  
+  .dark * {
+    scrollbar-color: hsl(3 75% 58%) hsl(220 15% 15%);
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+
+  .gradient-primary {
+    background: var(--gradient-primary);
+  }
+
+  .gradient-accent {
+    background: var(--gradient-accent);
+  }
+
+  .shadow-card {
+    box-shadow: var(--shadow-card);
+  }
+
+  .shadow-elevated {
+    box-shadow: var(--shadow-lg);
+  }
+
+  /* Animation utilities */
+  .animate-fade-in {
+    animation: fadeIn 0.3s ease-out;
+  }
+
+  .animate-slide-up {
+    animation: slideUp 0.3s ease-out;
+  }
+
+  .animate-slide-in-right {
+    animation: slideInRight 0.3s ease-out;
+  }
+
+  @keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
+  @keyframes slideUp {
+    from { 
+      opacity: 0;
+      transform: translateY(10px);
+    }
+    to { 
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes slideInRight {
+    from { 
+      opacity: 0;
+      transform: translateX(20px);
+    }
+    to { 
+      opacity: 1;
+      transform: translateX(0);
+    }
+  }
+
+  @keyframes scan {
+    0%, 100% { top: 0; }
+    50% { top: calc(100% - 2px); }
+  }
+}
