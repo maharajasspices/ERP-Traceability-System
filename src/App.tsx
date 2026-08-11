@@ -16,7 +16,6 @@ import Dispatch from "./pages/Dispatch";
 import Traceability from "./pages/Traceability";
 import Suppliers from "./pages/Suppliers";
 import Settings from "./pages/Settings";
-// import Invoices from "./pages/Invoices";
 
 import Auth from "./pages/Auth";
 import NotFound from "./pages/NotFound";
@@ -40,8 +39,7 @@ const App = () => (
               <Route path="/batch-sheet" element={<BatchSheet />} />
               <Route path="/dispatch" element={<Dispatch />} />
               <Route path="/traceability" element={<Traceability />} />
-              <Route path="/suppliers" element={<Suppliers />} />
-              {/* <Route path="/invoices" element={<Invoices />} /> */}
+<Route path="/suppliers" element={<Suppliers />} />
               <Route path="/settings" element={<Settings />} />
               
             </Route>

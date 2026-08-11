@@ -16,7 +16,6 @@ const pageTitles: Record<string, string> = {
   '/traceability': 'Traceability & Reporting',
   '/suppliers': 'Suppliers',
   '/settings': 'Settings',
-  
 };
 
 export const Header: React.FC = () => {

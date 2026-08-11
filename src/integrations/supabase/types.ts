@@ -345,6 +345,116 @@ export type Database = {
           },
         ]
       }
+
+      fms_invoice_items: {
+        Row: {
+          created_at: string | null
+          description: string | null
+          id: string
+          invoice_id: string
+          line_total: number
+          quantity: number
+          stock_code_id: string
+          unit_price: number
+        }
+        Insert: {
+          created_at?: string | null
+          description?: string | null
+          id?: string
+          invoice_id: string
+          line_total?: number
+          quantity?: number
+          stock_code_id: string
+          unit_price?: number
+        }
+        Update: {
+          created_at?: string | null
+          description?: string | null
+          id?: string
+          invoice_id?: string
+          line_total?: number
+          quantity?: number
+          stock_code_id?: string
+          unit_price?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fms_invoice_items_invoice_id_fkey"
+            columns: ["invoice_id"]
+            isOneToOne: false
+            referencedRelation: "fms_invoices"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fms_invoice_items_stock_code_id_fkey"
+            columns: ["stock_code_id"]
+            isOneToOne: false
+            referencedRelation: "fms_stock_codes"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      fms_invoices: {
+        Row: {
+          created_at: string | null
+          created_by: string
+          customer_address: string | null
+          customer_email: string | null
+          customer_name: string
+          customer_phone: string | null
+          due_date: string | null
+          id: string
+          invoice_date: string
+          invoice_number: string
+          notes: string | null
+          status: Database["public"]["Enums"]["fms_invoice_status"]
+          subtotal: number
+          tax_amount: number
+          tax_rate: number
+          total: number
+          updated_at: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          created_by: string
+          customer_address?: string | null
+          customer_email?: string | null
+          customer_name: string
+          customer_phone?: string | null
+          due_date?: string | null
+          id?: string
+          invoice_date?: string
+          invoice_number: string
+          notes?: string | null
+          status?: Database["public"]["Enums"]["fms_invoice_status"]
+          subtotal?: number
+          tax_amount?: number
+          tax_rate?: number
+          total?: number
+          updated_at?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          created_by?: string
+          customer_address?: string | null
+          customer_email?: string | null
+          customer_name?: string
+          customer_phone?: string | null
+          due_date?: string | null
+          id?: string
+          invoice_date?: string
+          invoice_number?: string
+          notes?: string | null
+          status?: Database["public"]["Enums"]["fms_invoice_status"]
+          subtotal?: number
+          tax_amount?: number
+          tax_rate?: number
+          total?: number
+          updated_at?: string | null
+        }
+        Relationships: []
+      }
+  
       fms_materials_used: {
         Row: {
           batch_id: string
@@ -2288,6 +2398,7 @@ export type Database = {
     }
     Enums: {
       app_role: "admin" | "employee" | "customer" | "manager" | "hr"
+      fms_invoice_status: "draft" | "issued" | "paid" | "cancelled"
       fms_role:
         | "system_admin"
         | "production_supervisor"
@@ -2423,6 +2534,7 @@ export const Constants = {
   public: {
     Enums: {
       app_role: ["admin", "employee", "customer", "manager", "hr"],
+      fms_invoice_status: ["draft", "issued", "paid", "cancelled"],
       fms_role: [
         "system_admin",
         "production_supervisor",

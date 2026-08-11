@@ -234,29 +234,66 @@ export function useFMSData() {
     };
 
     setLoading(true);
+
+    // Helper: try a DB query, fall back to local store when the DB is unavailable
+    const dbOrLocal = async <T,>(
+      query: () => Promise<{ data: T[] | null; error: any }>,
+      local: () => T[]
+    ): Promise<T[]> => {
+      try {
+        const { data, error } = await query();
+        if (error) throw error;
+        if (data) return data as T[];
+        return local();
+      } catch (err) {
+        console.warn('[FMS] DB unavailable, using local fallback:', err);
+        return local();
+      }
+    };
+
     try {
-      const [suppliersRes, stockCodesData, receivingRes, bomsRes, batchesRes, dispatchRes] = await Promise.all([
-        supabase.from('fms_suppliers').select('*').order('name'),
-        fetchAllStockCodes(),
-        supabase.from('fms_receiving').select('*').order('received_at', { ascending: false }),
-        supabase.from('fms_bom').select('*, fms_bom_components(*)').order('created_at', { ascending: false }),
-        supabase.from('fms_production_batches').select('*').order('created_at', { ascending: false }),
-        supabase.from('fms_dispatch').select('*, fms_dispatch_items(*)').order('dispatch_date', { ascending: false }),
+      // Stock codes
+      const stockCodesData = await dbOrLocal<FMSStockCode>(
+        () => fetchAllStockCodes().then((data) => ({ data, error: null })),
+        () => []
+      );
+      setStockCodes(stockCodesData);
+
+      const [suppliersRes, receivingRes, bomsRes, batchesRes, dispatchRes] = await Promise.all([
+        dbOrLocal<FMSSupplier>(
+          () => supabase.from('fms_suppliers').select('*').order('name'),
+          () => []
+        ),
+        dbOrLocal<FMSReceiving>(
+          () => supabase.from('fms_receiving').select('*').order('received_at', { ascending: false }),
+          () => []
+        ),
+        dbOrLocal<any>(
+          () => supabase.from('fms_bom').select('*, fms_bom_components(*)').order('created_at', { ascending: false }),
+          () => []
+        ),
+        dbOrLocal<FMSProductionBatch>(
+          () => supabase.from('fms_production_batches').select('*').order('created_at', { ascending: false }),
+          () => []
+        ),
+        dbOrLocal<any>(
+          () => supabase.from('fms_dispatch').select('*, fms_dispatch_items(*)').order('dispatch_date', { ascending: false }),
+          () => []
+        ),
       ]);
 
-      if (suppliersRes.data) setSuppliers(suppliersRes.data as FMSSupplier[]);
-      setStockCodes(stockCodesData);
-      if (receivingRes.data) setReceivingRecords(receivingRes.data as FMSReceiving[]);
-      if (bomsRes.data) {
-        const bomsWithComponents = bomsRes.data.map((bom: any) => ({
+      setSuppliers(suppliersRes);
+      if (receivingRes) setReceivingRecords(receivingRes);
+      if (bomsRes) {
+        const bomsWithComponents = bomsRes.map((bom: any) => ({
           ...bom,
           components: bom.fms_bom_components || [],
         }));
         setBoms(bomsWithComponents as FMSBOM[]);
       }
-      if (batchesRes.data) setProductionBatches(batchesRes.data as FMSProductionBatch[]);
-      if (dispatchRes.data) {
-        const dispatchWithItems = dispatchRes.data.map((dispatch: any) => ({
+      if (batchesRes) setProductionBatches(batchesRes);
+      if (dispatchRes) {
+        const dispatchWithItems = dispatchRes.map((dispatch: any) => ({
           ...dispatch,
           items: dispatch.fms_dispatch_items || [],
         }));
