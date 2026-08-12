@@ -91,42 +91,72 @@ const Auth: React.FC = () => {
             </div>
           )}
 
-          <form onSubmit={handleLogin} className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="login-email">Email</Label>
-              <Input
-                id="login-email"
-                type="email"
-                placeholder="your@email.com"
-                value={loginForm.email}
-                onChange={(e) => setLoginForm((prev) => ({ ...prev, email: e.target.value }))}
-                required
-                autoComplete="email"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="login-password">Password</Label>
-              <Input
-                id="login-password"
-                type="password"
-                placeholder="••••••••"
-                value={loginForm.password}
-                onChange={(e) => setLoginForm((prev) => ({ ...prev, password: e.target.value }))}
-                required
-                autoComplete="current-password"
-              />
-            </div>
-            <Button type="submit" className="w-full" disabled={isLoading || isChecking}>
-              {isLoading || isChecking ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  {isChecking ? 'Checking security...' : 'Signing in...'}
-                </>
-              ) : (
-                'Sign In'
-              )}
-            </Button>
-          </form>
+        <form onSubmit={handleLogin} className="space-y-4">
+
+  <div className="space-y-2">
+    <Label htmlFor="login-email">Email</Label>
+
+    <Input
+      id="login-email"
+      type="email"
+      placeholder="your@email.com"
+      value={loginForm.email}
+      onChange={(e) =>
+        setLoginForm((prev) => ({
+          ...prev,
+          email: e.target.value,
+        }))
+      }
+      required
+      autoComplete="email"
+    />
+  </div>
+
+  <div className="space-y-2">
+    <div className="flex items-center justify-between">
+      <Label htmlFor="login-password">Password</Label>
+
+      <button
+        type="button"
+        onClick={() => navigate("/forgot-password")}
+        className="text-sm font-medium text-primary hover:underline"
+      >
+        Forgot Password?
+      </button>
+    </div>
+
+    <Input
+      id="login-password"
+      type="password"
+      placeholder="••••••••"
+      value={loginForm.password}
+      onChange={(e) =>
+        setLoginForm((prev) => ({
+          ...prev,
+          password: e.target.value,
+        }))
+      }
+      required
+      autoComplete="current-password"
+    />
+  </div>
+
+  <Button
+    type="submit"
+    className="w-full"
+    disabled={isLoading || isChecking}
+  >
+    {isLoading || isChecking ? (
+      <>
+        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+        {isChecking ? "Checking security..." : "Signing in..."}
+      </>
+    ) : (
+      "Sign In"
+    )}
+  </Button>
+
+</form>
         </CardContent>
       </Card>
 

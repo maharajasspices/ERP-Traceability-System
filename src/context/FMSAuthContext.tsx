@@ -14,6 +14,7 @@ interface FMSUser {
   is_active: boolean;
 }
 
+
 interface FMSAuthContextType {
   user: User | null;
   session: Session | null;

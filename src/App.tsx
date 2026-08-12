@@ -19,6 +19,9 @@ import Settings from "./pages/Settings";
 
 import Auth from "./pages/Auth";
 import NotFound from "./pages/NotFound";
+import ResetPassword from "./pages/ResetPassword";
+import ForgotPassword from "./pages/ForgotPassword";
+import Landing from "./pages/LandingPage"
 
 const queryClient = new QueryClient();
 
@@ -31,6 +34,9 @@ const App = () => (
         <BrowserRouter>
           <Routes>
             <Route path="/auth" element={<Auth />} />
+            <Route path="/reset-password" element={<ResetPassword />} />
+            <Route path="/forgot-password" element={<ForgotPassword />} />
+            <Route path="/landing" element={<Landing/>}/>
             <Route element={<ProtectedRoute><QaViewerGuard><MainLayout /></QaViewerGuard></ProtectedRoute>}>
               <Route path="/" element={<Dashboard />} />
               <Route path="/stock-codes" element={<StockCodes />} />
