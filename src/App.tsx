@@ -22,7 +22,7 @@ import Auth from "./pages/Auth";
 import NotFound from "./pages/NotFound";
 import ResetPassword from "./pages/ResetPassword";
 import ForgotPassword from "./pages/ForgotPassword";
-import Landing from "./pages/LandingPage"
+import LandingPage from "./pages/LandingPage"
 
 const queryClient = new QueryClient();
 
@@ -37,9 +37,9 @@ const App = () => (
             <Route path="/auth" element={<Auth />} />
             <Route path="/reset-password" element={<ResetPassword />} />
             <Route path="/forgot-password" element={<ForgotPassword />} />
-            <Route path="/landing" element={<Landing/>}/>
+            <Route path="/" element={<LandingPage/>}/>
             <Route element={<ProtectedRoute><QaViewerGuard><MainLayout /></QaViewerGuard></ProtectedRoute>}>
-              <Route path="/" element={<Dashboard />} />
+              <Route path="/Dashboard" element={<Dashboard />} />
               <Route path="/stock-codes" element={<StockCodes />} />
               <Route path="/receiving" element={<ReceivingLog />} />
               <Route path="/bom" element={<BillOfMaterials />} />
