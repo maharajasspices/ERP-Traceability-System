@@ -12,7 +12,7 @@ AS $$
   SELECT EXISTS (
     SELECT 1 FROM auth.users 
     WHERE id = _user_id 
-    AND email = 'aryan123qwer@gmail.com'
+    AND email = 'zulaigah.benjamin@maharajasspices.co.za'
   );
 $$;
 

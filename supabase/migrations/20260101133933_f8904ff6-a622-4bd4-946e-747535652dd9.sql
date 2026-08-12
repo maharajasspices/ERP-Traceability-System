@@ -1,8 +1,8 @@
--- Insert the authorized FMS user (aryan123qwer@gmail.com) with system_admin role
+-- Insert the authorized FMS user (zulaigah.benjamin@maharajasspices.c.za) with system_admin role
 INSERT INTO public.fms_users (user_id, name, role, is_active)
 VALUES (
   'f4cacdbe-0c43-43c4-a75f-d151c19d7f18',
-  'Aryan Inderlall',
+  'zulaigah.benjamin@maharajasspices.co.za',
   'system_admin',
   true
 )

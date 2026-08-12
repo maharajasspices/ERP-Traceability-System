@@ -16,6 +16,7 @@ import Dispatch from "./pages/Dispatch";
 import Traceability from "./pages/Traceability";
 import Suppliers from "./pages/Suppliers";
 import Settings from "./pages/Settings";
+import AdminPasswords from "./pages/AdminPasswords";
 
 import Auth from "./pages/Auth";
 import NotFound from "./pages/NotFound";
@@ -47,6 +48,7 @@ const App = () => (
               <Route path="/traceability" element={<Traceability />} />
 <Route path="/suppliers" element={<Suppliers />} />
               <Route path="/settings" element={<Settings />} />
+              <Route path="/admin-passwords" element={<AdminPasswords />} />
               
             </Route>
             <Route path="*" element={<NotFound />} />

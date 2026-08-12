@@ -23,7 +23,7 @@ CREATE INDEX idx_fms_activity_log_action_type ON fms_activity_log(action_type);
 -- Enable RLS
 ALTER TABLE fms_activity_log ENABLE ROW LEVEL SECURITY;
 
--- Only allow the owner (aryan123qwer@gmail.com) to view activity logs
+-- Only allow the owner ( to view activity logs
 -- First, create a policy that allows all FMS users to INSERT logs
 CREATE POLICY "All FMS users can create activity logs"
 ON fms_activity_log
@@ -36,7 +36,7 @@ CREATE POLICY "Only owner can view activity logs"
 ON fms_activity_log
 FOR SELECT
 USING (
-    (SELECT email FROM auth.users WHERE id = auth.uid()) = 'aryan123qwer@gmail.com'
+    (SELECT email FROM auth.users WHERE id = auth.uid()) = 'zulaigah.benjamin@maharajasspices.co.za'
 );
 
 -- Add custom_allergen field to fms_stock_codes for "Other" allergen specification

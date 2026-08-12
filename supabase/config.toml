@@ -3,3 +3,6 @@ project_id = "dhafduzlhpartlvsgbqx"
 [functions.fms-validate]
 verify_jwt = false
 
+[functions.fms-admin-password]
+verify_jwt = false
+

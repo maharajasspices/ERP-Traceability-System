@@ -16,7 +16,8 @@ import {
   Users,
   Settings,
   Menu,
-  X
+  X,
+  KeyRound
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet';
@@ -88,6 +89,15 @@ const secondaryNavItems: NavItem[] = [
   },
 ];
 
+const adminNavItems: NavItem[] = [
+  {
+    title: 'User Management',
+    href: '/admin-passwords',
+    icon: KeyRound,
+    description: 'Add, edit & reset users',
+  },
+];
+
 interface SidebarProps {
   collapsed: boolean;
   onToggle: () => void;
@@ -97,10 +107,14 @@ const SidebarContent: React.FC<{ collapsed: boolean; onItemClick?: () => void }>
   const location = useLocation();
   const { fmsUser } = useFMSAuth();
   const isQaViewer = fmsUser?.role === 'qa_viewer';
+  const isAdmin = fmsUser?.role === 'system_admin';
 
   const allowedForViewer = new Set(['/', '/receiving', '/bom', '/batch-sheet', '/traceability', '/suppliers']);
   const visibleMain = isQaViewer ? navItems.filter((i) => allowedForViewer.has(i.href)) : navItems;
   const visibleSecondary = isQaViewer ? secondaryNavItems.filter((i) => allowedForViewer.has(i.href)) : secondaryNavItems;
+
+  // Admin-only navigation items (only visible to system_admin)
+  const allSecondary = [...visibleSecondary, ...(isAdmin ? adminNavItems : [])];
 
   return (
     <div className="flex h-full flex-col">
@@ -166,7 +180,7 @@ const SidebarContent: React.FC<{ collapsed: boolean; onItemClick?: () => void }>
             Settings
           </div>
         )}
-        {visibleSecondary.map((item) => {
+        {allSecondary.map((item) => {
           const isActive = location.pathname === item.href;
           
           return (
