@@ -23,7 +23,7 @@ const Auth: React.FC = () => {
 
   useEffect(() => {
     if (!authLoading && user && fmsUser) {
-      navigate('/');
+      navigate('/dashboard');
     }
     if (!authLoading && user && !fmsUser) {
       setAccessDenied(true);

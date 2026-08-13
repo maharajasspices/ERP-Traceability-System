@@ -264,7 +264,7 @@ const ReceivingLog: React.FC = () => {
               updated_by: user?.id,
             });
         }
-        await refreshPrices();
+        await refreshPrices(true);
       }
 
       const failedChecks = Object.entries(qualityChecks)
@@ -353,7 +353,7 @@ const ReceivingLog: React.FC = () => {
             updated_by: user?.id,
           });
       }
-      await refreshPrices();
+      await refreshPrices(true);
     }
     setSavingCost(false);
     toast.success('Cost price updated and synced to suppliers');

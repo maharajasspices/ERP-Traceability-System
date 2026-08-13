@@ -21,7 +21,7 @@ const Landing: React.FC = () => {
       icon: Factory,
       color: 'red',
       available: true,
-      action: () => navigate('/'),
+      action: () => navigate('/dashboard'),
     },
     {
       title: 'HR Department',

@@ -11,16 +11,33 @@ export interface SupplierMaterialPrice {
   updated_at: string;
 }
 
+// Module-level cache to avoid re-fetching prices on every page navigation
+let cachedPrices: SupplierMaterialPrice[] | null = null;
+let cachedAt: number | null = null;
+const PRICE_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
 export function useSupplierPrices() {
-  const [prices, setPrices] = useState<SupplierMaterialPrice[]>([]);
+  const [prices, setPrices] = useState<SupplierMaterialPrice[]>(cachedPrices || []);
   const [loading, setLoading] = useState(true);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (force = false) => {
+    // Use cache if valid and not forced
+    if (!force && cachedPrices && cachedAt && Date.now() - cachedAt < PRICE_CACHE_TTL) {
+      setPrices(cachedPrices);
+      setLoading(false);
+      return;
+    }
+
     setLoading(true);
     const { data, error } = await supabase
       .from('fms_supplier_material_prices' as any)
       .select('*');
-    if (!error && data) setPrices(data as unknown as SupplierMaterialPrice[]);
+    if (!error && data) {
+      const typedData = data as unknown as SupplierMaterialPrice[];
+      setPrices(typedData);
+      cachedPrices = typedData;
+      cachedAt = Date.now();
+    }
     setLoading(false);
   }, []);
 

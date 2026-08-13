@@ -4,11 +4,17 @@ import { z } from "https://deno.land/x/zod@v3.22.4/mod.ts";
 
 // CORS allowlist: set ALLOWED_ORIGINS (comma-separated) env var to your production origins.
 // Localhost is always allowed for local development.
+// If ALLOWED_ORIGINS is not set, all origins are allowed (auth is still enforced via JWT).
 const getAllowedOrigin = (requestOrigin: string | null): string => {
   const envOrigins = (Deno.env.get('ALLOWED_ORIGINS') || Deno.env.get('ALLOWED_ORIGIN') || '')
     .split(',')
     .map((o) => o.trim())
     .filter(Boolean);
+
+  // If no origins are configured, allow all origins (security is enforced by JWT auth)
+  if (envOrigins.length === 0) {
+    return requestOrigin || '*';
+  }
 
   if (requestOrigin) {
     if (envOrigins.includes(requestOrigin)) return requestOrigin;

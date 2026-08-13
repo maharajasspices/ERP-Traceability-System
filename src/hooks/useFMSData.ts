@@ -140,6 +140,32 @@ export interface FMSDispatchItem {
 const RATE_LIMIT_WINDOW = 10000; // 10 seconds
 const RATE_LIMIT_MAX_REQUESTS = 10;
 
+// Module-level cache to avoid re-fetching all data on every page navigation
+// This significantly improves page load times across the app
+interface FMSDataCache {
+  suppliers: FMSSupplier[] | null;
+  stockCodes: FMSStockCode[] | null;
+  receivingRecords: FMSReceiving[] | null;
+  boms: FMSBOM[] | null;
+  productionBatches: FMSProductionBatch[] | null;
+  dispatchRecords: FMSDispatch[] | null;
+  fetchedAt: number | null;
+  userId: string | null;
+}
+
+const dataCache: FMSDataCache = {
+  suppliers: null,
+  stockCodes: null,
+  receivingRecords: null,
+  boms: null,
+  productionBatches: null,
+  dispatchRecords: null,
+  fetchedAt: null,
+  userId: null,
+};
+
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
 // Validated Edge Function call with rate limiting
 interface ValidatedRequestOptions {
   operation: 'insert' | 'update' | 'insert_many';
@@ -207,8 +233,26 @@ export function useFMSData() {
   }, [checkRateLimit]);
 
   // Fetch all data
-  const fetchData = useCallback(async () => {
+  const fetchData = useCallback(async (force = false) => {
     if (!user) return;
+
+    // Check if we have a valid cache for this user
+    const cacheValid = dataCache.fetchedAt !== null &&
+      dataCache.userId === user.id &&
+      Date.now() - dataCache.fetchedAt < CACHE_TTL &&
+      !force;
+
+    if (cacheValid && dataCache.suppliers && dataCache.stockCodes) {
+      // Use cached data - instant load
+      setSuppliers(dataCache.suppliers);
+      setStockCodes(dataCache.stockCodes);
+      if (dataCache.receivingRecords) setReceivingRecords(dataCache.receivingRecords);
+      if (dataCache.boms) setBoms(dataCache.boms);
+      if (dataCache.productionBatches) setProductionBatches(dataCache.productionBatches);
+      if (dataCache.dispatchRecords) setDispatchRecords(dataCache.dispatchRecords);
+      setLoading(false);
+      return;
+    }
 
     const fetchAllStockCodes = async (): Promise<FMSStockCode[]> => {
       const pageSize = 1000;
@@ -299,6 +343,22 @@ export function useFMSData() {
         }));
         setDispatchRecords(dispatchWithItems as FMSDispatch[]);
       }
+
+      // Store in cache
+      dataCache.suppliers = suppliersRes;
+      dataCache.stockCodes = stockCodesData;
+      dataCache.receivingRecords = receivingRes;
+      dataCache.boms = bomsRes.map((bom: any) => ({
+        ...bom,
+        components: bom.fms_bom_components || [],
+      }));
+      dataCache.productionBatches = batchesRes;
+      dataCache.dispatchRecords = dispatchRes.map((dispatch: any) => ({
+        ...dispatch,
+        items: dispatch.fms_dispatch_items || [],
+      }));
+      dataCache.fetchedAt = Date.now();
+      dataCache.userId = user.id;
     } catch (error) {
       console.error('Error fetching FMS data:', error);
     } finally {
@@ -666,8 +726,8 @@ export function useFMSData() {
     dispatchRecords,
     loading,
     
-    // Refresh
-    refreshData: fetchData,
+    // Refresh (forces a fresh fetch, bypassing cache)
+    refreshData: () => fetchData(true),
     
     // Operations
     addSupplier,
