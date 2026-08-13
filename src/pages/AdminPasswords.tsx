@@ -38,7 +38,7 @@ interface FMSAdminUser {
   user_id: string;
   name: string;
   email: string;
-  role: string;
+  role: string | null;
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -289,7 +289,7 @@ const AdminPasswords: React.FC = () => {
   const openEditDialog = (u: FMSAdminUser) => {
     setEditUser(u);
     setEditName(u.name);
-    setEditRole(u.role);
+    setEditRole(u.role || 'production_operator');
     setEditActive(u.is_active);
     setEditDialogOpen(true);
   };
@@ -427,7 +427,11 @@ const AdminPasswords: React.FC = () => {
                       </div>
                     </td>
                     <td className="p-3">
-                      <Badge variant="secondary">{roleLabels[u.role] || u.role}</Badge>
+                      {u.role ? (
+                        <Badge variant="secondary">{roleLabels[u.role] || u.role}</Badge>
+                      ) : (
+                        <Badge variant="outline">No FMS Access</Badge>
+                      )}
                     </td>
                     <td className="p-3">
                       <Badge variant={u.is_active ? 'default' : 'secondary'}>

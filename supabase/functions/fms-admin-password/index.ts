@@ -86,13 +86,43 @@ serve(async (req) => {
     const body = await req.json();
     const { operation, target_user_id, new_password, email, name, role, is_active } = body;
 
-    // List FMS users (only users in fms_users, joined with auth.users for email)
+    // List ALL users from auth.users, merged with fms_users data where available
     if (operation === 'list_users') {
-      // Use adminClient to bypass RLS (fms_has_role execution is revoked from authenticated)
+      // Fetch ALL users from auth.users with pagination (the source of truth for all user emails)
+      const allAuthUsers: any[] = [];
+      let page = 1;
+      const perPage = 200;
+      let hasMore = true;
+
+      while (hasMore) {
+        const { data: authUsers, error: authListError } = await adminClient.auth.admin.listUsers({
+          page,
+          perPage,
+        });
+
+        if (authListError) {
+          console.error('[fms-admin-password] List auth users error:', authListError);
+          return new Response(
+            JSON.stringify({ error: authListError.message }),
+            { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+
+        const users = authUsers.users || [];
+        allAuthUsers.push(...users);
+
+        // Check if there are more pages
+        if (users.length < perPage) {
+          hasMore = false;
+        } else {
+          page++;
+        }
+      }
+
+      // Get FMS user data for all users
       const { data: fmsUsers, error: fmsListError } = await adminClient
         .from('fms_users')
-        .select('id, user_id, name, role, is_active, created_at, updated_at')
-        .order('name', { ascending: true });
+        .select('id, user_id, name, role, is_active, created_at, updated_at');
 
       if (fmsListError) {
         console.error('[fms-admin-password] List fms users error:', fmsListError);
@@ -102,32 +132,27 @@ serve(async (req) => {
         );
       }
 
-      // Get emails from auth.users for each FMS user
-      const { data: authUsers, error: authListError } = await adminClient.auth.admin.listUsers({
-        page: 1,
-        perPage: 1000,
+      // Build a map of fms_users by user_id for quick lookup
+      const fmsUserMap = new Map<string, any>((fmsUsers || []).map((fu: any) => [fu.user_id, fu]));
+
+      // Merge: every auth user gets an entry, with FMS data if they have it
+      const mergedUsers = allAuthUsers.map((au: any) => {
+        const fu = fmsUserMap.get(au.id);
+        return {
+          id: fu?.id || au.id,
+          user_id: au.id,
+          name: fu?.name || au.user_metadata?.full_name || au.email?.split('@')[0] || 'Unknown',
+          email: au.email || '',
+          role: fu?.role || null,
+          // Auth users are active accounts - is_active reflects the auth user's status
+          is_active: au.banned_at ? false : true,
+          created_at: fu?.created_at || au.created_at,
+          updated_at: fu?.updated_at || au.created_at,
+        };
       });
 
-      if (authListError) {
-        console.error('[fms-admin-password] List auth users error:', authListError);
-        return new Response(
-          JSON.stringify({ error: authListError.message }),
-          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
-      }
-
-      const emailMap = new Map((authUsers.users || []).map((au: any) => [au.id, au.email]));
-
-      const mergedUsers = (fmsUsers || []).map((fu: any) => ({
-        id: fu.id,
-        user_id: fu.user_id,
-        name: fu.name,
-        email: emailMap.get(fu.user_id) || '',
-        role: fu.role,
-        is_active: fu.is_active,
-        created_at: fu.created_at,
-        updated_at: fu.updated_at,
-      }));
+      // Sort by name
+      mergedUsers.sort((a: any, b: any) => a.name.localeCompare(b.name));
 
       return new Response(
         JSON.stringify({ success: true, users: mergedUsers }),
@@ -135,7 +160,7 @@ serve(async (req) => {
       );
     }
 
-    // Add a new FMS user (create auth user + fms_users entry)
+    // Add a new FMS user (create auth user + fms_users entry, or grant FMS access to existing auth user)
     if (operation === 'add_user') {
       if (!email || !name || !role) {
         return new Response(
@@ -151,35 +176,79 @@ serve(async (req) => {
         );
       }
 
-      // Create the auth user
-      const { data: newAuthUser, error: createError } = await adminClient.auth.admin.createUser({
-        email,
-        password: new_password,
-        email_confirm: true,
-      });
+      // Check if the user already exists in auth.users (with pagination)
+      let existingUser: any = null;
+      let searchPage = 1;
+      const searchPerPage = 200;
+      let searchHasMore = true;
 
-      if (createError) {
-        console.error('[fms-admin-password] Create user error:', createError);
-        return new Response(
-          JSON.stringify({ error: createError.message }),
-          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      while (searchHasMore && !existingUser) {
+        const { data: existingUsers, error: listError } = await adminClient.auth.admin.listUsers({
+          page: searchPage,
+          perPage: searchPerPage,
+        });
+
+        if (listError) {
+          console.error('[fms-admin-password] List users error:', listError);
+          return new Response(
+            JSON.stringify({ error: listError.message }),
+            { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+
+        const users = existingUsers.users || [];
+        existingUser = users.find(
+          (u: any) => u.email?.toLowerCase() === email.toLowerCase()
         );
+
+        if (users.length < searchPerPage) {
+          searchHasMore = false;
+        } else {
+          searchPage++;
+        }
       }
 
-      // Add to fms_users (via adminClient to bypass RLS)
+      let targetUserId: string;
+
+      if (existingUser) {
+        // User already exists in auth.users - just grant FMS access
+        targetUserId = existingUser.id;
+        console.log(`[fms-admin-password] User ${email} already exists, granting FMS access`);
+      } else {
+        // Create the auth user
+        const { data: newAuthUser, error: createError } = await adminClient.auth.admin.createUser({
+          email,
+          password: new_password,
+          email_confirm: true,
+        });
+
+        if (createError) {
+          console.error('[fms-admin-password] Create user error:', createError);
+          return new Response(
+            JSON.stringify({ error: createError.message }),
+            { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+          );
+        }
+
+        targetUserId = newAuthUser.user.id;
+      }
+
+      // Add to fms_users (via adminClient to bypass RLS) - upsert in case they already have an entry
       const { error: fmsInsertError } = await adminClient
         .from('fms_users')
-        .insert({
-          user_id: newAuthUser.user.id,
+        .upsert({
+          user_id: targetUserId,
           name,
           role,
           is_active: true,
-        });
+        }, { onConflict: 'user_id' });
 
       if (fmsInsertError) {
         console.error('[fms-admin-password] Add fms user error:', fmsInsertError);
-        // Rollback: delete the auth user if fms_users insert fails
-        await adminClient.auth.admin.deleteUser(newAuthUser.user.id);
+        // Rollback: delete the auth user if fms_users insert fails (only if we created it)
+        if (!existingUser) {
+          await adminClient.auth.admin.deleteUser(targetUserId);
+        }
         return new Response(
           JSON.stringify({ error: fmsInsertError.message }),
           { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -191,7 +260,7 @@ serve(async (req) => {
         user_id: user.id,
         action: 'admin_add_user',
         entity_type: 'fms_users',
-        entity_id: newAuthUser.user.id,
+        entity_id: targetUserId,
         old_values: null,
         new_values: { email, name, role },
       });
@@ -227,15 +296,15 @@ serve(async (req) => {
         );
       }
 
-      // Update via adminClient to bypass RLS
+      // Upsert into fms_users (handles both existing FMS users and auth-only users being granted access)
       const { error: updateError } = await adminClient
         .from('fms_users')
-        .update({
+        .upsert({
+          user_id: target_user_id,
           name,
           role,
           is_active: is_active ?? true,
-        })
-        .eq('user_id', target_user_id);
+        }, { onConflict: 'user_id' });
 
       if (updateError) {
         console.error('[fms-admin-password] Update fms user error:', updateError);
