@@ -1,4 +1,7 @@
 deployment:
   tasks:
     - export DEPLOYPATH=/home/maharaja/erp.maharajasspices.com/
+    - /bin/rm -rf node_modules
+    - /bin/npm install
+    - /bin/npm run build
     - /bin/cp -R dist/. $DEPLOYPATH
