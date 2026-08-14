@@ -39,6 +39,7 @@ export const UserMenu: React.FC = () => {
       stores_operator: 'Stores',
       dispatch_user: 'Dispatch',
       qa_viewer: 'QA Viewer',
+      hr_user: 'HR',
     };
     return roleLabels[role] || role;
   };

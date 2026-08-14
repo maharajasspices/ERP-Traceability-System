@@ -1,4 +1,6 @@
+---
 deployment:
   tasks:
     - export DEPLOYPATH=/home/maharaja/erp.maharajasspices.com/
-    - /bin/cp -R dist/. $DEPLOYPATH
+    - /bin/rm -rf $DEPLOYPATH/*
+    - /bin/cp -R dist/* $DEPLOYPATH

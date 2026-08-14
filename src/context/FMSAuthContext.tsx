@@ -4,7 +4,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { mapAuthError } from '@/lib/errorHandler';
 
-type FMSRole = 'system_admin' | 'production_supervisor' | 'production_operator' | 'stores_operator' | 'dispatch_user' | 'qa_viewer';
+type FMSRole = 'system_admin' | 'production_supervisor' | 'production_operator' | 'stores_operator' | 'dispatch_user' | 'qa_viewer' | 'hr_user';
 
 interface FMSUser {
   id: string;

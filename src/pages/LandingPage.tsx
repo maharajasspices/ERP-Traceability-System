@@ -29,7 +29,8 @@ const Landing: React.FC = () => {
         'Manage employees, attendance, leave, documents and other HR activities.',
       icon: Users,
       color: 'green',
-      available: false,
+      available: true,
+      action: () => navigate('/hr-login'),
     },
     {
       title: 'More Systems',
@@ -169,7 +170,10 @@ const Landing: React.FC = () => {
                       Enter System
                       <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
                     </button>
-                  ) : (
+                  ) 
+                  :
+                  
+                  (
                     <button
                       disabled
                       className="mt-7 flex w-full cursor-not-allowed items-center justify-center gap-2 rounded-xl bg-gray-100 px-5 py-3.5 text-sm font-semibold text-gray-400"

@@ -51,6 +51,7 @@ const roleLabels: Record<string, string> = {
   stores_operator: 'Stores Operator',
   dispatch_user: 'Dispatch User',
   qa_viewer: 'QA Viewer',
+  hr_user: 'HR User',
 };
 
 const roleOptions = Object.keys(roleLabels);
