@@ -8,6 +8,7 @@ import { FMSAuthProvider, useFMSAuth } from "@/context/FMSAuthContext";
 import { ProtectedRoute } from "@/components/layout/ProtectedRoute";
 import { QaViewerGuard } from "@/components/layout/QaViewerGuard";
 import { MainLayout } from "@/components/layout/MainLayout";
+import { HRLayout } from "@/components/layout/HRLayout";
 import { Loader2, ShieldX, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
@@ -29,6 +30,10 @@ const LandingPage = lazy(() => import("./pages/LandingPage"));
 const HRDashboard = lazy(() => import("./pages/HR/HRDashboard"));
 const HRLogin = lazy(() => import("./pages/HR/HRLogin"));
 const Employees = lazy(() => import("./pages/HR/Employees"));
+const Attendance = lazy(() => import("./pages/HR/Attendance"));
+const Leave = lazy(() => import("./pages/HR/Leave"));
+const Documents = lazy(() => import("./pages/HR/Documents"));
+const Warnings = lazy(() => import("./pages/HR/Warnings"));
 
 const queryClient = new QueryClient();
 
@@ -89,8 +94,14 @@ const App = () => (
           <Suspense fallback={<PageLoader />}>
             <Routes>
               <Route path="/hr-login" element={<HRLogin />} />
-              <Route path="/hr-dashboard" element={<HRRouteGuard><HRDashboard /></HRRouteGuard>} />
-              <Route path="/hr/employees" element={<HRRouteGuard><Employees /></HRRouteGuard>} />
+              <Route element={<HRRouteGuard><HRLayout /></HRRouteGuard>}>
+                <Route path="/hr-dashboard" element={<HRDashboard />} />
+                <Route path="/hr/employees" element={<Employees />} />
+                <Route path="/hr/attendance" element={<Attendance />} />
+                <Route path="/hr/leave" element={<Leave />} />
+                <Route path="/hr/documents" element={<Documents />} />
+                <Route path="/hr/warnings" element={<Warnings />} />
+              </Route>
 
               <Route path="/auth" element={<Auth />} />
               <Route path="/reset-password" element={<ResetPassword />} />

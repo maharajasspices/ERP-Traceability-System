@@ -82,11 +82,11 @@ const HRLogin: React.FC = () => {
   }
 
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center bg-gradient-to-br from-emerald-950 via-emerald-900 to-background p-4">
+    <div className="flex min-h-screen flex-col items-center justify-center bg-background p-4">
       {/* Back to Portal */}
       <button
         onClick={() => navigate('/')}
-        className="mb-6 flex items-center gap-2 text-sm font-medium text-emerald-200/70 transition-colors hover:text-emerald-100"
+        className="mb-6 flex items-center gap-2 text-sm font-medium text-muted-foreground transition-colors hover:text-emerald-600"
       >
         <ArrowLeft className="h-4 w-4" />
         Back to Systems Portal
@@ -95,15 +95,15 @@ const HRLogin: React.FC = () => {
       <div className="mb-8 flex flex-col items-center gap-3">
         <img src={logo} alt="Maharaja's Spices" className="h-16 w-auto max-w-[160px] object-contain" />
         <div className="flex items-center gap-2">
-          <Users className="h-6 w-6 text-emerald-400" />
-          <h1 className="text-xl font-bold text-white">HR Department</h1>
+          <Users className="h-6 w-6 text-emerald-600" />
+          <h1 className="text-xl font-bold text-foreground">HR Department</h1>
         </div>
-        <p className="text-sm text-emerald-200/70">Human Resources & Staff Management</p>
+        <p className="text-sm text-muted-foreground">Human Resources & Staff Management</p>
       </div>
 
-      <Card className="w-full max-w-md">
+      <Card className="w-full max-w-md border-emerald-500/20 shadow-card">
         <CardHeader className="text-center">
-          <CardTitle>HR Staff Login</CardTitle>
+          <CardTitle className="text-foreground">HR Staff Login</CardTitle>
           <CardDescription>
             Sign in with your authorized account to access the HR system
           </CardDescription>
@@ -157,7 +157,7 @@ const HRLogin: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => navigate('/forgot-password')}
-                  className="text-sm font-medium text-primary hover:underline"
+                  className="text-sm font-medium text-emerald-600 hover:underline"
                 >
                   Forgot Password?
                 </button>
@@ -200,7 +200,7 @@ const HRLogin: React.FC = () => {
         </CardContent>
       </Card>
 
-      <p className="mt-6 text-center text-xs text-emerald-200/50">
+      <p className="mt-6 text-center text-xs text-muted-foreground">
         HR Department System<br />© {new Date().getFullYear()} Maharaja's Spices
       </p>
     </div>
