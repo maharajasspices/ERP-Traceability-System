@@ -348,7 +348,7 @@ export function useHRData() {
     return true;
   };
 
-  // Document operatios
+  // Document operations
   const uploadDocument = async (
     employeeId: string,
     file: File,
@@ -374,6 +374,30 @@ export function useHRData() {
 
     setUploadingDocument(true);
     try {
+      // 0) Ensure the hr-documents bucket exists (it may not if the
+      //    migration hasn't been applied to the project yet)
+      try {
+        const { error: bucketCheckError } = await supabase.storage
+          .getBucket('hr-documents');
+        if (bucketCheckError) {
+          console.warn('hr-documents bucket not found, attempting to create...');
+          const { error: createBucketError } = await supabase.storage
+            .createBucket('hr-documents', {
+              public: false,
+              fileSizeLimit: MAX_FILE_SIZE,
+            });
+          if (createBucketError) {
+            console.error('Failed to auto-create hr-documents bucket:', createBucketError);
+            toast.error(
+              'Storage bucket "hr-documents" does not exist. Ask your admin to run the migration or create the bucket in the Supabase Dashboard.'
+            );
+            return null;
+          }
+        }
+      } catch (bucketErr) {
+        console.error('Bucket check error:', bucketErr);
+      }
+
       // 1) Upload file to storage
       const { error: uploadError } = await supabase.storage
         .from('hr-documents')

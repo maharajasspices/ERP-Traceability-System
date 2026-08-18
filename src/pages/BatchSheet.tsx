@@ -73,7 +73,7 @@ const defaultProcessingSteps: Omit<ProcessingStep, 'id'>[] = [
 
 const Production: React.FC = () => {
   const { user } = useFMSAuth();
-  const { stockCodes, boms, receivingRecords, productionBatches, loading, addProductionBatch, updateProductionBatch, getStockCodeById, getBOMByFinishedGoodId, refreshData } = useFMSData();
+  const { stockCodes, boms, productionBatches, loading, addProductionBatch, updateProductionBatch, getStockCodeById, getBOMByFinishedGoodId, refreshData } = useFMSData();
   
   // Helper to get BOM by ID
   const getBOMById = (bomId: string) => boms.find(b => b.id === bomId);
@@ -110,20 +110,6 @@ const Production: React.FC = () => {
     number_of_batches: '1',
   });
 
-  const getAvailableStock = React.useCallback((stockCodeId: string) => {
-    const totalReceived = receivingRecords
-      .filter(rec => rec.stock_code_id === stockCodeId && rec.status === 'accepted')
-      .reduce((sum, rec) => sum + (rec.quantity_received || 0), 0);
-
-    const totalReserved = productionBatches
-      .filter(batch => batch.status !== 'cancelled')
-      .flatMap(batch => (batch.pre_weigh_materials || []) as PreWeighMaterial[])
-      .filter(mat => mat.material_id === stockCodeId)
-      .reduce((sum, mat) => sum + ((mat.quantity_weighed ?? mat.required_quantity) || 0), 0);
-
-    return totalReceived - totalReserved;
-  }, [receivingRecords, productionBatches]);
-
   const selectedBOMMaterials = React.useMemo(() => {
     if (!formData.finished_good_id) return [];
     const bom = getBOMByFinishedGoodId(formData.finished_good_id);
@@ -134,18 +120,13 @@ const Production: React.FC = () => {
     return bom.components.map((comp) => {
       const material = getStockCodeById(comp.material_stock_code_id);
       const requiredQuantity = comp.quantity_per_batch * batchSize;
-      const availableQuantity = getAvailableStock(comp.material_stock_code_id);
       return {
         ...comp,
         material,
         requiredQuantity,
-        availableQuantity,
       };
     });
-  }, [formData.finished_good_id, formData.planned_batch_size, getBOMByFinishedGoodId, getAvailableStock, getStockCodeById]);
-
-  const insufficientMaterials = selectedBOMMaterials.filter(m => m.availableQuantity < m.requiredQuantity);
-  const hasEnoughMaterials = selectedBOMMaterials.length === 0 || insufficientMaterials.length === 0;
+  }, [formData.finished_good_id, formData.planned_batch_size, getBOMByFinishedGoodId, getStockCodeById]);
 // reset from data 
   const resetForm = () => {
     setFormData({
@@ -711,8 +692,6 @@ const Production: React.FC = () => {
                           <tr>
                             <th className="text-left py-2">Material</th>
                             <th className="text-right py-2">Required</th>
-                            <th className="text-right py-2">Available</th>
-                            <th className="text-right py-2">Status</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -720,10 +699,6 @@ const Production: React.FC = () => {
                             <tr key={item.id} className="border-t border-border">
                               <td className="py-2 pr-3">{item.material?.stock_code || 'Unknown'}</td>
                               <td className="py-2 text-right">{item.requiredQuantity.toFixed(2)} {item.material?.unit_of_measure}</td>
-                              <td className="py-2 text-right">{item.availableQuantity.toFixed(2)} {item.material?.unit_of_measure}</td>
-                              <td className={`py-2 text-right ${item.availableQuantity < item.requiredQuantity ? 'text-destructive' : 'text-success'}`}>
-                                {item.availableQuantity < item.requiredQuantity ? 'Insufficient' : 'Available'}
-                              </td>
                             </tr>
                           ))}
                         </tbody>
@@ -731,12 +706,6 @@ const Production: React.FC = () => {
                     )}
                   </div>
 
-                  {insufficientMaterials.length > 0 && (
-                    <div className="rounded-lg border border-destructive/20 bg-destructive/5 p-3 text-sm text-destructive">
-                      <p className="font-medium">Not enough uploaded stock for this batch:</p>
-                      <p>Upload more of the highlighted raw materials or choose a smaller batch size.</p>
-                    </div>
-                  )}
                 </div>
               )}
 
@@ -799,7 +768,7 @@ const Production: React.FC = () => {
 
             <DialogFooter className="flex-col sm:flex-row gap-2">
               <Button variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>
-              <Button onClick={handleCreateBatch} disabled={!selectedBOM || !hasEnoughMaterials}>Create Batch</Button>
+              <Button onClick={handleCreateBatch} disabled={!selectedBOM}>Create Batch</Button>
             </DialogFooter>
           </DialogContent>
           </Dialog>
