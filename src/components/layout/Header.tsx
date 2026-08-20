@@ -7,7 +7,7 @@ import { NotesDropdown } from './NotesDropdown';
 import { UserMenu } from './UserMenu';
 
 const pageTitles: Record<string, string> = {
-  '/': 'Dashboard',
+  '/dashboard': 'Dashboard',
   '/stock-codes': 'Stock Code Master',
   '/receiving': 'Receiving Log',
   '/bom': 'Bill of Materials',
