@@ -670,7 +670,7 @@ export type Database = {
           cost_price_per_kg: number | null
           created_at: string | null
           delivery_note_number: string | null
-          expiry_date: string
+          expiry_date: string | null
           id: string
           internal_lot_number: string
           manufacturing_date: string | null
@@ -688,7 +688,7 @@ export type Database = {
           cost_price_per_kg?: number | null
           created_at?: string | null
           delivery_note_number?: string | null
-          expiry_date: string
+          expiry_date?: string | null
           id?: string
           internal_lot_number: string
           manufacturing_date?: string | null
@@ -706,7 +706,7 @@ export type Database = {
           cost_price_per_kg?: number | null
           created_at?: string | null
           delivery_note_number?: string | null
-          expiry_date?: string
+          expiry_date?: string | null
           id?: string
           internal_lot_number?: string
           manufacturing_date?: string | null

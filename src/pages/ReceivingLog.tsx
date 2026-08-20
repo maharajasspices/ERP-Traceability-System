@@ -198,12 +198,8 @@ const ReceivingLog: React.FC = () => {
       return;
     }
 
-    if (!formData.expiry_date) {
-      toast.error('Please enter Expiry Date');
-      return;
-    }
-
-    if (new Date(formData.expiry_date) < new Date()) {
+    // Expiry date is optional - only validate it if provided
+    if (formData.expiry_date && new Date(formData.expiry_date) < new Date()) {
       toast.error('Cannot receive expired materials');
       return;
     }
@@ -233,7 +229,7 @@ const ReceivingLog: React.FC = () => {
       supplier_id: formData.supplier_id,
       supplier_batch_number: formData.supplier_batch_number,
       manufacturing_date: formData.production_date || undefined,
-      expiry_date: formData.expiry_date,
+      expiry_date: formData.expiry_date || null,
       delivery_note_number: formData.invoice_number || undefined,
       quality_checks: qualityChecks,
       status: hasFailed ? 'rejected' : 'accepted',
@@ -412,7 +408,7 @@ const ReceivingLog: React.FC = () => {
       materialDescription: stockCode?.description,
       supplierBatch: record.supplier_batch_number,
       supplierName: supplier?.name,
-      expiryDate: record.expiry_date,
+      expiryDate: record.expiry_date || '',
       quantity: record.quantity_received,
     });
     
@@ -486,7 +482,7 @@ const ReceivingLog: React.FC = () => {
         'Qty': rec.quantity_received,
         'Supplier': supplier?.name || '',
         'Batch No': rec.supplier_batch_number,
-        'Expiry': formatDate(rec.expiry_date),
+        'Expiry': rec.expiry_date ? formatDate(rec.expiry_date) : '',
         'Status': rec.status,
       };
     });
@@ -509,7 +505,7 @@ const ReceivingLog: React.FC = () => {
         'Supplier Name': supplier?.name || '',
         'Batch Number': rec.supplier_batch_number,
         'Production Date': rec.manufacturing_date ? formatDate(rec.manufacturing_date) : '',
-        'Expiry Date': formatDate(rec.expiry_date),
+        'Expiry Date': rec.expiry_date ? formatDate(rec.expiry_date) : '',
         'Invoice Number': rec.delivery_note_number || '',
         'Status': rec.status,
       };
@@ -653,7 +649,7 @@ const ReceivingLog: React.FC = () => {
                       <Input type="date" value={formData.production_date} onChange={(e) => setFormData(prev => ({ ...prev, production_date: e.target.value }))} />
                     </div>
                     <div className="space-y-2">
-                      <Label>Expiry Date *</Label>
+                      <Label>Expiry Date (Optional)</Label>
                       <Input type="date" value={formData.expiry_date} onChange={(e) => setFormData(prev => ({ ...prev, expiry_date: e.target.value }))} />
                     </div>
                     <div className="space-y-2">
@@ -761,7 +757,7 @@ const ReceivingLog: React.FC = () => {
                     <td className="text-xs sm:text-sm max-w-[150px] truncate">{stockCode?.description}</td>
                     <td className="hidden sm:table-cell">{rec.quantity_received} {stockCode?.unit_of_measure}</td>
                     <td className="hidden lg:table-cell">{supplier?.name}</td>
-                    <td className="hidden md:table-cell">{formatDate(rec.expiry_date)}</td>
+                    <td className="hidden md:table-cell">{rec.expiry_date ? formatDate(rec.expiry_date) : '—'}</td>
                     <td>
                       {rec.status === 'accepted' ? (
                         <span className="badge-active flex items-center gap-1 text-xs"><CheckCircle className="h-3 w-3" /><span className="hidden sm:inline">Accepted</span></span>
@@ -855,7 +851,7 @@ const ReceivingLog: React.FC = () => {
                   <div><Label className="text-muted-foreground">Stock Code</Label><p className="font-medium">{stockCode?.stock_code}</p><p className="text-sm text-muted-foreground">{stockCode?.description}</p></div>
                   <div><Label className="text-muted-foreground">Supplier</Label><p className="font-medium">{supplier?.name}</p><p className="text-sm text-muted-foreground">Batch: {selectedRecord.supplier_batch_number}</p></div>
                   <div><Label className="text-muted-foreground">Quantity</Label><p className="font-medium">{selectedRecord.quantity_received} {stockCode?.unit_of_measure}</p></div>
-                  <div><Label className="text-muted-foreground">Expiry Date</Label><p className="font-medium">{formatDate(selectedRecord.expiry_date)}</p></div>
+                  <div><Label className="text-muted-foreground">Expiry Date</Label><p className="font-medium">{selectedRecord.expiry_date ? formatDate(selectedRecord.expiry_date) : '—'}</p></div>
                 </div>
 
                 {/* Editable Cost Price (syncs back to supplier pricing) */}

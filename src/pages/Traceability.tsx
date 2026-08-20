@@ -234,7 +234,7 @@ const Traceability: React.FC = () => {
         if (selectedKeys.includes('material')) row['Material'] = rm.stockCode?.description || '';
         if (selectedKeys.includes('supplier')) row['Supplier'] = rm.supplier?.name || '';
         if (selectedKeys.includes('quantity')) row['Quantity'] = rm.quantity_received;
-        if (selectedKeys.includes('expiry_date')) row['Expiry Date'] = formatDate(rm.expiry_date);
+        if (selectedKeys.includes('expiry_date')) row['Expiry Date'] = rm.expiry_date ? formatDate(rm.expiry_date) : '';
         if (selectedKeys.includes('received_at')) row['Received Date'] = rm.received_at ? formatDate(rm.received_at) : '';
         if (selectedKeys.includes('status')) row['Status'] = rm.status;
         return row;

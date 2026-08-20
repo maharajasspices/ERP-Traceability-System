@@ -68,8 +68,8 @@ export interface ReceivingRecord {
   supplier_id: string;
   supplier?: Supplier;
   supplier_batch_number: string;
-  manufacturing_date: string;
-  expiry_date: string;
+  manufacturing_date?: string | null;
+  expiry_date?: string | null;
   delivery_note_number?: string;
   quality_checks: ReceivingQualityCheck;
   status: 'accepted' | 'rejected' | 'partial';

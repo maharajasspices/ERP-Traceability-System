@@ -73,7 +73,7 @@ const receivingSchema = z.object({
   supplier_id: z.string().uuid(),
   supplier_batch_number: z.string().min(1).max(100),
   manufacturing_date: z.string().optional().nullable(),
-  expiry_date: z.string().min(1),
+  expiry_date: z.string().optional().nullable(),
   delivery_note_number: z.string().max(50).optional().nullable(),
   quality_checks: z.record(z.any()).default({}),
   status: z.enum(['accepted', 'rejected', 'partial', 'pending']).default('pending'),

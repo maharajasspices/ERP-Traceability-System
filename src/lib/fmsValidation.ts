@@ -84,7 +84,7 @@ export const receivingSchema = z.object({
     .min(1, 'Supplier batch number is required')
     .max(100, 'Batch number must be less than 100 characters'),
   manufacturing_date: z.string().optional().nullable(),
-  expiry_date: z.string().min(1, 'Expiry date is required'),
+  expiry_date: z.string().optional().nullable(),
   delivery_note_number: z.string()
     .max(50, 'Delivery note must be less than 50 characters')
     .optional()

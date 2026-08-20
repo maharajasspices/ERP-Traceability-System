@@ -51,8 +51,8 @@ export interface FMSReceiving {
   quantity_received: number;
   supplier_id: string;
   supplier_batch_number: string;
-  manufacturing_date?: string;
-  expiry_date: string;
+  manufacturing_date?: string | null;
+  expiry_date?: string | null;
   delivery_note_number?: string;
   quality_checks: Record<string, any>;
   status: 'accepted' | 'rejected' | 'partial' | 'pending';
@@ -281,7 +281,7 @@ export function useFMSData() {
 
     // Helper: try a DB query, fall back to local store when the DB is unavailable
     const dbOrLocal = async <T,>(
-      query: () => Promise<{ data: T[] | null; error: any }>,
+      query: () => PromiseLike<any>,
       local: () => T[]
     ): Promise<T[]> => {
       try {
@@ -305,23 +305,23 @@ export function useFMSData() {
 
       const [suppliersRes, receivingRes, bomsRes, batchesRes, dispatchRes] = await Promise.all([
         dbOrLocal<FMSSupplier>(
-          () => supabase.from('fms_suppliers').select('*').order('name'),
+          () => supabase.from('fms_suppliers').select('*').order('name').then((res: any) => ({ data: res.data, error: res.error })),
           () => []
         ),
         dbOrLocal<FMSReceiving>(
-          () => supabase.from('fms_receiving').select('*').order('received_at', { ascending: false }),
+          () => supabase.from('fms_receiving').select('*').order('received_at', { ascending: false }).then((res: any) => ({ data: res.data, error: res.error })),
           () => []
         ),
         dbOrLocal<any>(
-          () => supabase.from('fms_bom').select('*, fms_bom_components(*)').order('created_at', { ascending: false }),
+          () => supabase.from('fms_bom').select('*, fms_bom_components(*)').order('created_at', { ascending: false }).then((res: any) => ({ data: res.data, error: res.error })),
           () => []
         ),
         dbOrLocal<FMSProductionBatch>(
-          () => supabase.from('fms_production_batches').select('*').order('created_at', { ascending: false }),
+          () => supabase.from('fms_production_batches').select('*').order('created_at', { ascending: false }).then((res: any) => ({ data: res.data, error: res.error })),
           () => []
         ),
         dbOrLocal<any>(
-          () => supabase.from('fms_dispatch').select('*, fms_dispatch_items(*)').order('dispatch_date', { ascending: false }),
+          () => supabase.from('fms_dispatch').select('*, fms_dispatch_items(*)').order('dispatch_date', { ascending: false }).then((res: any) => ({ data: res.data, error: res.error })),
           () => []
         ),
       ]);

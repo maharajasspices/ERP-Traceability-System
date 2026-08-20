@@ -545,16 +545,13 @@ export function useHRData() {
       hrCache.fetchedAt = null;
 
       // Send email/WhatsApp notification via edge function
+      // Uses 'send_notification' so the warning is NOT inserted twice
       if (sendEmail || sendWhatsApp) {
         try {
           const { data: fnData, error: fnError } = await supabase.functions.invoke('fms-hr-warning', {
             body: {
-              operation: 'send_warning',
-              employee_id: employeeId,
-              warning_type: warningType,
-              reason: reason.trim(),
-              details: details?.trim() || null,
-              signature: signatureValue,
+              operation: 'send_notification',
+              warning_id: data.id,
               send_email: sendEmail,
               send_whatsapp: sendWhatsApp,
             },
@@ -564,6 +561,7 @@ export function useHRData() {
             console.error('Warning notification error:', fnError);
             toast.warning('Warning issued, but notification could not be sent.');
           } else if (fnData?.email && !fnData.email.sent) {
+            console.warn('Email not sent:', fnData.email.reason);
             toast.warning(`Warning issued. Email not sent: ${fnData.email.reason || 'unknown'}`);
           } else if (fnData?.whatsapp && !fnData.whatsapp.sent) {
             toast.warning(`Warning issued. WhatsApp not sent: ${fnData.whatsapp.reason || 'unknown'}`);
@@ -601,6 +599,58 @@ export function useHRData() {
     hrCache.fetchedAt = null;
     toast.success('Warning deleted');
     return true;
+  };
+
+  // Send a notification (email/WhatsApp) for an EXISTING warning
+  const sendWarningNotification = async (
+    warningId: string,
+    sendEmail: boolean,
+    sendWhatsApp: boolean
+  ) => {
+    if (!user) {
+      toast.error('You must be signed in to send notifications.');
+      return null;
+    }
+
+    if (!sendEmail && !sendWhatsApp) {
+      toast.error('Select at least one notification method.');
+      return null;
+    }
+
+    try {
+      const { data: fnData, error: fnError } = await supabase.functions.invoke('fms-hr-warning', {
+        body: {
+          operation: 'send_notification',
+          warning_id: warningId,
+          send_email: sendEmail,
+          send_whatsapp: sendWhatsApp,
+        },
+      });
+
+      if (fnError) {
+        console.error('Warning notification error:', fnError);
+        toast.error(fnError.message || 'Failed to send notification.');
+        return null;
+      }
+
+      const emailSent = !sendEmail || (fnData?.email && fnData.email.sent);
+      const whatsappSent = !sendWhatsApp || (fnData?.whatsapp && fnData.whatsapp.sent);
+
+      if (!emailSent || !whatsappSent) {
+        const reasons: string[] = [];
+        if (!emailSent) reasons.push(`Email: ${fnData?.email?.reason || 'failed'}`);
+        if (!whatsappSent) reasons.push(`WhatsApp: ${fnData?.whatsapp?.reason || 'failed'}`);
+        toast.warning(`Notification partially sent. ${reasons.join('. ')}`);
+        return null;
+      }
+
+      toast.success('Notification sent successfully');
+      return true;
+    } catch (fnErr) {
+      console.error('Edge function error:', fnErr);
+      toast.error('Failed to send notification.');
+      return null;
+    }
   };
 
   // Attendance operations
@@ -706,5 +756,6 @@ export function useHRData() {
     deleteDocument,
     issueWarning,
     deleteWarning,
+    sendWarningNotification,
   };
 }

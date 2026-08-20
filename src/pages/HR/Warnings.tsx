@@ -1,7 +1,8 @@
 import React, { useMemo, useState } from 'react';
 import { useHRData } from '@/hooks/useHRData';
-import { AlertTriangle, ShieldAlert, CheckCircle2, Loader2, Search, MessageSquareWarning } from 'lucide-react';
+import { AlertTriangle, ShieldAlert, CheckCircle2, Loader2, Search, MessageSquareWarning, Mail, MessageCircle, Send, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { toast } from 'sonner';
 
 const statusStyles: Record<string, string> = {
   issued: 'bg-warning/10 text-warning border-warning/30',
@@ -18,13 +19,17 @@ const typeStyles: Record<string, string> = {
 };
 
 const Warnings: React.FC = () => {
-  const { warnings, employees, loading } = useHRData();
+  const { warnings, employees, loading, sendWarningNotification, refreshData } = useHRData();
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
+  const [selectedWarningId, setSelectedWarningId] = useState<string | null>(null);
+  const [sendEmail, setSendEmail] = useState(true);
+  const [sendWhatsApp, setSendWhatsApp] = useState(false);
+  const [sending, setSending] = useState(false);
 
   const employeeMap = useMemo(() => {
-    const map = new Map<string, { first_name: string; last_name: string }>();
-    employees.forEach((e) => map.set(e.id, { first_name: e.first_name, last_name: e.last_name }));
+    const map = new Map<string, { first_name: string; last_name: string; email?: string; phone?: string }>();
+    employees.forEach((e) => map.set(e.id, { first_name: e.first_name, last_name: e.last_name, email: e.email, phone: e.phone }));
     return map;
   }, [employees]);
 
@@ -42,6 +47,29 @@ const Warnings: React.FC = () => {
   const acknowledgedCount = warnings.filter((w) => w.status === 'acknowledged').length;
   const resolvedCount = warnings.filter((w) => w.status === 'resolved').length;
   const disputedCount = warnings.filter((w) => w.status === 'disputed').length;
+
+  const selectedWarning = selectedWarningId
+    ? warnings.find((w) => w.id === selectedWarningId)
+    : null;
+  const selectedEmployee = selectedWarning
+    ? employeeMap.get(selectedWarning.employee_id)
+    : null;
+
+  const handleSendNotification = async () => {
+    if (!selectedWarning) return;
+
+    setSending(true);
+    try {
+      const result = await sendWarningNotification(selectedWarning.id, sendEmail, sendWhatsApp);
+      if (result) {
+        setSelectedWarningId(null);
+        // Refresh to update any status changes
+        refreshData();
+      }
+    } finally {
+      setSending(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -137,12 +165,13 @@ const Warnings: React.FC = () => {
                 <th className="px-4 py-3 font-semibold">Reason</th>
                 <th className="px-4 py-3 font-semibold">Issued</th>
                 <th className="px-4 py-3 font-semibold">Status</th>
+                <th className="px-4 py-3 font-semibold text-right">Actions</th>
               </tr>
             </thead>
             <tbody>
               {filtered.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="px-4 py-8 text-center text-muted-foreground">
+                  <td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">
                     No warnings found.
                   </td>
                 </tr>
@@ -170,6 +199,16 @@ const Warnings: React.FC = () => {
                         {w.status}
                       </span>
                     </td>
+                    <td className="px-4 py-3 text-right">
+                      <button
+                        onClick={() => setSelectedWarningId(w.id)}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background px-3 py-1.5 text-xs font-medium text-emerald-600 transition hover:bg-emerald-50 hover:border-emerald-300"
+                        title="Send email/WhatsApp notification"
+                      >
+                        <Send className="h-3.5 w-3.5" />
+                        Notify
+                      </button>
+                    </td>
                   </tr>
                 );
               })}
@@ -177,6 +216,103 @@ const Warnings: React.FC = () => {
           </table>
         </div>
       </div>
+
+      {/* Notification Modal */}
+      {selectedWarning && selectedEmployee && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          onClick={() => setSelectedWarningId(null)}
+        >
+          <div
+            className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex items-start justify-between">
+              <div>
+                <h3 className="text-lg font-bold text-gray-900">Send Warning Notification</h3>
+                <p className="mt-1 text-sm text-gray-500">
+                  Send notification to {selectedEmployee.first_name} {selectedEmployee.last_name}
+                </p>
+              </div>
+              <button
+                onClick={() => setSelectedWarningId(null)}
+                className="rounded-lg p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-700"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Warning details */}
+            <div className="mt-4 rounded-xl border border-gray-200 bg-gray-50 p-4">
+              <p className="text-xs font-semibold uppercase text-gray-500">
+                {selectedWarning.warning_type} Warning
+              </p>
+              <p className="mt-1 text-sm text-gray-700">{selectedWarning.reason}</p>
+              {selectedWarning.details && (
+                <p className="mt-1 text-sm text-gray-500">{selectedWarning.details}</p>
+              )}
+            </div>
+
+            {/* Notification options */}
+            <div className="mt-4 space-y-3">
+              <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-gray-200 p-3 transition hover:border-emerald-300 hover:bg-emerald-50">
+                <input
+                  type="checkbox"
+                  checked={sendEmail}
+                  onChange={(e) => setSendEmail(e.target.checked)}
+                  className="h-4 w-4 accent-[#ef302b]"
+                />
+                <Mail className="h-5 w-5 text-emerald-600" />
+                <div className="flex-1">
+                  <p className="text-sm font-medium text-gray-700">Email</p>
+                  <p className="text-xs text-gray-500">
+                    {selectedEmployee.email || 'No email on file'}
+                  </p>
+                </div>
+              </label>
+
+              <label className="flex cursor-pointer items-center gap-3 rounded-xl border border-gray-200 p-3 transition hover:border-emerald-300 hover:bg-emerald-50">
+                <input
+                  type="checkbox"
+                  checked={sendWhatsApp}
+                  onChange={(e) => setSendWhatsApp(e.target.checked)}
+                  className="h-4 w-4 accent-[#ef302b]"
+                />
+                <MessageCircle className="h-5 w-5 text-emerald-600" />
+                <div className="flex-1">
+                  <p className="text-sm font-medium text-gray-700">WhatsApp</p>
+                  <p className="text-xs text-gray-500">
+                    {selectedEmployee.phone || 'No phone on file'}
+                  </p>
+                </div>
+              </label>
+            </div>
+
+            {/* Actions */}
+            <div className="mt-6 flex justify-end gap-3">
+              <button
+                onClick={() => setSelectedWarningId(null)}
+                className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSendNotification}
+                disabled={sending || (!sendEmail && !sendWhatsApp)}
+                className="inline-flex items-center gap-2 rounded-lg bg-[#ef302b] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[#d92824] disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {sending ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Send className="h-4 w-4" />
+                )}
+                {sending ? 'Sending...' : 'Send Notification'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -50,13 +50,13 @@ const Suppliers: React.FC = () => {
 
   const handleSubmit = async () => {
     if (!formData.code || !formData.name) { toast.error('Code and name are required'); return; }
+    let result;
     if (editingSupplier) {
-      await updateSupplier(editingSupplier.id, formData);
-      toast.success('Supplier updated');
+      result = await updateSupplier(editingSupplier.id, formData);
     } else {
-      await addSupplier(formData);
-      toast.success('Supplier created');
+      result = await addSupplier(formData);
     }
+    if (!result) return; // Error already toasted inside addSupplier/updateSupplier
     setDialogOpen(false);
     resetForm();
   };

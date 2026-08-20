@@ -35,10 +35,13 @@ async function sendEmail(to: string, subject: string, html: string) {
   const fromEmail = Deno.env.get('RESEND_FROM_EMAIL') || 'hr@maharajasspices.co.za';
 
   if (!resendApiKey) {
-    console.log('[fms-hr-warning] RESEND_API_KEY not configured. Email would be sent to:', to);
-    console.log('[fms-hr-warning] Subject:', subject);
-    console.log('[fms-hr-warning] Body:', html);
-    return { sent: false, reason: 'RESEND_API_KEY not configured' };
+    console.error('[fms-hr-warning] RESEND_API_KEY not configured. Email would be sent to:', to);
+    console.error('[fms-hr-warning] Subject:', subject);
+    console.error('[fms-hr-warning] Body:', html);
+    return {
+      sent: false,
+      reason: 'RESEND_API_KEY not configured. Add the RESEND_API_KEY secret (and optionally RESEND_FROM_EMAIL) in Supabase Dashboard → Settings → Edge Functions → Secrets.',
+    };
   }
 
   const res = await fetch('https://api.resend.com/emails', {
@@ -58,7 +61,7 @@ async function sendEmail(to: string, subject: string, html: string) {
   if (!res.ok) {
     const errText = await res.text();
     console.error('[fms-hr-warning] Resend error:', errText);
-    return { sent: false, reason: errText };
+    return { sent: false, reason: `Resend API error: ${errText}` };
   }
 
   return { sent: true };
@@ -71,9 +74,12 @@ async function sendWhatsApp(to: string, message: string) {
   const twilioFrom = Deno.env.get('TWILIO_WHATSAPP_FROM') || 'whatsapp:+14155238886';
 
   if (!twilioSid || !twilioAuthToken) {
-    console.log('[fms-hr-warning] Twilio not configured. WhatsApp would be sent to:', to);
-    console.log('[fms-hr-warning] Message:', message);
-    return { sent: false, reason: 'Twilio not configured' };
+    console.error('[fms-hr-warning] Twilio not configured. WhatsApp would be sent to:', to);
+    console.error('[fms-hr-warning] Message:', message);
+    return {
+      sent: false,
+      reason: 'TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN not configured. Add them in Supabase Dashboard → Settings → Edge Functions → Secrets.',
+    };
   }
 
   // Normalize phone number to E.164 format for WhatsApp
@@ -105,10 +111,70 @@ async function sendWhatsApp(to: string, message: string) {
   if (!res.ok) {
     const errText = await res.text();
     console.error('[fms-hr-warning] Twilio error:', errText);
-    return { sent: false, reason: errText };
+    return { sent: false, reason: `Twilio API error: ${errText}` };
   }
 
   return { sent: true };
+}
+
+// Build email and WhatsApp content for a warning + employee, then send them
+async function sendNotificationsForWarning(adminClient: any, warning: any, employee: any, sendEmailFlag: boolean, sendWhatsAppFlag: boolean) {
+  const employeeName = `${employee.first_name} ${employee.last_name}`;
+  const warningTypeLabel = warning.warning_type.charAt(0).toUpperCase() + warning.warning_type.slice(1);
+  const dateStr = new Date(warning.issued_at || Date.now()).toLocaleDateString('en-ZA', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  });
+
+  const emailSubject = `Formal ${warningTypeLabel} Warning - ${employeeName}`;
+  const emailHtml = `
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e5e7eb; border-radius: 8px;">
+      <div style="background: #ef302b; color: white; padding: 16px 24px; border-radius: 8px 8px 0 0;">
+        <h2 style="margin: 0; font-size: 18px;">Formal ${warningTypeLabel} Warning</h2>
+      </div>
+      <div style="padding: 24px;">
+        <p style="margin: 0 0 16px; color: #374151; font-size: 14px; line-height: 1.6;">
+          Dear <strong>${employeeName}</strong>,
+        </p>
+        <p style="margin: 0 0 16px; color: #374151; font-size: 14px; line-height: 1.6;">
+          This is to formally notify you of a <strong>${warningTypeLabel.toLowerCase()}</strong> warning issued on <strong>${dateStr}</strong>.
+        </p>
+        <div style="background: #f9fafb; border-left: 4px solid #ef302b; padding: 16px; margin: 0 0 16px; border-radius: 4px;">
+          <p style="margin: 0 0 8px; font-weight: 600; color: #111827; font-size: 14px;">Reason:</p>
+          <p style="margin: 0; color: #374151; font-size: 14px; line-height: 1.6;">${warning.reason}</p>
+          ${warning.details ? `<p style="margin: 12px 0 0; color: #374151; font-size: 14px; line-height: 1.6;">${warning.details}</p>` : ''}
+        </div>
+        <p style="margin: 0 0 24px; color: #374151; font-size: 14px; line-height: 1.6;">
+          Please take this warning seriously and address the matter immediately. Further disciplinary action may be taken if the issue persists.
+        </p>
+        <div style="border-top: 1px solid #e5e7eb; padding-top: 16px;">
+          <p style="margin: 0 0 4px; color: #6b7280; font-size: 12px;">Issued by HR Department</p>
+          <p style="margin: 0; color: #111827; font-size: 14px; font-weight: 600;">Signature: ${warning.signature}</p>
+        </div>
+      </div>
+    </div>
+  `;
+
+  const whatsappMessage = `*FORMAL ${warningTypeLabel.toUpperCase()} WARNING*\n\nDear ${employeeName},\n\nYou have received a ${warningTypeLabel.toLowerCase()} warning issued on ${dateStr}.\n\nReason: ${warning.reason}${warning.details ? `\nDetails: ${warning.details}` : ''}\n\nPlease address this matter immediately. Further disciplinary action may be taken if the issue persists.\n\nIssued by HR Department\nSignature: ${warning.signature}`;
+
+  const results: any = {};
+
+  // Send email if requested and employee has an email
+  if (sendEmailFlag && employee.email) {
+    results.email = await sendEmail(employee.email, emailSubject, emailHtml);
+  } else if (sendEmailFlag && !employee.email) {
+    results.email = { sent: false, reason: 'Employee has no email address on file' };
+  }
+
+  // Send WhatsApp if requested and employee has a phone
+  if (sendWhatsAppFlag && employee.phone) {
+    results.whatsapp = await sendWhatsApp(employee.phone, whatsappMessage);
+  } else if (sendWhatsAppFlag && !employee.phone) {
+    results.whatsapp = { sent: false, reason: 'Employee has no phone number on file' };
+  }
+
+  return results;
 }
 
 serve(async (req) => {
@@ -168,7 +234,7 @@ serve(async (req) => {
     const body = await req.json();
     const { operation } = body;
 
-    // Send warning notification via email and/or WhatsApp
+    // Create a warning AND send notifications (standalone API usage)
     if (operation === 'send_warning') {
       const { employee_id, warning_type, reason, details, signature, send_email, send_whatsapp } = body;
 
@@ -215,69 +281,77 @@ serve(async (req) => {
         );
       }
 
-      const employeeName = `${employee.first_name} ${employee.last_name}`;
-      const warningTypeLabel = warning_type.charAt(0).toUpperCase() + warning_type.slice(1);
-      const dateStr = new Date().toLocaleDateString('en-ZA', {
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric',
-      });
-
-      const emailSubject = `Formal ${warningTypeLabel} Warning - ${employeeName}`;
-      const emailHtml = `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e5e7eb; border-radius: 8px;">
-          <div style="background: #ef302b; color: white; padding: 16px 24px; border-radius: 8px 8px 0 0;">
-            <h2 style="margin: 0; font-size: 18px;">Formal ${warningTypeLabel} Warning</h2>
-          </div>
-          <div style="padding: 24px;">
-            <p style="margin: 0 0 16px; color: #374151; font-size: 14px; line-height: 1.6;">
-              Dear <strong>${employeeName}</strong>,
-            </p>
-            <p style="margin: 0 0 16px; color: #374151; font-size: 14px; line-height: 1.6;">
-              This is to formally notify you of a <strong>${warningTypeLabel.toLowerCase()}</strong> warning issued on <strong>${dateStr}</strong>.
-            </p>
-            <div style="background: #f9fafb; border-left: 4px solid #ef302b; padding: 16px; margin: 0 0 16px; border-radius: 4px;">
-              <p style="margin: 0 0 8px; font-weight: 600; color: #111827; font-size: 14px;">Reason:</p>
-              <p style="margin: 0; color: #374151; font-size: 14px; line-height: 1.6;">${reason}</p>
-              ${details ? `<p style="margin: 12px 0 0; color: #374151; font-size: 14px; line-height: 1.6;">${details}</p>` : ''}
-            </div>
-            <p style="margin: 0 0 24px; color: #374151; font-size: 14px; line-height: 1.6;">
-              Please take this warning seriously and address the matter immediately. Further disciplinary action may be taken if the issue persists.
-            </p>
-            <div style="border-top: 1px solid #e5e7eb; padding-top: 16px;">
-              <p style="margin: 0 0 4px; color: #6b7280; font-size: 12px;">Issued by HR Department</p>
-              <p style="margin: 0; color: #111827; font-size: 14px; font-weight: 600;">Signature: ${signature}</p>
-            </div>
-          </div>
-        </div>
-      `;
-
-      const whatsappMessage = `*FORMAL ${warningTypeLabel.toUpperCase()} WARNING*\n\nDear ${employeeName},\n\nYou have received a ${warningTypeLabel.toLowerCase()} warning issued on ${dateStr}.\n\nReason: ${reason}${details ? `\nDetails: ${details}` : ''}\n\nPlease address this matter immediately. Further disciplinary action may be taken if the issue persists.\n\nIssued by HR Department\nSignature: ${signature}`;
-
-      const results: any = { warning_id: warning.id };
-
-      // Send email if requested and employee has an email
-      if (send_email && employee.email) {
-        results.email = await sendEmail(employee.email, emailSubject, emailHtml);
-      } else if (send_email && !employee.email) {
-        results.email = { sent: false, reason: 'Employee has no email address on file' };
-      }
-
-      // Send WhatsApp if requested and employee has a phone
-      if (send_whatsapp && employee.phone) {
-        results.whatsapp = await sendWhatsApp(employee.phone, whatsappMessage);
-      } else if (send_whatsapp && !employee.phone) {
-        results.whatsapp = { sent: false, reason: 'Employee has no phone number on file' };
-      }
+      // Send notifications (email / WhatsApp)
+      const results = await sendNotificationsForWarning(
+        adminClient,
+        warning,
+        employee,
+        !!send_email,
+        !!send_whatsapp
+      );
 
       return new Response(
-        JSON.stringify({ success: true, ...results }),
+        JSON.stringify({ success: true, warning_id: warning.id, ...results }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // Send notifications for an EXISTING warning record (used by the app after insert)
+    if (operation === 'send_notification') {
+      const { warning_id, send_email, send_whatsapp } = body;
+
+      if (!warning_id) {
+        return new Response(
+          JSON.stringify({ error: 'warning_id is required' }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      // Get the existing warning record
+      const { data: warning, error: warnError } = await adminClient
+        .from('fms_hr_warnings')
+        .select('*')
+        .eq('id', warning_id)
+        .maybeSingle();
+
+      if (warnError || !warning) {
+        return new Response(
+          JSON.stringify({ error: 'Warning not found' }),
+          { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      // Get employee details
+      const { data: employee, error: empError } = await adminClient
+        .from('fms_hr_employees')
+        .select('*')
+        .eq('id', warning.employee_id)
+        .maybeSingle();
+
+      if (empError || !employee) {
+        return new Response(
+          JSON.stringify({ error: 'Employee not found' }),
+          { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      // Send notifications (email / WhatsApp) - does NOT insert a duplicate
+      const results = await sendNotificationsForWarning(
+        adminClient,
+        warning,
+        employee,
+        !!send_email,
+        !!send_whatsapp
+      );
+
+      return new Response(
+        JSON.stringify({ success: true, warning_id: warning.id, ...results }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
     return new Response(
-      JSON.stringify({ error: 'Invalid operation. Use: send_warning' }),
+      JSON.stringify({ error: 'Invalid operation. Use: send_warning or send_notification' }),
       { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
 
