@@ -72,15 +72,24 @@ const Settings: React.FC = () => {
   };
 
   const fetchUsers = async () => {
-    const { data } = await supabase.from('fms_users').select('*').order('created_at', { ascending: false });
+    const { data, error } = await supabase.from('fms_users').select('*').order('created_at', { ascending: false });
+    if (error) {
+      console.error('[Settings] Failed to fetch users:', error.message);
+      toast.error('Failed to load users: ' + error.message);
+      return;
+    }
     if (data) setFmsUsers(data);
   };
 
   const fetchInvitations = async () => {
-    const { data } = await (supabase as any)
+    const { data, error } = await (supabase as any)
       .from('fms_user_invitations')
       .select('*')
       .order('created_at', { ascending: false });
+    if (error) {
+      console.error('[Settings] Failed to fetch invitations:', error.message);
+      return;
+    }
     if (data) setInvitations(data);
   };
 
