@@ -108,7 +108,7 @@ const App = () => (
               <Route path="/forgot-password" element={<ForgotPassword />} />
               <Route path="/" element={<LandingPage />} />
               <Route element={<ProtectedRoute><QaViewerGuard><MainLayout /></QaViewerGuard></ProtectedRoute>}>
-                <Route path="/dashboard" element={<Dashboard />} />
+                <Route path="/Dashboard" element={<Dashboard />} />
                 <Route path="/stock-codes" element={<StockCodes />} />
                 <Route path="/receiving" element={<ReceivingLog />} />
                 <Route path="/bom" element={<BillOfMaterials />} />
