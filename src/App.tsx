@@ -17,6 +17,7 @@ const StockCodes = lazy(() => import("./pages/StockCodes"));
 const ReceivingLog = lazy(() => import("./pages/ReceivingLog"));
 const BillOfMaterials = lazy(() => import("./pages/BillOfMaterials"));
 const BatchSheet = lazy(() => import("./pages/BatchSheet"));
+const StockTracking = lazy(() => import("./pages/StockTracking"));
 const Dispatch = lazy(() => import("./pages/Dispatch"));
 const Traceability = lazy(() => import("./pages/Traceability"));
 const Suppliers = lazy(() => import("./pages/Suppliers"));
@@ -113,6 +114,7 @@ const App = () => (
                 <Route path="/receiving" element={<ReceivingLog />} />
                 <Route path="/bom" element={<BillOfMaterials />} />
                 <Route path="/batch-sheet" element={<BatchSheet />} />
+                <Route path="/stock-tracking" element={<StockTracking />} />
                 <Route path="/dispatch" element={<Dispatch />} />
                 <Route path="/traceability" element={<Traceability />} />
                 <Route path="/suppliers" element={<Suppliers />} />

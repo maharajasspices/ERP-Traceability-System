@@ -136,6 +136,27 @@ export interface FMSDispatchItem {
   created_at: string;
 }
 
+export interface FMSStockLevel {
+  id: string;
+  stock_code_id: string;
+  quantity_on_hand: number;
+  low_stock_threshold: number;
+  updated_at: string;
+}
+
+export interface FMSStockMovement {
+  id: string;
+  stock_code_id: string;
+  movement_type: 'receipt' | 'batch_usage' | 'adjustment';
+  quantity_change: number;
+  batch_id?: string;
+  batch_number?: string;
+  reference_id?: string;
+  notes?: string;
+  created_by?: string;
+  created_at: string;
+}
+
 // Rate limiting configuration
 const RATE_LIMIT_WINDOW = 10000; // 10 seconds
 const RATE_LIMIT_MAX_REQUESTS = 10;
@@ -149,6 +170,8 @@ interface FMSDataCache {
   boms: FMSBOM[] | null;
   productionBatches: FMSProductionBatch[] | null;
   dispatchRecords: FMSDispatch[] | null;
+  stockLevels: FMSStockLevel[] | null;
+  stockMovements: FMSStockMovement[] | null;
   fetchedAt: number | null;
   userId: string | null;
 }
@@ -160,6 +183,8 @@ const dataCache: FMSDataCache = {
   boms: null,
   productionBatches: null,
   dispatchRecords: null,
+  stockLevels: null,
+  stockMovements: null,
   fetchedAt: null,
   userId: null,
 };
@@ -183,6 +208,8 @@ export function useFMSData() {
   const [boms, setBoms] = useState<FMSBOM[]>([]);
   const [productionBatches, setProductionBatches] = useState<FMSProductionBatch[]>([]);
   const [dispatchRecords, setDispatchRecords] = useState<FMSDispatch[]>([]);
+  const [stockLevels, setStockLevels] = useState<FMSStockLevel[]>([]);
+  const [stockMovements, setStockMovements] = useState<FMSStockMovement[]>([]);
   const [loading, setLoading] = useState(true);
 
   // Rate limiting state
@@ -205,11 +232,40 @@ export function useFMSData() {
   }, []);
 
   // Server-side validated request through Edge Function
+  // Falls back to direct database operations if the edge function is unavailable
   const validatedRequest = useCallback(async <T>(options: ValidatedRequestOptions): Promise<{ data: T | null; error: string | null }> => {
     // Check rate limit
     if (!checkRateLimit()) {
       return { data: null, error: 'Too many requests. Please wait a moment and try again.' };
     }
+
+    // Fallback to direct database operations if edge function fails
+    const fallbackDirect = async (): Promise<{ data: T | null; error: string | null }> => {
+      console.warn('[FMS] Edge function unavailable, using direct DB fallback for', options.table);
+      try {
+        const table = options.table as any;
+        if (options.operation === 'insert') {
+          const { data, error } = await supabase.from(table).insert(options.data as any).select().single();
+          if (error) return { data: null, error: error.message };
+          return { data: data as T, error: null };
+        }
+        if (options.operation === 'update') {
+          if (!options.id) return { data: null, error: 'ID required for update' };
+          const { data, error } = await supabase.from(table).update(options.data as any).eq('id', options.id).select().single();
+          if (error) return { data: null, error: error.message };
+          return { data: data as T, error: null };
+        }
+        if (options.operation === 'insert_many') {
+          const { data, error } = await supabase.from(table).insert(options.data as any).select();
+          if (error) return { data: null, error: error.message };
+          return { data: data as T, error: null };
+        }
+        return { data: null, error: 'Invalid operation' };
+      } catch (err: any) {
+        console.error('[FMS] Direct DB fallback error:', err);
+        return { data: null, error: err?.message || 'Database operation failed' };
+      }
+    };
 
     try {
       const { data, error } = await supabase.functions.invoke('fms-validate', {
@@ -218,17 +274,20 @@ export function useFMSData() {
 
       if (error) {
         console.error('[FMS] Edge function error:', error);
-        return { data: null, error: error.message || 'Server validation failed' };
+        // Edge function failed (non-2xx, not deployed, runtime error) - use direct fallback
+        return await fallbackDirect();
       }
 
       if (!data?.success) {
+        // If the edge function responded but validation failed, return the error
         return { data: null, error: data?.error || 'Validation failed' };
       }
 
       return { data: data.data as T, error: null };
     } catch (err) {
       console.error('[FMS] Unexpected error:', err);
-      return { data: null, error: 'An unexpected error occurred' };
+      // Any unexpected error - use direct fallback
+      return await fallbackDirect();
     }
   }, [checkRateLimit]);
 
@@ -250,6 +309,8 @@ export function useFMSData() {
       if (dataCache.boms) setBoms(dataCache.boms);
       if (dataCache.productionBatches) setProductionBatches(dataCache.productionBatches);
       if (dataCache.dispatchRecords) setDispatchRecords(dataCache.dispatchRecords);
+      if (dataCache.stockLevels) setStockLevels(dataCache.stockLevels);
+      if (dataCache.stockMovements) setStockMovements(dataCache.stockMovements);
       setLoading(false);
       return;
     }
@@ -303,7 +364,7 @@ export function useFMSData() {
       );
       setStockCodes(stockCodesData);
 
-      const [suppliersRes, receivingRes, bomsRes, batchesRes, dispatchRes] = await Promise.all([
+      const [suppliersRes, receivingRes, bomsRes, batchesRes, dispatchRes, stockLevelsRes, stockMovementsRes] = await Promise.all([
         dbOrLocal<FMSSupplier>(
           () => supabase.from('fms_suppliers').select('*').order('name').then((res: any) => ({ data: res.data, error: res.error })),
           () => []
@@ -322,6 +383,14 @@ export function useFMSData() {
         ),
         dbOrLocal<any>(
           () => supabase.from('fms_dispatch').select('*, fms_dispatch_items(*)').order('dispatch_date', { ascending: false }).then((res: any) => ({ data: res.data, error: res.error })),
+          () => []
+        ),
+        dbOrLocal<FMSStockLevel>(
+          () => (supabase.from('fms_stock_levels' as any) as any).select('*').then((res: any) => ({ data: res.data, error: res.error })),
+          () => []
+        ),
+        dbOrLocal<FMSStockMovement>(
+          () => (supabase.from('fms_stock_movements' as any) as any).select('*').order('created_at', { ascending: false }).limit(500).then((res: any) => ({ data: res.data, error: res.error })),
           () => []
         ),
       ]);
@@ -343,6 +412,8 @@ export function useFMSData() {
         }));
         setDispatchRecords(dispatchWithItems as FMSDispatch[]);
       }
+      if (stockLevelsRes) setStockLevels(stockLevelsRes);
+      if (stockMovementsRes) setStockMovements(stockMovementsRes);
 
       // Store in cache
       dataCache.suppliers = suppliersRes;
@@ -357,6 +428,8 @@ export function useFMSData() {
         ...dispatch,
         items: dispatch.fms_dispatch_items || [],
       }));
+      dataCache.stockLevels = stockLevelsRes;
+      dataCache.stockMovements = stockMovementsRes;
       dataCache.fetchedAt = Date.now();
       dataCache.userId = user.id;
     } catch (error) {
@@ -716,6 +789,143 @@ export function useFMSData() {
     return data as string;
   };
 
+  // Add stock for a receipt (records movement + updates stock level)
+  // Returns the new quantity on hand
+  const addStockForReceipt = async (
+    stockCodeId: string,
+    quantity: number,
+    referenceId: string,
+    notes?: string
+  ): Promise<number | null> => {
+    try {
+      const { data, error } = await (supabase.rpc as any)('fms_apply_stock_movement', {
+        p_stock_code_id: stockCodeId,
+        p_movement_type: 'receipt',
+        p_quantity_change: quantity,
+        p_reference_id: referenceId,
+        p_notes: notes || `Receipt ${referenceId}`,
+        p_created_by: user?.id || null,
+      });
+      
+      if (error) {
+        console.error('[FMS] Stock receipt error:', error);
+        return null;
+      }
+      
+      return Number(data ?? 0);
+    } catch (err) {
+      console.error('[FMS] Stock receipt unexpected error:', err);
+      return null;
+    }
+  };
+
+  // FIFO Lot Allocation - returns the oldest lots to consume from first
+  const fifoAllocateLots = async (
+    stockCodeId: string,
+    quantityRequired: number
+  ): Promise<{
+    receiving_record_id: string;
+    internal_lot_number: string;
+    quantity_available: number;
+    quantity_to_use: number;
+    expiry_date: string | null;
+  }[]> => {
+    try {
+      const { data, error } = await (supabase.rpc as any)('fms_fifo_allocate_lots', {
+        p_stock_code_id: stockCodeId,
+        p_quantity_required: quantityRequired,
+      });
+      
+      if (error) {
+        console.error('[FMS] FIFO allocation error:', error);
+        return [];
+      }
+      
+      return (data || []).map((row: any) => ({
+        receiving_record_id: row.receiving_record_id,
+        internal_lot_number: row.internal_lot_number,
+        quantity_available: Number(row.quantity_available),
+        quantity_to_use: Number(row.quantity_to_use),
+        expiry_date: row.expiry_date,
+      }));
+    } catch (err) {
+      console.error('[FMS] FIFO allocation unexpected error:', err);
+      return [];
+    }
+  };
+
+  // Record lot usage in fms_materials_used table (tracks which lot was consumed)
+  const recordLotUsage = async (
+    batchId: string,
+    lotUsages: { receiving_record_id: string; quantity_used: number }[]
+  ): Promise<boolean> => {
+    try {
+      const records = lotUsages.map(lu => ({
+        batch_id: batchId,
+        receiving_record_id: lu.receiving_record_id,
+        quantity_used: lu.quantity_used,
+      }));
+      
+      const { error } = await supabase
+        .from('fms_materials_used')
+        .insert(records as any);
+      
+      if (error) {
+        console.error('[FMS] Record lot usage error:', error);
+        return false;
+      }
+      return true;
+    } catch (err) {
+      console.error('[FMS] Record lot usage unexpected error:', err);
+      return false;
+    }
+  };
+
+  // Deduct stock for a batch (records movement + updates stock level)
+  // Returns array of { stock_code_id, new_quantity, is_low } for each material
+  const deductStockForBatch = async (
+    materials: { stock_code_id: string; quantity: number }[],
+    batchId: string,
+    batchNumber: string
+  ): Promise<{ stock_code_id: string; new_quantity: number; is_low: boolean }[]> => {
+    const results: { stock_code_id: string; new_quantity: number; is_low: boolean }[] = [];
+    
+    for (const mat of materials) {
+      try {
+        const { data, error } = await (supabase.rpc as any)('fms_apply_stock_movement', {
+          p_stock_code_id: mat.stock_code_id,
+          p_movement_type: 'batch_usage',
+          p_quantity_change: -mat.quantity,
+          p_batch_id: batchId,
+          p_batch_number: batchNumber,
+          p_reference_id: batchNumber,
+          p_notes: `Batch ${batchNumber} material usage`,
+          p_created_by: user?.id || null,
+        });
+        
+        if (error) {
+          console.error('[FMS] Stock deduction error:', error);
+          continue;
+        }
+        
+        const newQty = Number(data ?? 0);
+        const level = stockLevels.find(sl => sl.stock_code_id === mat.stock_code_id);
+        const isLow = newQty < 0 || (level ? newQty <= level.low_stock_threshold : false);
+        
+        results.push({ stock_code_id: mat.stock_code_id, new_quantity: newQty, is_low: isLow });
+      } catch (err) {
+        console.error('[FMS] Stock deduction unexpected error:', err);
+      }
+    }
+    
+    // Refresh stock levels after deductions
+    if (results.length > 0) {
+      await fetchData(true);
+    }
+    
+    return results;
+  };
+
   return {
     // Data
     suppliers,
@@ -724,6 +934,8 @@ export function useFMSData() {
     boms,
     productionBatches,
     dispatchRecords,
+    stockLevels,
+    stockMovements,
     loading,
     
     // Refresh (forces a fresh fetch, bypassing cache)
@@ -740,6 +952,10 @@ export function useFMSData() {
     addProductionBatch,
     updateProductionBatch,
     addDispatchRecord,
+    deductStockForBatch,
+    addStockForReceipt,
+    fifoAllocateLots,
+    recordLotUsage,
     
     // Helpers
     getStockCodeById,

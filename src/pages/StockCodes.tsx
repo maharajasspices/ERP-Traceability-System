@@ -64,7 +64,7 @@ const allergenTypes: { value: AllergenType; label: string }[] = [
 ];
 
 const StockCodes: React.FC = () => {
-  const { stockCodes, suppliers, loading, addStockCode, updateStockCode, refreshData, getSupplierById } = useFMSData();
+  const { stockCodes, suppliers, loading, addStockCode, updateStockCode, refreshData, getSupplierById, stockLevels } = useFMSData();
   const { canDelete } = useDeletePermission();
   const { logActivity } = useActivityLog();
   const { pricesForSupplier, prices: allPrices } = useSupplierPrices();
@@ -85,6 +85,7 @@ const StockCodes: React.FC = () => {
     allergen_types: [] as AllergenType[],
     approved_supplier_ids: [] as string[],
     status: 'active' as StockStatus,
+    low_stock_threshold: '0',
   });
 
   const resetForm = () => {
@@ -98,6 +99,7 @@ const StockCodes: React.FC = () => {
       allergen_types: [],
       approved_supplier_ids: [],
       status: 'active',
+      low_stock_threshold: '0',
     });
     setEditingItem(null);
   };
@@ -105,6 +107,7 @@ const StockCodes: React.FC = () => {
   const handleOpenDialog = (item?: typeof stockCodes[0]) => {
     if (item) {
       setEditingItem(item);
+      const level = stockLevels.find(sl => sl.stock_code_id === item.id);
       setFormData({
         stock_code: item.stock_code,
         description: item.description,
@@ -115,6 +118,7 @@ const StockCodes: React.FC = () => {
         allergen_types: (item.allergen_types || []) as AllergenType[],
         approved_supplier_ids: item.approved_supplier_ids || [],
         status: item.status as StockStatus,
+        low_stock_threshold: level ? String(level.low_stock_threshold) : '0',
       });
     } else {
       resetForm();
@@ -128,8 +132,21 @@ const StockCodes: React.FC = () => {
       return;
     }
 
+    // Save low stock threshold to stock levels table
+    const threshold = parseFloat(formData.low_stock_threshold) || 0;
     if (editingItem) {
-      await updateStockCode(editingItem.id, formData);
+      // Upsert the stock level threshold
+      const { error: levelError } = await (supabase.from('fms_stock_levels' as any) as any)
+        .upsert({
+          stock_code_id: editingItem.id,
+          low_stock_threshold: threshold,
+        }, { onConflict: 'stock_code_id' });
+      if (levelError) {
+        console.error('[FMS] Failed to save low stock threshold:', levelError);
+      }
+
+      const { stock_code, description, item_type, unit_of_measure, storage_condition, has_allergens, allergen_types, approved_supplier_ids, status } = formData;
+      await updateStockCode(editingItem.id, { stock_code, description, item_type, unit_of_measure, storage_condition, has_allergens, allergen_types, approved_supplier_ids, status });
       logActivity({
         action_type: 'update',
         entity_type: 'stock_code',
@@ -149,7 +166,21 @@ const StockCodes: React.FC = () => {
         toast.error('Stock code already exists');
         return;
       }
-      await addStockCode(formData);
+      const { stock_code, description, item_type, unit_of_measure, storage_condition, has_allergens, allergen_types, approved_supplier_ids, status } = formData;
+      const newStockCode = await addStockCode({ stock_code, description, item_type, unit_of_measure, storage_condition, has_allergens, allergen_types, approved_supplier_ids, status });
+      
+      // Create stock level record with threshold for new stock code
+      if (newStockCode) {
+        const { error: levelError } = await (supabase.from('fms_stock_levels' as any) as any)
+          .upsert({
+            stock_code_id: newStockCode.id,
+            low_stock_threshold: threshold,
+            quantity_on_hand: 0,
+          }, { onConflict: 'stock_code_id' });
+        if (levelError) {
+          console.error('[FMS] Failed to create stock level:', levelError);
+        }
+      }
       logActivity({
         action_type: 'create',
         entity_type: 'stock_code',
@@ -401,6 +432,27 @@ const StockCodes: React.FC = () => {
                 </div>
               )}
 
+              {/* Low Stock Threshold */}
+              <div className="space-y-2">
+                <Label htmlFor="low_stock_threshold">Low Stock Threshold</Label>
+                <div className="flex gap-2 items-center">
+                  <Input
+                    id="low_stock_threshold"
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={formData.low_stock_threshold}
+                    onChange={(e) => setFormData(prev => ({ ...prev, low_stock_threshold: e.target.value }))}
+                    placeholder="e.g., 10"
+                    className="flex-1"
+                  />
+                  <span className="text-sm text-muted-foreground">{formData.unit_of_measure}</span>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  When stock on hand drops to or below this level, a low stock warning will be shown.
+                </p>
+              </div>
+
               {/* Status */}
               <div className="flex items-center justify-between rounded-lg border border-border p-3">
                 <div>
@@ -477,6 +529,7 @@ const StockCodes: React.FC = () => {
                 <th>UOM</th>
                 <th>Storage</th>
                 <th>Allergens</th>
+                <th>Low Stock</th>
                 <th>Status</th>
                 <th className="w-[80px]">Actions</th>
               </tr>
@@ -510,6 +563,22 @@ const StockCodes: React.FC = () => {
                     ) : (
                       <span className="text-muted-foreground">None</span>
                     )}
+                  </td>
+                  <td>
+                    {(() => {
+                      const level = stockLevels.find(sl => sl.stock_code_id === item.id);
+                      const qty = level?.quantity_on_hand ?? 0;
+                      const threshold = level?.low_stock_threshold ?? 0;
+                      const isLow = qty < 0 || qty <= threshold;
+                      return (
+                        <div className="text-xs">
+                          <span className={isLow ? 'text-warning font-semibold' : 'text-muted-foreground'}>
+                            {qty.toFixed(2)} {item.unit_of_measure}
+                          </span>
+                          <span className="text-muted-foreground block">Threshold: {threshold}</span>
+                        </div>
+                      );
+                    })()}
                   </td>
                   <td>
                     <span className={item.status === 'active' ? 'badge-active' : 'badge-inactive'}>
@@ -549,9 +618,9 @@ const StockCodes: React.FC = () => {
                   </td>
                 </tr>
               ))}
-              {filteredStockCodes.length === 0 && (
+                  {filteredStockCodes.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="py-8 text-center text-muted-foreground">
+                  <td colSpan={9} className="py-8 text-center text-muted-foreground">
                     <Package className="mx-auto mb-2 h-8 w-8 opacity-50" />
                     <p>No stock codes found</p>
                   </td>

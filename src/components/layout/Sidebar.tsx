@@ -17,7 +17,8 @@ import {
   Settings,
   Menu,
   X,
-  KeyRound
+  KeyRound,
+  BarChart3
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet';
@@ -32,7 +33,7 @@ interface NavItem {
 const navItems: NavItem[] = [
   {
     title: 'Dashboard',
-    href: '/',
+    href: '/dashboard',
     icon: LayoutDashboard,
     description: 'Overview & statistics',
   },
@@ -59,6 +60,12 @@ const navItems: NavItem[] = [
     href: '/batch-sheet',
     icon: Factory,
     description: 'Batch manufacturing',
+  },
+  {
+    title: 'Stock Tracking',
+    href: '/stock-tracking',
+    icon: BarChart3,
+    description: 'Stock levels & movements',
   },
   {
     title: 'Dispatch',

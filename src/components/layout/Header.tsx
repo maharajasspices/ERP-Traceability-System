@@ -26,7 +26,9 @@ export const Header: React.FC = () => {
   return (
     <header className="sticky top-0 z-30 flex h-16 items-center gap-4 border-b border-border bg-background/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/60 md:px-6">
       <MobileSidebar />
-      
+      <div className=" flex flex-1 items-center gap-4">
+        <h1> { pageTitle }</h1>
+      </div>
       <div className="flex flex-1 items-center gap-4">
         <h1 className="text-lg font-semibold text-foreground md:text-xl">
           {pageTitle}

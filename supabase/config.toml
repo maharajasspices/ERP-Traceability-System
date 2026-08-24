@@ -6,3 +6,6 @@ verify_jwt = false
 [functions.fms-admin-password]
 verify_jwt = false
 
+[functions.fms-stock-order]
+verify_jwt = false
+

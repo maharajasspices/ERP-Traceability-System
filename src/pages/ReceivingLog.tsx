@@ -58,7 +58,7 @@ const formatDateTime = (date: string | Date): string => {
 
 const ReceivingLog: React.FC = () => {
   const { user } = useFMSAuth();
-  const { receivingRecords, stockCodes, suppliers, loading, addReceivingRecord, refreshData } = useFMSData();
+  const { receivingRecords, stockCodes, suppliers, loading, addReceivingRecord, refreshData, addStockForReceipt } = useFMSData();
   const { prices: supplierPrices, refresh: refreshPrices } = useSupplierPrices();
   const { logActivity } = useActivityLog();
   const { canDelete } = useDeletePermission();
@@ -239,6 +239,19 @@ const ReceivingLog: React.FC = () => {
     } as any);
 
     if (result) {
+      // Add stock to inventory for accepted receipts
+      if (!hasFailed) {
+        const newQty = await addStockForReceipt(
+          formData.stock_code_id,
+          parseFloat(formData.quantity_received),
+          formData.internal_lot_number,
+          `Receipt ${formData.internal_lot_number} - ${formData.material_description}`
+        );
+        if (newQty === null) {
+          console.warn('[FMS] Failed to update stock level for receipt', formData.internal_lot_number);
+        }
+      }
+
       // Sync cost price back to supplier_material_prices so rest of system stays in sync
       if (costNum != null && !isNaN(costNum) && costNum >= 0) {
         const existing = supplierPrices.find(
