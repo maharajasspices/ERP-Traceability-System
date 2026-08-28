@@ -62,6 +62,35 @@ export interface FMSReceiving {
   cost_price_per_kg?: number | null;
 }
 
+export interface FMSStockOrderItem {
+  id: string;
+  order_id: string;
+  stock_code_id: string;
+  quantity_ordered: number;
+  uom: string;
+  received: boolean;
+  quantity_received?: number | null;
+  received_lot_number?: string | null;
+  received_at?: string | null;
+  received_by?: string | null;
+  created_at: string;
+}
+
+export interface FMSStockOrder {
+  id: string;
+  po_number: string;
+  supplier_id: string;
+  invoice_number?: string | null;
+  invoice_file_path?: string | null;
+  order_date: string;
+  notes?: string | null;
+  status: 'awaiting_receipt' | 'partial' | 'received';
+  created_by?: string | null;
+  created_at: string;
+  updated_at: string;
+  items: FMSStockOrderItem[];
+}
+
 export interface FMSBOM {
   id: string;
   finished_good_id: string;
@@ -140,6 +169,7 @@ export interface FMSStockLevel {
   id: string;
   stock_code_id: string;
   quantity_on_hand: number;
+  reserved_quantity: number;
   low_stock_threshold: number;
   updated_at: string;
 }
@@ -147,13 +177,32 @@ export interface FMSStockLevel {
 export interface FMSStockMovement {
   id: string;
   stock_code_id: string;
-  movement_type: 'receipt' | 'batch_usage' | 'adjustment';
+  movement_type: 'receipt' | 'batch_usage' | 'adjustment' | 'reservation' | 'reservation_release';
   quantity_change: number;
   batch_id?: string;
   batch_number?: string;
   reference_id?: string;
   notes?: string;
   created_by?: string;
+  created_at: string;
+}
+
+// Reservation linking a Batch Sheet to the LOT (receiving record) it has set aside
+export interface FMSStockReservation {
+  id: string;
+  batch_id: string;
+  batch_number: string;
+  stock_code_id: string;
+  receiving_record_id?: string | null;
+  internal_lot_number?: string | null;
+  quantity_reserved: number;
+  status: 'reserved' | 'consumed' | 'released';
+  reserved_at?: string;
+  reserved_by?: string | null;
+  consumed_at?: string | null;
+  consumed_by?: string | null;
+  released_at?: string | null;
+  released_by?: string | null;
   created_at: string;
 }
 
@@ -172,12 +221,15 @@ interface FMSDataCache {
   dispatchRecords: FMSDispatch[] | null;
   stockLevels: FMSStockLevel[] | null;
   stockMovements: FMSStockMovement[] | null;
+  stockReservations: FMSStockReservation[] | null;
+  stockOrders: FMSStockOrder[] | null;
   fetchedAt: number | null;
   userId: string | null;
 }
 
 const dataCache: FMSDataCache = {
   suppliers: null,
+  stockOrders: null,
   stockCodes: null,
   receivingRecords: null,
   boms: null,
@@ -185,6 +237,7 @@ const dataCache: FMSDataCache = {
   dispatchRecords: null,
   stockLevels: null,
   stockMovements: null,
+  stockReservations: null,
   fetchedAt: null,
   userId: null,
 };
@@ -205,11 +258,13 @@ export function useFMSData() {
   const [suppliers, setSuppliers] = useState<FMSSupplier[]>([]);
   const [stockCodes, setStockCodes] = useState<FMSStockCode[]>([]);
   const [receivingRecords, setReceivingRecords] = useState<FMSReceiving[]>([]);
+  const [stockOrders, setStockOrders] = useState<FMSStockOrder[]>([]);
   const [boms, setBoms] = useState<FMSBOM[]>([]);
   const [productionBatches, setProductionBatches] = useState<FMSProductionBatch[]>([]);
   const [dispatchRecords, setDispatchRecords] = useState<FMSDispatch[]>([]);
   const [stockLevels, setStockLevels] = useState<FMSStockLevel[]>([]);
   const [stockMovements, setStockMovements] = useState<FMSStockMovement[]>([]);
+  const [stockReservations, setStockReservations] = useState<FMSStockReservation[]>([]);
   const [loading, setLoading] = useState(true);
 
   // Rate limiting state
@@ -306,11 +361,13 @@ export function useFMSData() {
       setSuppliers(dataCache.suppliers);
       setStockCodes(dataCache.stockCodes);
       if (dataCache.receivingRecords) setReceivingRecords(dataCache.receivingRecords);
+      if (dataCache.stockOrders) setStockOrders(dataCache.stockOrders);
       if (dataCache.boms) setBoms(dataCache.boms);
       if (dataCache.productionBatches) setProductionBatches(dataCache.productionBatches);
       if (dataCache.dispatchRecords) setDispatchRecords(dataCache.dispatchRecords);
       if (dataCache.stockLevels) setStockLevels(dataCache.stockLevels);
       if (dataCache.stockMovements) setStockMovements(dataCache.stockMovements);
+      if (dataCache.stockReservations) setStockReservations(dataCache.stockReservations);
       setLoading(false);
       return;
     }
@@ -364,7 +421,7 @@ export function useFMSData() {
       );
       setStockCodes(stockCodesData);
 
-      const [suppliersRes, receivingRes, bomsRes, batchesRes, dispatchRes, stockLevelsRes, stockMovementsRes] = await Promise.all([
+      const [suppliersRes, receivingRes, bomsRes, batchesRes, dispatchRes, stockLevelsRes, stockMovementsRes, stockReservationsRes, stockOrdersRes] = await Promise.all([
         dbOrLocal<FMSSupplier>(
           () => supabase.from('fms_suppliers').select('*').order('name').then((res: any) => ({ data: res.data, error: res.error })),
           () => []
@@ -393,6 +450,17 @@ export function useFMSData() {
           () => (supabase.from('fms_stock_movements' as any) as any).select('*').order('created_at', { ascending: false }).limit(500).then((res: any) => ({ data: res.data, error: res.error })),
           () => []
         ),
+        dbOrLocal<FMSStockReservation>(
+          () => (supabase.from('fms_stock_reservations' as any) as any).select('*').order('created_at', { ascending: false }).then((res: any) => ({ data: res.data, error: res.error })),
+          () => []
+        ),
+        dbOrLocal<FMSStockOrder>(
+          () => (supabase.from('fms_stock_orders' as any) as any)
+            .select('*, fms_stock_order_items(*)')
+            .order('created_at', { ascending: false })
+            .then((res: any) => ({ data: res.data, error: res.error })),
+          () => []
+        ),
       ]);
 
       setSuppliers(suppliersRes);
@@ -414,6 +482,13 @@ export function useFMSData() {
       }
       if (stockLevelsRes) setStockLevels(stockLevelsRes);
       if (stockMovementsRes) setStockMovements(stockMovementsRes);
+      if (stockReservationsRes) setStockReservations(stockReservationsRes);
+      if (stockOrdersRes) {
+        setStockOrders(stockOrdersRes.map((o: any) => ({
+          ...o,
+          items: o.fms_stock_order_items || [],
+        })) as FMSStockOrder[]);
+      }
 
       // Store in cache
       dataCache.suppliers = suppliersRes;
@@ -430,6 +505,11 @@ export function useFMSData() {
       }));
       dataCache.stockLevels = stockLevelsRes;
       dataCache.stockMovements = stockMovementsRes;
+      dataCache.stockReservations = stockReservationsRes;
+      dataCache.stockOrders = stockOrdersRes?.map((o: any) => ({
+        ...o,
+        items: o.fms_stock_order_items || [],
+      })) ?? [];
       dataCache.fetchedAt = Date.now();
       dataCache.userId = user.id;
     } catch (error) {
@@ -771,9 +851,11 @@ export function useFMSData() {
     return dispatchData;
   };
 
-  // Helper functions
+    // Helper functions
   const getStockCodeById = (id: string) => stockCodes.find(sc => sc.id === id);
   const getSupplierById = (id: string) => suppliers.find(s => s.id === id);
+  const getReceivingById = (id: string | null | undefined) =>
+    id ? receivingRecords.find(r => r.id === id) : undefined;
   const getBOMByFinishedGoodId = (finishedGoodId: string) => 
     boms.find(b => b.finished_good_id === finishedGoodId && b.status === 'active');
 
@@ -926,6 +1008,152 @@ export function useFMSData() {
     return results;
   };
 
+  // Reserve stock for a batch (set aside; physical stock NOT reduced).
+  // Returns per-stock-code summary { stock_code_id, quantity_reserved, net_stock_after }.
+  const reserveStockForBatch = async (
+    batchId: string,
+    batchNumber: string,
+    reservations: { stock_code_id: string; receiving_record_id: string | null; internal_lot_number?: string | null; quantity: number }[]
+  ): Promise<{ stock_code_id: string; quantity_reserved: number; net_stock_after: number }[] | null> => {
+    try {
+      const { data, error } = await (supabase.rpc as any)('fms_reserve_batch_stock', {
+        p_batch_id: batchId,
+        p_batch_number: batchNumber,
+        p_reservations: reservations.map(r => ({
+          stock_code_id: r.stock_code_id,
+          receiving_record_id: r.receiving_record_id,
+          internal_lot_number: r.internal_lot_number,
+          quantity: r.quantity,
+        })),
+        p_created_by: user?.id || null,
+      });
+
+    if (error) {
+  console.error('[FMS] Stock reserve error:', error);
+  toast.error(`Stock reservation failed: ${error.message}`);
+  return null;
+}
+
+      return (data || []).map((row: any) => ({
+        stock_code_id: row.stock_code_id,
+        quantity_reserved: Number(row.quantity_reserved),
+        net_stock_after: Number(row.net_stock_after),
+      }));
+    } catch (err) {
+      console.error('[FMS] Stock reserve unexpected error:', err);
+      return null;
+    }
+  };
+
+  // Release reservations for a batch (cancel). Returns per-stock-code summary.
+  const releaseBatchReservations = async (
+    batchId: string,
+    batchNumber: string
+  ): Promise<boolean> => {
+    try {
+      const { error } = await (supabase.rpc as any)('fms_release_batch_reservations', {
+        p_batch_id: batchId,
+        p_batch_number: batchNumber,
+        p_created_by: user?.id || null,
+      });
+
+      if (error) {
+        console.error('[FMS] Reservation release error:', error);
+        return false;
+      }
+
+      await fetchData(true);
+      return true;
+    } catch (err) {
+      console.error('[FMS] Reservation release unexpected error:', err);
+      return false;
+    }
+  };
+
+  // Consume reservations for a batch (production completed) - actual consumption.
+  // Returns { stock_code_id, new_quantity_on_hand, is_low }[] for low-stock warnings.
+  const consumeBatchReservations = async (
+    batchId: string,
+    batchNumber: string
+    ): Promise<{ stock_code_id: string; new_quantity_on_hand: number; is_low: boolean }[]> => {
+    const results: { stock_code_id: string; new_quantity_on_hand: number; is_low: boolean }[] = [];
+    try {
+      const { data, error } = await (supabase.rpc as any)('fms_consume_batch_reservations', {
+        p_batch_id: batchId,
+        p_batch_number: batchNumber,
+        p_created_by: user?.id || null,
+      });
+
+            if (error) {
+        console.error('[FMS] Stock consumption error:', error);
+        toast.error(`Stock consumption failed: ${error.message}`);
+        return results;
+      }
+
+      for (const row of (data || [])) {
+        results.push({
+          stock_code_id: row.stock_code_id,
+          new_quantity_on_hand: Number(row.new_quantity_on_hand),
+          is_low: Boolean(row.is_low),
+        });
+      }
+
+      if (results.length === 0) {
+        toast.warning('No active reservations found for this batch — stock was not consumed. Check that reservations were created when the batch was made.');
+      }
+    } catch (err) {
+      console.error('[FMS] Stock consumption unexpected error:', err);
+    } finally {
+      // Always refresh so the UI reflects the current stock state,
+      // even when the RPC returns 0 rows (e.g. legacy batches).
+      await fetchData(true);
+    }
+    return results;
+  };
+
+  // Return the reservations for a given batch (for the view dialog traceability)
+  const getReservationsForBatch = (batchId: string): FMSStockReservation[] =>
+    stockReservations.filter(r => r.batch_id === batchId).sort((a, b) => (a.created_at < b.created_at ? -1 : 1));
+
+  // Create a stock order (uploaded invoice/order) with its line items
+  const createStockOrder = async (
+    order: {
+      po_number: string;
+      supplier_id: string;
+      invoice_number?: string;
+      invoice_file_path?: string | null;
+      order_date: string;
+      notes?: string;
+    },
+    items: { stock_code_id: string; quantity_ordered: number; uom: string }[]
+  ): Promise<boolean> => {
+    try {
+      const { data: header, error: headerError } = await (supabase
+        .from('fms_stock_orders' as any) as any)
+        .insert({ ...order, created_by: user?.id || null })
+        .select('id')
+        .single();
+      if (headerError) throw headerError;
+
+      const { error: itemsError } = await (supabase
+        .from('fms_stock_order_items' as any) as any)
+        .insert(items.map(it => ({ ...it, order_id: header.id })));
+      if (itemsError) {
+        // Roll back orphan header
+        await (supabase.from('fms_stock_orders' as any) as any).delete().eq('id', header.id);
+        throw itemsError;
+      }
+
+      toast.success(`Order ${order.po_number} created — awaiting receipt`);
+      await fetchData(true);
+      return true;
+    } catch (err: any) {
+      console.error('[FMS] createStockOrder error:', err);
+      toast.error(mapDatabaseError(err) || 'Failed to create order');
+      return false;
+    }
+  };
+
   return {
     // Data
     suppliers,
@@ -936,6 +1164,8 @@ export function useFMSData() {
     dispatchRecords,
     stockLevels,
     stockMovements,
+    stockReservations,
+    stockOrders,
     loading,
     
     // Refresh (forces a fresh fetch, bypassing cache)
@@ -956,10 +1186,18 @@ export function useFMSData() {
     addStockForReceipt,
     fifoAllocateLots,
     recordLotUsage,
+    reserveStockForBatch,
+    releaseBatchReservations,
+    consumeBatchReservations,
+    getReservationsForBatch,
+
+    // Stock orders (purchase orders awaiting receipt)
+    createStockOrder,
     
     // Helpers
     getStockCodeById,
     getSupplierById,
+    getReceivingById,
     getBOMByFinishedGoodId,
     generateLotNumber,
   };

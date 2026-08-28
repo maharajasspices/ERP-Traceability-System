@@ -18,7 +18,7 @@ import {
   Menu,
   X,
   KeyRound,
-  BarChart3
+  BarChart3, ArrowLeft, LogOut
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet';
@@ -112,7 +112,7 @@ interface SidebarProps {
 
 const SidebarContent: React.FC<{ collapsed: boolean; onItemClick?: () => void }> = ({ collapsed, onItemClick }) => {
   const location = useLocation();
-  const { fmsUser } = useFMSAuth();
+  const { fmsUser, signOut } = useFMSAuth();
   const isQaViewer = fmsUser?.role === 'qa_viewer';
   const isAdmin = fmsUser?.role === 'system_admin';
 
@@ -211,7 +211,25 @@ const SidebarContent: React.FC<{ collapsed: boolean; onItemClick?: () => void }>
           );
         })}
       </nav>
-
+<div className="space-y-1">
+          <Link
+            to="/"
+            onClick={onItemClick}
+            className={cn("flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-sidebar-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground", collapsed && "justify-center px-2")}
+            title={collapsed ? "Back to Portal" : undefined}
+          >
+            <ArrowLeft className="h-4 w-4 shrink-0" />
+            {!collapsed && <span>Back to Portal</span>}
+          </Link>
+          <button
+            onClick={signOut}
+            className={cn("flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-sidebar-foreground transition-colors hover:bg-destructive/20 hover:text-destructive", collapsed && "justify-center px-2")}
+            title={collapsed ? "Sign Out" : undefined}
+          >
+            <LogOut className="h-4 w-4 shrink-0" />
+            {!collapsed && <span>Sign Out</span>}
+          </button>
+        </div>
       {/* User Info */}
       {!collapsed && (
         <div className="border-t border-sidebar-border p-4">

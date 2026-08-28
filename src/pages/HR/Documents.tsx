@@ -1,11 +1,12 @@
 import React, { useMemo, useRef, useState } from 'react';
-import { useHRData } from '@/hooks/useHRData';
-import { FileText, FileCheck, FileX, Loader2, Search, Download, Upload, Trash2, CheckCircle2, XCircle } from 'lucide-react';
+import { useHRData, HRDocument } from '@/hooks/useHRData';
+import { FileText, FileCheck, FileX, Loader2, Search, Download, Upload, Trash2, CheckCircle2, XCircle, Send, PenLine } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
+import { supabase} from '@/integrations/supabase/client'
 
 const DOCUMENT_TYPES = [
   { value: 'contract', label: 'Contract' },
@@ -24,7 +25,7 @@ const typeStyles: Record<string, string> = {
 };
 
 const Documents: React.FC = () => {
-  const { documents, employees, loading, uploadingDocument, uploadDocument, deleteDocument } = useHRData();
+  const { documents, employees, contractSignatures, loading, uploadingDocument, uploadDocument, deleteDocument, sendContractForSignature } = useHRData();
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
 
@@ -35,6 +36,8 @@ const Documents: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+
+  const [sendingSignatureId, setSendingSignatureId] = useState<string | null>(null);
 
   const employeeMap = useMemo(() => {
     const map = new Map<string, { first_name: string; last_name: string; contract_signed: boolean; contract_signed_date?: string }>();
@@ -86,6 +89,28 @@ const Documents: React.FC = () => {
     const doc = documents.find((d) => d.id === deleteTarget);
     if (doc) await deleteDocument(doc);
     setDeleteTarget(null);
+  };
+
+  // Send a contract document to its employee for electronic signature.
+  const handleSendForSignature = async (doc: HRDocument) => {
+    if (!doc.employee_id) {
+      toast.error('This document is not linked to an employee.');
+      return;
+    }
+    setSendingSignatureId(doc.id);
+    try {
+      await sendContractForSignature(doc.employee_id, doc.id);
+    } finally {
+      setSendingSignatureId(null);
+    }
+  };
+
+  // The latest pending signing request for a given contract document.
+  const getDocumentSignature = (documentId?: string) => {
+    if (!documentId) return undefined;
+    return contractSignatures
+      .filter((s) => s.document_id === documentId)
+      .sort((a, b) => new Date(b.sent_at).getTime() - new Date(a.sent_at).getTime())[0];
   };
 
   if (loading) {
@@ -265,6 +290,54 @@ const Documents: React.FC = () => {
                           <Download className="h-3.5 w-3.5" />
                           View
                         </a>
+                        {d.document_type === 'contract' && d.employee_id && (
+                          (() => {
+                            const docSig = getDocumentSignature(d.id);
+                            if (docSig && docSig.status === 'signed') {
+                              return (
+                                <span
+                                  className="inline-flex items-center gap-1.5 rounded-lg border border-success/30 bg-success/10 px-2.5 py-1 text-xs font-medium text-success"
+                                  title={`Signed ${docSig.signed_at ? new Date(docSig.signed_at).toLocaleDateString() : ''}`}
+                                >
+                                  <CheckCircle2 className="h-3.5 w-3.5" />
+                                  Signed
+                                </span>
+                              );
+                            }
+                            if (docSig && docSig.status === 'pending') {
+                              return (
+                                <button
+                                  onClick={() => handleSendForSignature(d)}
+                                  disabled={sendingSignatureId === d.id}
+                                  title="Resend the signing request (a new secure link is created)"
+                                  className="inline-flex items-center gap-1.5 rounded-lg border border-primary/30 bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary transition-colors hover:bg-primary/20 disabled:opacity-60"
+                                >
+                                  {sendingSignatureId === d.id ? (
+                                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                  ) : (
+                                    <Send className="h-3.5 w-3.5" />
+                                  )}
+                                  Resend
+                                </button>
+                              );
+                            }
+                            return (
+                              <button
+                                onClick={() => handleSendForSignature(d)}
+                                disabled={sendingSignatureId === d.id}
+                                title="Email this contract to the employee for electronic signature"
+                                className="inline-flex items-center gap-1.5 rounded-lg border border-primary/30 bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary transition-colors hover:bg-primary/20 disabled:opacity-60"
+                              >
+                                {sendingSignatureId === d.id ? (
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                ) : (
+                                  <PenLine className="h-3.5 w-3.5" />
+                                )}
+                                {sendingSignatureId === d.id ? 'Sending...' : 'Send for Signature'}
+                              </button>
+                            );
+                          })()
+                        )}
                         <button
                           onClick={() => setDeleteTarget(d.id)}
                           className="inline-flex items-center gap-1.5 rounded-lg border border-destructive/30 px-2.5 py-1 text-xs font-medium text-destructive transition-colors hover:bg-destructive/10"

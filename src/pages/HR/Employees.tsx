@@ -25,6 +25,7 @@ import {
   Loader2,
   AlertTriangle,
   Send,
+  PenLine,
 } from 'lucide-react';
 
 const Employees: React.FC = () => {
@@ -42,6 +43,9 @@ const Employees: React.FC = () => {
     deleteDocument,
     issueWarning,
     deleteWarning,
+    sendEmployeeEmail,
+    sendContractForSignature,
+    contractSignatures,
   } = useHRData();
 
   const [search, setSearch] = useState('');
@@ -51,6 +55,12 @@ const Employees: React.FC = () => {
   const [selectedEmployee, setSelectedEmployee] =
     useState<HREmployee | null>(null);
 
+  // Send Email state
+  const [showEmailForm, setShowEmailForm] = useState(false);
+  const [emailSubject, setEmailSubject] = useState('');
+  const [emailMessage, setEmailMessage] = useState('');
+  const [sendingEmail, setSendingEmail] = useState(false);
+
   const [showAddEmployee, setShowAddEmployee] = useState(false);
   const [showEditEmployee, setShowEditEmployee] = useState(false);
   const [savingEmployee, setSavingEmployee] = useState(false);
@@ -59,6 +69,9 @@ const Employees: React.FC = () => {
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [documentType, setDocumentType] = useState('contract');
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Contract signature state
+  const [sendingContractSignature, setSendingContractSignature] = useState(false);
 
   // Warning state
   const [showWarningForm, setShowWarningForm] = useState(false);
@@ -474,6 +487,43 @@ const Employees: React.FC = () => {
     }
   };
 
+  const openEmailModal = () => {
+    setEmailSubject('');
+    setEmailMessage('');
+    setShowEmailForm(true);
+  };
+
+  const handleSendEmployeeEmail = async () => {
+    if (!selectedEmployee) return;
+
+    if (!emailSubject.trim()) {
+      toast.error('Please provide a subject for the email.');
+      return;
+    }
+    if (!emailMessage.trim()) {
+      toast.error('Please write a message before sending.');
+      return;
+    }
+
+    setSendingEmail(true);
+
+    try {
+      const success = await sendEmployeeEmail(
+        selectedEmployee.id,
+        emailSubject,
+        emailMessage
+      );
+
+      if (success) {
+        setShowEmailForm(false);
+        setEmailSubject('');
+        setEmailMessage('');
+      }
+    } finally {
+      setSendingEmail(false);
+    }
+  };
+
   const handleDownloadDocument = async (doc: {
     file_path: string;
     document_name: string;
@@ -488,6 +538,41 @@ const Employees: React.FC = () => {
     }
 
     window.open(data.signedUrl, '_blank');
+  };
+
+  // The employee's latest contract document (if any) and its signing status.
+  const getEmployeeContract = () => {
+    if (!selectedEmployee) return undefined;
+    const contracts = getEmployeeDocuments(selectedEmployee.id)
+      .filter(doc => doc.document_type === 'contract' && doc.file_path);
+    return contracts[0];
+  };
+
+  const getContractSignature = (documentId?: string) => {
+    if (!documentId) return undefined;
+    return contractSignatures
+      .filter(s => s.document_id === documentId)
+      .sort((a, b) => new Date(b.sent_at).getTime() - new Date(a.sent_at).getTime())[0];
+  };
+
+  // Send the selected employee's contract for electronic signature.
+  const handleSendContractForSignature = async () => {
+    if (!selectedEmployee) return;
+    const contract = getEmployeeContract();
+    if (!contract) {
+      toast.error('No contract document is attached to this employee yet. Upload one in the Documents section first.');
+      return;
+    }
+    if (!selectedEmployee.email) {
+      toast.error('This employee has no email address on file.');
+      return;
+    }
+    setSendingContractSignature(true);
+    try {
+      await sendContractForSignature(selectedEmployee.id, contract.id);
+    } finally {
+      setSendingContractSignature(false);
+    }
   };
 
   // ------------------------------------------------------------
@@ -1722,6 +1807,19 @@ const Employees: React.FC = () => {
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
+                    onClick={openEmailModal}
+                    disabled={!selectedEmployee.email}
+                    title={selectedEmployee.email
+                      ? `Send email to ${selectedEmployee.email}`
+                      : 'No email address on file for this employee'}
+                    className="flex items-center gap-2 rounded-lg border bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <Mail className="h-4 w-4" />
+                    Send Email
+                  </button>
+
+                  <button
+                    type="button"
                     onClick={() => {
                       populateEditForm(selectedEmployee);
                       setShowEditEmployee(true);
@@ -2016,6 +2114,38 @@ const Employees: React.FC = () => {
                     </div>
 
                   </div>
+
+                  {(() => {
+                    const contract = getEmployeeContract();
+                    const docSig = contract ? getContractSignature(contract.id) : undefined;
+                    return (
+                      <div className="flex flex-col items-end gap-2">
+                        {docSig && docSig.status === 'pending' && (
+                          <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-300 bg-amber-50 px-2.5 py-0.5 text-xs font-medium text-amber-700">
+                            Signature pending — sent {new Date(docSig.sent_at).toLocaleDateString()}
+                          </span>
+                        )}
+                        {!selectedEmployee.contract_signed && (
+                          <button
+                            type="button"
+                            onClick={handleSendContractForSignature}
+                            disabled={sendingContractSignature}
+                            title={!contract
+                              ? 'No contract document attached. Upload one in the Documents section first.'
+                              : 'Email this contract to the employee for electronic signature'}
+                            className="flex items-center gap-2 rounded-lg bg-[#ef302b] px-4 py-2 text-sm font-semibold text-white hover:bg-[#d92824] disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {sendingContractSignature ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <PenLine className="h-4 w-4" />
+                            )}
+                            {sendingContractSignature ? 'Sending...' : 'Send for Signature'}
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })()}
 
                 </div>
 
@@ -2332,6 +2462,115 @@ const Employees: React.FC = () => {
 
           </div>
 
+        </div>
+      )}
+
+      {/* ======================================================
+          SEND EMAIL MODAL
+      ====================================================== */}
+
+      {showEmailForm && selectedEmployee && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          onClick={() => setShowEmailForm(false)}
+        >
+          <div
+            className="w-full max-w-lg rounded-2xl bg-white shadow-2xl"
+            onClick={event => event.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex items-start justify-between border-b p-6">
+              <div>
+                <h2 className="flex items-center gap-2 text-xl font-bold text-gray-900">
+                  <Mail className="h-5 w-5 text-[#ef302b]" />
+                  Send Email
+                </h2>
+                <p className="mt-1 text-sm text-gray-500">
+                  To {selectedEmployee.first_name}{' '}
+                  {selectedEmployee.last_name} — from zulaigah.benjamin@maharajasspices.co.za
+                </p>
+              </div>
+              <button
+                onClick={() => setShowEmailForm(false)}
+                className="rounded-lg p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-700"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Form */}
+            <form
+              onSubmit={event => {
+                event.preventDefault();
+                handleSendEmployeeEmail();
+              }}
+              className="space-y-4 p-6"
+            >
+              <div>
+                <label className="mb-1 block text-sm font-medium text-gray-700">
+                  To
+                </label>
+                <input
+                  type="email"
+                  value={selectedEmployee.email || ''}
+                  disabled
+                  className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-600 outline-none"
+                />
+                {!selectedEmployee.email && (
+                  <p className="mt-1 text-xs text-red-500">
+                    This employee has no email address on file.
+                  </p>
+                )}
+              </div>
+
+              <div>
+                <label className="mb-1 block text-sm font-medium text-gray-700">
+                  Subject *
+                </label>
+                <input
+                  value={emailSubject}
+                  onChange={event => setEmailSubject(event.target.value)}
+                  placeholder="e.g. Payslip ready for collection..."
+                  className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-[#ef302b]"
+                />
+              </div>
+
+              <div>
+                <label className="mb-1 block text-sm font-medium text-gray-700">
+                  Message *
+                </label>
+                <textarea
+                  rows={6}
+                  value={emailMessage}
+                  onChange={event => setEmailMessage(event.target.value)}
+                  placeholder="Write your message here..."
+                  className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-[#ef302b]"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-3 border-t pt-4">
+                <button
+                  type="button"
+                  onClick={() => setShowEmailForm(false)}
+                  className="rounded-lg border bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={sendingEmail}
+                  className="flex items-center gap-2 rounded-lg bg-[#ef302b] px-4 py-2 text-sm font-semibold text-white hover:bg-[#d42a26] disabled:opacity-60"
+                >
+                  {sendingEmail ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Send className="h-4 w-4" />
+                  )}
+                  {sendingEmail ? 'Sending...' : 'Send Email'}
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
       )}
 

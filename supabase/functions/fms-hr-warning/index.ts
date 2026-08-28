@@ -32,7 +32,7 @@ const createCorsHeaders = (requestOrigin: string | null) => ({
 // Send email via Resend (or fallback to console log if not configured)
 async function sendEmail(to: string, subject: string, html: string) {
   const resendApiKey = Deno.env.get('RESEND_API_KEY');
-  const fromEmail = Deno.env.get('RESEND_FROM_EMAIL') || 'hr@maharajasspices.co.za';
+  const fromEmail = Deno.env.get('RESEND_FROM_EMAIL') || 'zulaigah.benjamin@maharajasspices.co.za';
 
   if (!resendApiKey) {
     console.error('[fms-hr-warning] RESEND_API_KEY not configured. Email would be sent to:', to);

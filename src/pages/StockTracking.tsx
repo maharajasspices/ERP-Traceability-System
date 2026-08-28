@@ -66,7 +66,7 @@ const StockTracking: React.FC = () => {
 
   const [searchQuery, setSearchQuery] = useState('');
   const [typeFilter, setTypeFilter] = useState<
-    'all' | 'receipt' | 'batch_usage' | 'adjustment'
+    'all' | 'receipt' | 'batch_usage' | 'adjustment' | 'reservation' | 'reservation_release'
   >('all');
   const [stockCodeFilter, setStockCodeFilter] = useState('all');
   const [activeTab, setActiveTab] = useState('levels');
@@ -137,13 +137,17 @@ const StockTracking: React.FC = () => {
         const level = levelMap.get(sc.id);
 
         const qty = level?.quantity_on_hand ?? 0;
+        const reserved = level?.reserved_quantity ?? 0;
+        const netStock = qty - reserved;
         const threshold = level?.low_stock_threshold ?? 0;
 
-        const isLow = qty < 0 || qty <= threshold;
+        const isLow = netStock < 0 || netStock <= threshold;
 
         return {
           stockCode: sc,
           quantity: qty,
+          reserved,
+          netStock,
           threshold,
           isLow,
         };
@@ -359,6 +363,12 @@ const StockTracking: React.FC = () => {
       case 'adjustment':
         return 'Adjustment';
 
+      case 'reservation':
+        return 'Reservation';
+
+      case 'reservation_release':
+        return 'Reservation Released';
+
       default:
         return type;
     }
@@ -373,6 +383,12 @@ const StockTracking: React.FC = () => {
         return 'badge-warning';
 
       case 'adjustment':
+        return 'badge-inactive';
+
+      case 'reservation':
+        return 'badge-warning';
+
+      case 'reservation_release':
         return 'badge-inactive';
 
       default:
@@ -391,6 +407,8 @@ const StockTracking: React.FC = () => {
       'Item Type': row.stockCode.item_type.replace('_', ' '),
       UOM: row.stockCode.unit_of_measure,
       'Quantity On Hand': row.quantity,
+      Reserved: row.reserved,
+      'Net Stock': row.netStock,
       'Low Stock Threshold': row.threshold,
       Status: row.isLow
         ? row.quantity < 0
@@ -962,6 +980,13 @@ const StockTracking: React.FC = () => {
                       On Hand
                     </th>
                     <th className="hidden sm:table-cell text-right">
+                      Reserved
+                    </th>
+                    <th className="hidden sm:table-cell text-right">
+                      Net Stock
+                    </th>
+
+                    <th className="hidden sm:table-cell text-right">
                       Min. Reorder Point
                     </th>
                     <th>Status</th>
@@ -1008,6 +1033,22 @@ const StockTracking: React.FC = () => {
                         {row.quantity.toFixed(2)}{' '}
                         {row.stockCode.unit_of_measure}
                       </td>
+
+                      <td className="hidden sm:table-cell text-right text-xs sm:text-sm text-muted-foreground">
+                        {row.reserved.toFixed(2)}{' '}
+                        {row.stockCode.unit_of_measure}
+                      </td>
+                      <td className={`hidden sm:table-cell text-right font-semibold text-xs sm:text-sm ${
+                        row.netStock < 0
+                          ? 'text-destructive'
+                          : row.isLow
+                          ? 'text-warning'
+                          : 'text-success'
+                      }`}>
+                        {row.netStock.toFixed(2)}{' '}
+                        {row.stockCode.unit_of_measure}
+                      </td>
+
 
                       <td className="hidden sm:table-cell text-right text-xs sm:text-sm text-muted-foreground">
                         {row.threshold.toFixed(2)}{' '}
@@ -1546,6 +1587,7 @@ const StockTracking: React.FC = () => {
 
                             Review &amp; Send Email
                           </Button>
+                          
                         </div>
                       </AccordionContent>
                     </AccordionItem>
@@ -1586,6 +1628,8 @@ const StockTracking: React.FC = () => {
                     | 'receipt'
                     | 'batch_usage'
                     | 'adjustment'
+                    | 'reservation'
+                    | 'reservation_release'
                 )
               }
             >
@@ -1609,6 +1653,15 @@ const StockTracking: React.FC = () => {
                 <SelectItem value="adjustment">
                   Adjustment
                 </SelectItem>
+
+                <SelectItem value="reservation">
+                  Reservation
+                </SelectItem>
+
+                <SelectItem value="reservation_release">
+                  Reservation Released
+                </SelectItem>
+
               </SelectContent>
             </Select>
 

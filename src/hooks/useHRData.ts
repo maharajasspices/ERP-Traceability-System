@@ -106,6 +106,19 @@ export interface HRWarning {
   updated_at: string;
 }
 
+export interface HRContractSignature {
+  id: string;
+  employee_id: string;
+  document_id?: string;
+  status: 'pending' | 'signed' | 'expired' | 'revoked';
+  sent_at: string;
+  expires_at: string;
+  signed_at?: string;
+  signer_name?: string;
+  created_at: string;
+  updated_at: string;
+}
+
 // Module-level cache for HR data
 interface HRDataCache {
   employees: HREmployee[] | null;
@@ -113,6 +126,7 @@ interface HRDataCache {
   leaveRequests: HRLeave[] | null;
   documents: HRDocument[] | null;
   warnings: HRWarning[] | null;
+  contractSignatures: HRContractSignature[] | null;
   fetchedAt: number | null;
   userId: string | null;
 }
@@ -138,6 +152,7 @@ const hr = {
   leave: () => (supabase as any).from('fms_hr_leave'),
   documents: () => (supabase as any).from('fms_hr_documents'),
   warnings: () => (supabase as any).from('fms_hr_warnings'),
+  contractSignatures: () => (supabase as any).from('fms_contract_signatures'),
 };
 
 export function useHRData() {
@@ -147,6 +162,7 @@ export function useHRData() {
   const [leaveRequests, setLeaveRequests] = useState<HRLeave[]>([]);
   const [documents, setDocuments] = useState<HRDocument[]>([]);
   const [warnings, setWarnings] = useState<HRWarning[]>([]);
+  const [contractSignatures, setContractSignatures] = useState<HRContractSignature[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploadingDocument, setUploadingDocument] = useState(false);
 
@@ -168,6 +184,7 @@ export function useHRData() {
       if (hrCache.leaveRequests) setLeaveRequests(hrCache.leaveRequests);
       if (hrCache.documents) setDocuments(hrCache.documents);
       if (hrCache.warnings) setWarnings(hrCache.warnings);
+      if (hrCache.contractSignatures) setContractSignatures(hrCache.contractSignatures);
       setLoading(false);
       return;
     }
@@ -177,12 +194,13 @@ export function useHRData() {
     try {
       // Use allSettled so a failure in one table (e.g. warnings not yet
       // migrated) doesn't prevent employees and other data from loading.
-      const [employeesRes, attendanceRes, leaveRes, documentsRes, warningsRes] = await Promise.allSettled([
+      const [employeesRes, attendanceRes, leaveRes, documentsRes, warningsRes, signaturesRes] = await Promise.allSettled([
         hr.employees().select('*').order('last_name'),
         hr.attendance().select('*').order('attendance_date', { ascending: false }).limit(500),
         hr.leave().select('*').order('created_at', { ascending: false }),
         hr.documents().select('*').order('created_at', { ascending: false }),
         hr.warnings().select('*').order('issued_at', { ascending: false }),
+        hr.contractSignatures().select('*').order('sent_at', { ascending: false }),
       ]);
 
       // Employees - critical, if this fails we show the error
@@ -229,6 +247,15 @@ export function useHRData() {
         hrCache.warnings = warnData;
       } else {
         console.error('Error fetching warnings:', warningsRes.status === 'rejected' ? warningsRes.reason : warningsRes.value.error);
+      }
+
+      // Contract signatures - non-critical
+      if (signaturesRes.status === 'fulfilled' && !signaturesRes.value.error) {
+        const sigData = (signaturesRes.value.data || []) as HRContractSignature[];
+        setContractSignatures(sigData);
+        hrCache.contractSignatures = sigData;
+      } else {
+        console.error('Error fetching contract signatures:', signaturesRes.status === 'rejected' ? signaturesRes.reason : signaturesRes.value.error);
       }
 
       hrCache.fetchedAt = Date.now();
@@ -374,31 +401,13 @@ export function useHRData() {
 
     setUploadingDocument(true);
     try {
-      // 0) Ensure the hr-documents bucket exists (it may not if the
-      //    migration hasn't been applied to the project yet)
-      try {
-        const { error: bucketCheckError } = await supabase.storage
-          .getBucket('hr-documents');
-        if (bucketCheckError) {
-          console.warn('hr-documents bucket not found, attempting to create...');
-          const { error: createBucketError } = await supabase.storage
-            .createBucket('hr-documents', {
-              public: false,
-              fileSizeLimit: MAX_FILE_SIZE,
-            });
-          if (createBucketError) {
-            console.error('Failed to auto-create hr-documents bucket:', createBucketError);
-            toast.error(
-              'Storage bucket "hr-documents" does not exist. Ask your admin to run the migration or create the bucket in the Supabase Dashboard.'
-            );
-            return null;
-          }
-        }
-      } catch (bucketErr) {
-        console.error('Bucket check error:', bucketErr);
-      }
-
       // 1) Upload file to storage
+      //
+      // NOTE: There is intentionally NO getBucket()/createBucket() pre-check here.
+      // Those are Storage Admin API endpoints that require the service-role key,
+      // so they ALWAYS fail when called from the browser with the anon key —
+      // even when the bucket exists correctly. Attempting the upload directly
+      // is the only reliable way to know whether the bucket is usable.
       const { error: uploadError } = await supabase.storage
         .from('hr-documents')
         .upload(filePath, file, {
@@ -408,7 +417,13 @@ export function useHRData() {
 
       if (uploadError) {
         console.error('Document upload error:', uploadError);
-        toast.error(uploadError.message || 'Failed to upload file.');
+        if (/bucket/i.test(uploadError.message)) {
+          toast.error(
+            'Upload failed: the "hr-documents" storage bucket is missing or not accessible. Ask your admin to run supabase/migrations/20260814000000_hr_fixes.sql in the Supabase SQL Editor.'
+          );
+        } else {
+          toast.error(uploadError.message || 'Failed to upload file.');
+        }
         return null;
       }
 
@@ -601,6 +616,106 @@ export function useHRData() {
     return true;
   };
 
+  // Send an email to an employee's stored address via the send-hr-email
+  // Edge Function. The recipient is resolved server-side from
+  // fms_hr_employees — never supplied by the client.
+  const sendEmployeeEmail = async (
+    employeeId: string,
+    subject: string,
+    message: string
+  ) => {
+    if (!user) {
+      toast.error('You must be signed in to send emails.');
+      return false;
+    }
+
+    if (!subject.trim() || !message.trim()) {
+      toast.error('Subject and message are required.');
+      return false;
+    }
+
+    try {
+      const { data: fnData, error: fnError } = await supabase.functions.invoke('send-hr-email', {
+        body: {
+          employee_id: employeeId,
+          subject: subject.trim(),
+          message: message.trim(),
+        },
+      });
+
+      if (fnError || !fnData?.success) {
+        console.error('send-hr-email error:', fnError || fnData);
+        toast.error(fnError?.message || fnData?.error || 'Failed to send email.');
+        return false;
+      }
+
+      toast.success(`Email sent to ${fnData.recipient}`);
+      return true;
+    } catch (err) {
+      console.error('Edge function error:', err);
+      toast.error('Failed to send email.');
+      return false;
+    }
+  };
+
+  // Send an employee's contract for electronic signature via the
+  // send-contract-signature Edge Function. The server generates a
+  // secure, unique signing token (never the employee ID), stores the
+  // request in fms_contract_signatures, and emails the employee a
+  // signing link.
+  const sendContractForSignature = async (
+    employeeId: string,
+    documentId: string
+  ) => {
+    if (!user) {
+      toast.error('You must be signed in to send a contract for signature.');
+      return false;
+    }
+
+    try {
+      const { data: fnData, error: fnError } = await supabase.functions.invoke('send-contract-signature', {
+        body: {
+          employee_id: employeeId,
+          document_id: documentId,
+        },
+      });
+
+      if (fnError || !fnData?.success) {
+        console.error('send-contract-signature error:', fnError || fnData);
+        toast.error(fnError?.message || fnData?.error || 'Failed to create signing request.');
+        return false;
+      }
+
+      if (!fnData.email || !fnData.email.sent) {
+        toast.warning('Signing request created, but the email could not be sent. ' + (fnData?.email?.reason || ''));
+      } else {
+        toast.success('Contract sent for signature');
+      }
+
+      // Reflect the new request in local state and invalidate the cache so
+      // the next HR data refresh pulls the persisted record from Supabase.
+      const newSignature: HRContractSignature = {
+        id: fnData.signing_request.id,
+        employee_id: employeeId,
+        document_id: documentId,
+        status: fnData.signing_request.status,
+        sent_at: new Date().toISOString(),
+        expires_at: fnData.signing_request.expires_at,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+      setContractSignatures(prev => [newSignature, ...prev]);
+      hrCache.contractSignatures = [newSignature, ...(hrCache.contractSignatures || [])];
+      hrCache.fetchedAt = null;
+
+      return true;
+    } catch (err) {
+      console.error('Edge function error:', err);
+      toast.error('Failed to send contract for signature.');
+      return false;
+    }
+  };
+
   // Send a notification (email/WhatsApp) for an EXISTING warning
   const sendWarningNotification = async (
     warningId: string,
@@ -738,6 +853,7 @@ export function useHRData() {
     leaveRequests,
     documents,
     warnings,
+    contractSignatures,
     loading,
     uploadingDocument,
 
@@ -757,5 +873,7 @@ export function useHRData() {
     issueWarning,
     deleteWarning,
     sendWarningNotification,
+    sendEmployeeEmail,
+    sendContractForSignature,
   };
 }

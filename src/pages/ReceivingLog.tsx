@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useFMSData } from '@/hooks/useFMSData';
+import type { FMSStockOrder } from '@/hooks/useFMSData';
 import { useFMSAuth } from '@/context/FMSAuthContext';
 import { useDeletePermission } from '@/hooks/useDeletePermission';
 import { Button } from '@/components/ui/button';
@@ -13,13 +14,14 @@ import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
-import { Plus, Search, Truck, CheckCircle, XCircle, Eye, FileText, Loader2, QrCode, Trash2, Download, Camera } from 'lucide-react';
+import { Plus, Search, Truck, CheckCircle, XCircle, Eye, FileText, Loader2, QrCode, Trash2, Download, Camera, ClipboardList, PackageCheck, Upload, X } from 'lucide-react';
 import { useActivityLog } from '@/hooks/useActivityLog';
 import { exportToPDF, exportToExcel } from '@/lib/exportUtils';
 import { format } from 'date-fns';
 import { generateQRCodePair, printQRCodes, downloadQRCodeWithLabel, generateQRCodeImage } from '@/lib/qrCodeUtils';
 import { QRScanner } from '@/components/QRScanner';
 import { extractBestScanIdentifier } from '@/lib/scanParser';
+import { parseInvoiceFile } from '@/lib/invoiceParser';
 import { useSupplierPrices, formatZAR } from '@/hooks/useSupplierPrices';
 const receivingQualityChecksList = [
   { key: 'coa_received', label: 'COA/COC Provided' },
@@ -58,7 +60,7 @@ const formatDateTime = (date: string | Date): string => {
 
 const ReceivingLog: React.FC = () => {
   const { user } = useFMSAuth();
-  const { receivingRecords, stockCodes, suppliers, loading, addReceivingRecord, refreshData, addStockForReceipt } = useFMSData();
+  const { receivingRecords, stockCodes, suppliers, loading, addReceivingRecord, refreshData, addStockForReceipt, stockOrders, createStockOrder } = useFMSData();
   const { prices: supplierPrices, refresh: refreshPrices } = useSupplierPrices();
   const { logActivity } = useActivityLog();
   const { canDelete } = useDeletePermission();
@@ -74,6 +76,30 @@ const ReceivingLog: React.FC = () => {
   const [stockCodeSearch, setStockCodeSearch] = useState('');
   const [showStockCodeDropdown, setShowStockCodeDropdown] = useState(false);
   const [supplierSearch, setSupplierSearch] = useState('');
+
+  // ---- Stock orders (uploaded invoice awaiting receipt) ----
+  const [orderDialogOpen, setOrderDialogOpen] = useState(false);
+  const [savingOrder, setSavingOrder] = useState(false);
+  const [invoiceFile, setInvoiceFile] = useState<File | null>(null);
+  const [orderSupplierSearch, setOrderSupplierSearch] = useState('');
+  const [showOrderSupplierDropdown, setShowOrderSupplierDropdown] = useState(false);
+  const [orderItemSearch, setOrderItemSearch] = useState('');
+  const [showOrderItemDropdown, setShowOrderItemDropdown] = useState(false);
+  const [parsingInvoice, setParsingInvoice] = useState(false);
+  const [parseStatus, setParseStatus] = useState<{ found: number; matched: number } | null>(null);
+  const [orderItems, setOrderItems] = useState<{ stock_code_id: string; stock_code: string; description: string; quantity_ordered: string; uom: string }[]>([]);
+  const [orderFormData, setOrderFormData] = useState({
+    po_number: `PO-${new Date().getFullYear()}-${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`,
+    order_date: new Date().toISOString().split('T')[0],
+    supplier_id: '',
+    supplier_name: '',
+    invoice_number: '',
+    notes: '',
+  });
+  // Confirm receipt dialog
+  const [confirmOrder, setConfirmOrder] = useState<FMSStockOrder | null>(null);
+  const [confirmState, setConfirmState] = useState<Record<string, { checked: boolean; qty: string }>>({});
+  const [confirmingReceipt, setConfirmingReceipt] = useState(false);
 
   const [formData, setFormData] = useState({
     internal_lot_number: generateLotNumber(),
@@ -306,6 +332,207 @@ const ReceivingLog: React.FC = () => {
 
   const getStockCode = (id: string) => stockCodes.find(sc => sc.id === id);
   const getSupplier = (id: string) => suppliers.find(s => s.id === id);
+
+  // ---- Stock orders: create + confirm receipt -------------------------
+  const resetOrderForm = () => {
+    setOrderFormData({
+      po_number: `PO-${new Date().getFullYear()}-${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`,
+      order_date: new Date().toISOString().split('T')[0],
+      supplier_id: '',
+      supplier_name: '',
+      invoice_number: '',
+      notes: '',
+    });
+    setOrderItems([]);
+    setInvoiceFile(null);
+    setOrderSupplierSearch('');
+    setOrderItemSearch('');
+  };
+
+  const handleAddOrderItem = (sc: typeof stockCodes[0]) => {
+    if (orderItems.some(i => i.stock_code_id === sc.id)) {
+      toast.error('This material is already on the order');
+      return;
+    }
+    setOrderItems(prev => [...prev, {
+      stock_code_id: sc.id,
+      stock_code: sc.stock_code,
+      description: sc.description,
+      quantity_ordered: '',
+      uom: sc.unit_of_measure,
+    }]);
+    setOrderItemSearch('');
+    setShowOrderItemDropdown(false);
+  };
+
+  // Parse the uploaded invoice document and auto-populate line items
+  const handleInvoiceFileChange = async (file: File | null) => {
+    setInvoiceFile(file);
+    setParseStatus(null);
+    if (!file) return;
+    setParsingInvoice(true);
+    try {
+      const result = await parseInvoiceFile(file, stockCodes);
+      const matched = result.items.filter(i => i.matched);
+      setParseStatus({ found: result.items.length, matched: matched.length });
+      if (result.items.length === 0) {
+        toast.warning('No line items could be read from the document. Add them manually below.');
+        return;
+      }
+      // Replace the table with items parsed from the document
+      setOrderItems(matched.map(i => {
+        const sc = stockCodes.find(sc => sc.id === i.stock_code_id)!;
+        return {
+          stock_code_id: sc.id,
+          stock_code: sc.stock_code,
+          description: sc.description,
+          quantity_ordered: String(i.quantity),
+          uom: i.uom || sc.unit_of_measure,
+        };
+      }));
+      if (matched.length === result.items.length) {
+        toast.success(`Invoice read: ${matched.length} item(s) imported from the document.`);
+      } else {
+        toast.warning(`Invoice read: ${matched.length} of ${result.items.length} line item(s) matched your stock codes — check the list and fix any missing ones manually.`);
+      }
+    } catch (err: any) {
+      console.error('Invoice parse error:', err);
+      toast.error(err?.message || 'Could not read the invoice. Add the line items manually below.');
+    } finally {
+      setParsingInvoice(false);
+    }
+  };
+
+  const handleCreateOrder = async () => {
+    if (!orderFormData.supplier_id) { toast.error('Select a supplier'); return; }
+    const validItems = orderItems
+      .map(i => ({ ...i, qty: parseFloat(i.quantity_ordered) }))
+      .filter(i => i.qty > 0);
+    if (validItems.length === 0) { toast.error('Add at least one line item with a quantity'); return; }
+
+    setSavingOrder(true);
+    try {
+      // Optional invoice upload to the private 'order-documents' bucket
+      let invoiceFilePath: string | null = null;
+      if (invoiceFile) {
+        const filePath = `${orderFormData.po_number}/${Date.now()}-${invoiceFile.name}`;
+        const { error: uploadError } = await supabase.storage
+          .from('order-documents')
+          .upload(filePath, invoiceFile, { contentType: invoiceFile.type || 'application/octet-stream' });
+        if (uploadError) {
+          console.error('Invoice upload error:', uploadError);
+          toast.warning(`Invoice file could not be uploaded (${uploadError.message}). Creating the order without it.`);
+        } else {
+          invoiceFilePath = filePath;
+        }
+      }
+
+      const ok = await createStockOrder(
+        {
+          po_number: orderFormData.po_number.trim(),
+          supplier_id: orderFormData.supplier_id,
+          invoice_number: orderFormData.invoice_number || undefined,
+          invoice_file_path: invoiceFilePath,
+          order_date: orderFormData.order_date,
+          notes: orderFormData.notes || undefined,
+        },
+        validItems.map(i => ({
+          stock_code_id: i.stock_code_id,
+          quantity_ordered: i.qty,
+          uom: i.uom,
+        }))
+      );
+      if (ok) {
+        setOrderDialogOpen(false);
+        resetOrderForm();
+      }
+    } finally {
+      setSavingOrder(false);
+    }
+  };
+
+  const openConfirmDialog = (order: FMSStockOrder) => {
+    const state: Record<string, { checked: boolean; qty: string }> = {};
+    order.items.forEach(it => {
+      state[it.id] = { checked: false, qty: it.received ? String(it.quantity_received ?? '') : String(it.quantity_ordered) };
+    });
+    setConfirmState(state);
+    setConfirmOrder(order);
+  };
+
+  const handleConfirmReceipt = async () => {
+    if (!confirmOrder) return;
+    const checked = confirmOrder.items.filter(it => confirmState[it.id]?.checked);
+    if (checked.length === 0) { toast.error('Tick at least one item that has arrived'); return; }
+
+    setConfirmingReceipt(true);
+    try {
+      let allOk = true;
+      for (const it of checked) {
+        const qty = parseFloat(confirmState[it.id]?.qty || '');
+        if (!(qty > 0)) {
+          toast.error(`Enter the actual weight/quantity for ${getStockCode(it.stock_code_id)?.description || 'item'}`);
+          allOk = false;
+          continue;
+        }
+        const lotNumber = generateLotNumber();
+        const result = await addReceivingRecord({
+          internal_lot_number: lotNumber,
+          received_at: new Date().toISOString(),
+          stock_code_id: it.stock_code_id,
+          quantity_received: qty,
+          supplier_id: confirmOrder.supplier_id,
+          supplier_batch_number: confirmOrder.invoice_number || confirmOrder.po_number,
+          quality_checks: { received_from_order: true, po_number: confirmOrder.po_number },
+          status: 'accepted',
+          received_by: user?.id || '',
+        } as any);
+        if (result) {
+          await addStockForReceipt(
+            it.stock_code_id,
+            qty,
+            lotNumber,
+            `Receipt ${lotNumber} - ${getStockCode(it.stock_code_id)?.description || ''} (${confirmOrder.po_number})`
+          );
+          const { error: itemError } = await (supabase.from('fms_stock_order_items' as any) as any)
+            .update({
+              received: true,
+              quantity_received: qty,
+              received_lot_number: lotNumber,
+              received_at: new Date().toISOString(),
+              received_by: user?.id || null,
+            })
+            .eq('id', it.id);
+          if (itemError) { console.error(itemError); allOk = false; }
+        } else {
+          allOk = false;
+        }
+      }
+
+      // Update order status: received when every line item is ticked
+      const remaining = confirmOrder.items.filter(it => !confirmState[it.id]?.checked && !it.received).length;
+      const newStatus = remaining === 0 ? 'received' : 'partial';
+      const { error: orderError } = await (supabase.from('fms_stock_orders' as any) as any)
+        .update({ status: newStatus, updated_at: new Date().toISOString() })
+        .eq('id', confirmOrder.id);
+      if (orderError) console.error(orderError);
+
+      if (allOk) {
+        logActivity({
+          action_type: 'update',
+          entity_type: 'stock_order',
+          entity_id: confirmOrder.po_number,
+          entity_name: confirmOrder.po_number,
+          details: { confirmed_items: checked.length, status: newStatus },
+        });
+        toast.success(`Stock confirmed for ${checked.length} item(s). Order marked ${newStatus.replace('_', ' ')}.`);
+        setConfirmOrder(null);
+        await refreshData();
+      }
+    } finally {
+      setConfirmingReceipt(false);
+    }
+  };
 
   const filteredRecords = receivingRecords.filter(rec => {
     const stockCode = getStockCode(rec.stock_code_id);
@@ -561,6 +788,162 @@ const ReceivingLog: React.FC = () => {
             <FileText className="h-4 w-4" />
             <span className="hidden sm:inline">Export Excel</span>
           </Button>
+          <Dialog open={orderDialogOpen} onOpenChange={(open) => { setOrderDialogOpen(open); if (!open) resetOrderForm(); }}>
+            <DialogTrigger asChild>
+              <Button variant="outline" size="sm" className="gap-2">
+                <ClipboardList className="h-4 w-4" />
+                <span className="hidden sm:inline">Upload Order</span>
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-[800px]">
+              <DialogHeader>
+                <DialogTitle>Upload Order / Invoice</DialogTitle>
+                <DialogDescription>Capture the order you placed. When the stock arrives, confirm receipt against this order.</DialogDescription>
+              </DialogHeader>
+
+              <div className="grid gap-4 py-4">
+                <div className="border rounded-lg p-4 bg-muted/30">
+                  <h3 className="font-semibold mb-4 text-primary">ORDER DETAILS</h3>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label>PO Number *</Label>
+                      <Input value={orderFormData.po_number} onChange={(e) => setOrderFormData(prev => ({ ...prev, po_number: e.target.value }))} />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Order Date</Label>
+                      <Input type="date" value={orderFormData.order_date} onChange={(e) => setOrderFormData(prev => ({ ...prev, order_date: e.target.value }))} />
+                    </div>
+                    <div className="space-y-2 relative">
+                      <Label>Supplier *</Label>
+                      <Input
+                        value={orderSupplierSearch}
+                        onChange={(e) => { setOrderSupplierSearch(e.target.value); setShowOrderSupplierDropdown(true); }}
+                        placeholder={orderFormData.supplier_name || 'Type to search suppliers...'}
+                        onFocus={() => setShowOrderSupplierDropdown(true)}
+                        onBlur={() => setTimeout(() => setShowOrderSupplierDropdown(false), 200)}
+                      />
+                      {showOrderSupplierDropdown && orderSupplierSearch.length > 0 && (
+                        <div className="absolute z-50 w-full mt-1 bg-popover border rounded-md shadow-lg max-h-60 overflow-auto">
+                          {supplierResults.filter(s =>
+                            s.name.toLowerCase().includes(orderSupplierSearch.toLowerCase()) ||
+                            s.code.toLowerCase().includes(orderSupplierSearch.toLowerCase())
+                          ).map(s => (
+                            <div key={s.id} className="px-3 py-2 hover:bg-accent cursor-pointer text-sm"
+                              onClick={() => {
+                                setOrderFormData(prev => ({ ...prev, supplier_id: s.id, supplier_name: s.name }));
+                                setOrderSupplierSearch('');
+                                setShowOrderSupplierDropdown(false);
+                              }}>
+                              <span className="font-medium">{s.name}</span> ({s.code})
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Invoice Number</Label>
+                      <Input value={orderFormData.invoice_number} onChange={(e) => setOrderFormData(prev => ({ ...prev, invoice_number: e.target.value }))} />
+                    </div>
+                    <div className="space-y-2 sm:col-span-2">
+                      <Label>Upload Invoice (auto-fills line items)</Label>
+                      {invoiceFile ? (
+                        <div className="flex items-center gap-2 text-sm">
+                          <FileText className="h-4 w-4 text-primary" />
+                          <span className="flex-1 truncate">{invoiceFile.name}</span>
+                          <Button variant="ghost" size="sm" onClick={() => { setInvoiceFile(null); setParseStatus(null); }}><X className="h-4 w-4" /></Button>
+                        </div>
+                      ) : (
+                        <Input
+                          type="file"
+                          accept=".pdf,.csv,.xlsx,.xls,.txt,image/*"
+                          disabled={parsingInvoice}
+                          onChange={(e) => handleInvoiceFileChange(e.target.files?.[0] || null)}
+                        />
+                      )}
+                      {parsingInvoice && (
+                        <p className="text-sm text-primary flex items-center gap-2">
+                          <Loader2 className="h-4 w-4 animate-spin" /> Reading invoice and matching line items...
+                        </p>
+                      )}
+                      {!parsingInvoice && parseStatus && (
+                        <p className={`text-xs ${parseStatus.matched > 0 ? 'text-green-600' : 'text-amber-600'}`}>
+                          Parsed {parseStatus.found} line item(s) from the document — {parseStatus.matched} matched your stock codes.
+                        </p>
+                      )}
+                      <p className="text-xs text-muted-foreground">
+                        Upload a PDF/CSV/Excel invoice and its line items fill the table below automatically (add or fix any that don't match). Stored privately in the order-documents bucket.
+                      </p>
+                    </div>
+                    <div className="space-y-2 sm:col-span-2">
+                      <Label>Notes</Label>
+                      <Textarea rows={2} value={orderFormData.notes} onChange={(e) => setOrderFormData(prev => ({ ...prev, notes: e.target.value }))} />
+                    </div>
+                  </div>
+                </div>
+                <div className="border rounded-lg p-4 bg-muted/30">
+                  <h3 className="font-semibold mb-4 text-primary">LINE ITEMS ({orderItems.length})</h3>
+                  <p className="text-xs text-muted-foreground mb-2">Populated automatically from the uploaded invoice — edit quantities or add/remove rows as needed.</p>
+                  <div className="space-y-2 relative mb-4">
+                    <Label>Add Material</Label>
+                    <Input
+                      value={orderItemSearch}
+                      onChange={(e) => { setOrderItemSearch(e.target.value); setShowOrderItemDropdown(true); }}
+                      placeholder="Start typing to search stock codes..."
+                      onFocus={() => orderItemSearch.length > 0 && setShowOrderItemDropdown(true)}
+                    />
+                    {showOrderItemDropdown && orderItemSearch.length > 0 && (
+                      <div className="absolute z-50 w-full mt-1 bg-popover border rounded-md shadow-lg max-h-60 overflow-auto">
+                        {stockCodes.filter(sc =>
+                          sc.stock_code.toLowerCase().includes(orderItemSearch.toLowerCase()) ||
+                          sc.description.toLowerCase().includes(orderItemSearch.toLowerCase())
+                        ).slice(0, 20).map((item) => (
+                          <div key={item.id} className="px-3 py-2 hover:bg-accent cursor-pointer text-sm" onClick={() => handleAddOrderItem(item)}>
+                            <span className="font-medium">{item.stock_code}</span> - {item.description}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  {orderItems.map((item, idx) => (
+                    <div key={item.stock_code_id} className="flex flex-wrap items-end gap-2 py-2 border-b last:border-b-0">
+                      <div className="flex-1 min-w-[180px]">
+                        <Label className="text-xs text-muted-foreground">Material {idx + 1}</Label>
+                        <p className="text-sm font-medium">{item.stock_code} - {item.description}</p>
+                      </div>
+                      <div className="w-28 space-y-1">
+                        <Label className="text-xs">Qty Ordered *</Label>
+                        <Input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={item.quantity_ordered}
+                          onChange={(e) => setOrderItems(prev => prev.map((p, i) => i === idx ? { ...p, quantity_ordered: e.target.value } : p))}
+                        />
+                      </div>
+                      <div className="w-20 space-y-1">
+                        <Label className="text-xs">UOM</Label>
+                        <Input value={item.uom} readOnly disabled className="bg-muted" />
+                      </div>
+                      <Button variant="ghost" size="sm" onClick={() => setOrderItems(prev => prev.filter((_, i) => i !== idx))}>
+                        <Trash2 className="h-4 w-4 text-destructive" />
+                      </Button>
+                    </div>
+                  ))}
+                  {orderItems.length === 0 && (
+                    <p className="text-sm text-muted-foreground">No line items yet — search and add the materials on the invoice.</p>
+                  )}
+                </div>
+              </div>
+
+              <DialogFooter>
+                <Button variant="outline" onClick={() => { setOrderDialogOpen(false); resetOrderForm(); }}>Cancel</Button>
+                <Button onClick={handleCreateOrder} disabled={savingOrder} className="gap-2">
+                  {savingOrder && <Loader2 className="h-4 w-4 animate-spin" />}
+                  Create Order
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
           <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
             <DialogTrigger asChild>
               <Button onClick={resetForm} size="sm" className="gap-2">
@@ -814,6 +1197,99 @@ const ReceivingLog: React.FC = () => {
           </table>
         </div>
       </div>
+
+      {stockOrders.filter(o => o.status !== 'received').length > 0 && (
+        <div className="rounded-xl border bg-card p-4">
+          <div className="flex items-center gap-2 mb-4">
+            <ClipboardList className="h-5 w-5 text-primary" />
+            <h3 className="font-semibold">Orders Awaiting Receipt</h3>
+            <Badge variant="outline">{stockOrders.filter(o => o.status !== 'received').length} open</Badge>
+          </div>
+          <div className="space-y-3">
+            {stockOrders.filter(o => o.status !== 'received').map(order => {
+              const supplier = getSupplier(order.supplier_id);
+              const receivedCount = order.items.filter(i => i.received).length;
+              return (
+                <div key={order.id} className="flex flex-wrap items-center gap-3 rounded-lg border p-3">
+                  <div className="flex-1 min-w-[200px]">
+                    <p className="font-medium">{order.po_number}</p>
+                    <p className="text-sm text-muted-foreground">
+                      {supplier?.name || 'Unknown supplier'}
+                      {order.invoice_number ? ` · Invoice ${order.invoice_number}` : ''} · {formatDate(order.order_date)}
+                    </p>
+                  </div>
+                  <div className="text-sm text-muted-foreground">
+                    {order.items.length} line item(s) · {receivedCount} received
+                  </div>
+                  {order.status === 'partial' && <Badge className="bg-amber-500">Partial</Badge>}
+                  {order.status === 'awaiting_receipt' && <Badge variant="outline">Awaiting receipt</Badge>}
+                  <Button size="sm" className="gap-2" onClick={() => openConfirmDialog(order)}>
+                    <PackageCheck className="h-4 w-4" />
+                    Confirm Stock
+                  </Button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      <Dialog open={!!confirmOrder} onOpenChange={(open) => { if (!open) setConfirmOrder(null); }}>
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-[700px]">
+          <DialogHeader>
+            <DialogTitle>Confirm Stock Received — {confirmOrder?.po_number}</DialogTitle>
+            <DialogDescription>Tick the items that have arrived and enter the actual weight/quantity received.</DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-2 py-2">
+            {confirmOrder?.items.map(it => {
+              const sc = getStockCode(it.stock_code_id);
+              const state = confirmState[it.id] || { checked: false, qty: String(it.quantity_ordered) };
+              return (
+                <div key={it.id} className={`flex flex-wrap items-center gap-3 rounded-lg border p-3 ${it.received ? 'opacity-60' : ''}`}>
+                  <Checkbox
+                    checked={it.received ? true : state.checked}
+                    disabled={it.received}
+                    onCheckedChange={(v) => setConfirmState(prev => ({ ...prev, [it.id]: { ...state, checked: v === true } }))}
+                  />
+                  <div className="flex-1 min-w-[180px]">
+                    <p className="text-sm font-medium">{sc?.stock_code} - {sc?.description || 'Unknown material'}</p>
+                    <p className="text-xs text-muted-foreground">Ordered: {it.quantity_ordered} {it.uom}</p>
+                    {it.received && (
+                      <p className="text-xs text-green-600">
+                        Received {it.quantity_received} {it.uom} · Lot {it.received_lot_number}
+                      </p>
+                    )}
+                  </div>
+                  <div className="w-32 space-y-1">
+                    <Label className="text-xs">Actual Weight *</Label>
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={it.received ? String(it.quantity_received ?? '') : state.qty}
+                      disabled={it.received}
+                      onChange={(e) => setConfirmState(prev => ({ ...prev, [it.id]: { ...state, qty: e.target.value } }))}
+                    />
+                  </div>
+                  <div className="w-16 text-sm text-muted-foreground">{it.uom}</div>
+                </div>
+              );
+            })}
+            {confirmOrder && confirmOrder.items.every(i => i.received) && (
+              <p className="text-sm text-green-600 font-medium">All items on this order have been received.</p>
+            )}
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmOrder(null)}>Cancel</Button>
+            <Button onClick={handleConfirmReceipt} disabled={confirmingReceipt || (!!confirmOrder && confirmOrder.items.every(i => i.received))} className="gap-2">
+              {confirmingReceipt && <Loader2 className="h-4 w-4 animate-spin" />}
+              Confirm Received Items
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={viewDialogOpen} onOpenChange={setViewDialogOpen}>
         <DialogContent className="sm:max-w-[600px] max-h-[90vh] overflow-y-auto">

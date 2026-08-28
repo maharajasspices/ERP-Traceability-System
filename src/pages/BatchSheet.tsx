@@ -1,5 +1,5 @@
-import React, { useState, useMemo, useEffect } from 'react';
-import { useFMSData, formatDate, formatDateTime } from '@/hooks/useFMSData';
+﻿import React, { useState, useMemo, useEffect } from 'react';
+import { useFMSData, formatDate, formatDateTime, FMSStockReservation } from '@/hooks/useFMSData';
 import { useFMSAuth } from '@/context/FMSAuthContext';
 import { useDeletePermission } from '@/hooks/useDeletePermission';
 import { Button } from '@/components/ui/button';
@@ -73,7 +73,7 @@ const defaultProcessingSteps: Omit<ProcessingStep, 'id'>[] = [
 
 const Production: React.FC = () => {
   const { user } = useFMSAuth();
-  const { stockCodes, boms, productionBatches, loading, addProductionBatch, updateProductionBatch, getStockCodeById, getBOMByFinishedGoodId, refreshData, deductStockForBatch, stockLevels, fifoAllocateLots, recordLotUsage } = useFMSData();
+    const { stockCodes, boms, productionBatches, loading, addProductionBatch, updateProductionBatch, getStockCodeById, getBOMByFinishedGoodId, refreshData, deductStockForBatch, stockLevels, fifoAllocateLots, recordLotUsage, stockReservations, reserveStockForBatch, releaseBatchReservations, consumeBatchReservations, getReservationsForBatch, getReceivingById } = useFMSData();
   
   // Helper to get BOM by ID
   const getBOMById = (bomId: string) => boms.find(b => b.id === bomId);
@@ -121,15 +121,20 @@ const Production: React.FC = () => {
       const material = getStockCodeById(comp.material_stock_code_id);
       const requiredQuantity = comp.quantity_per_batch * batchSize;
       const stockLevel = stockLevels.find(sl => sl.stock_code_id === comp.material_stock_code_id);
-      const availableStock = stockLevel?.quantity_on_hand ?? 0;
-      const isAvailable = availableStock >= requiredQuantity;
+      const physicalStock = stockLevel?.quantity_on_hand ?? 0;
+      const reserved = stockLevel?.reserved_quantity ?? 0;
+      const netStock = physicalStock - reserved;
+      const isAvailable = netStock >= requiredQuantity;
       return {
         ...comp,
         material,
         requiredQuantity,
-        availableStock,
+        physicalStock,
+        reserved,
+        netStock,
+        availableStock: netStock,
         isAvailable,
-        shortage: Math.max(0, requiredQuantity - availableStock),
+        shortage: Math.max(0, requiredQuantity - netStock),
       };
     });
   }, [formData.finished_good_id, formData.planned_batch_size, getBOMByFinishedGoodId, getStockCodeById, stockLevels]);
@@ -170,6 +175,27 @@ const Production: React.FC = () => {
 
     let createdCount = 0;
     const lowStockWarnings: string[] = [];
+
+    // Hard block: a Batch Sheet may not reserve more than the Net Stock available.
+    // Net Stock = Physical Stock (quantity_on_hand) - Reserved. Validate across all
+    // requested batches before creating anything so we never leave orphans behind.
+    const totalRequired = bom.components.map((comp) => {
+      const stockLevel = stockLevels.find(sl => sl.stock_code_id === comp.material_stock_code_id);
+      const physical = stockLevel?.quantity_on_hand ?? 0;
+      const reserved = stockLevel?.reserved_quantity ?? 0;
+      const netStock = physical - reserved;
+      const required = comp.quantity_per_batch * parseFloat(formData.planned_batch_size) * numberOfBatches;
+      return { material: getStockCodeById(comp.material_stock_code_id), required, netStock };
+    });
+    const shortMaterials = totalRequired.filter(m => m.required > m.netStock);
+    if (shortMaterials.length > 0) {
+      toast.error(
+        `Cannot create batch sheet - insufficient net stock for: ${shortMaterials
+          .map(m => `${m.material?.stock_code || 'material'} (need ${m.required.toFixed(2)}, net available ${m.netStock.toFixed(2)})`)
+          .join(', ')}`
+      );
+      return;
+    }
     
     for (let b = 0; b < numberOfBatches; b++) {
       const processingSteps: ProcessingStep[] = bomSteps && bomSteps.length > 0
@@ -202,7 +228,8 @@ const Production: React.FC = () => {
 
       // Create pre-weigh materials from BOM components with FIFO lot allocation
       const preWeighMaterials: PreWeighMaterial[] = [];
-      const lotUsages: { receiving_record_id: string; quantity_used: number }[] = [];
+      const noLotsMaterials: string[] = [];
+      const lotUsages: { stock_code_id: string; receiving_record_id: string; internal_lot_number: string; quantity_used: number }[] = [];
       
       for (const comp of bom.components) {
         const material = getStockCodeById(comp.material_stock_code_id);
@@ -212,27 +239,37 @@ const Production: React.FC = () => {
         const allocatedLots = await fifoAllocateLots(comp.material_stock_code_id, requiredQty);
         
         if (allocatedLots.length > 0) {
-          // Use the first (oldest) lot - this is the primary lot
+                    // Use the first (oldest) lot - this is the primary lot
           const primaryLot = allocatedLots[0];
+          
+          // Fetch the underlying receiving record for the correct field mapping
+          const primaryLotRec = getReceivingById(primaryLot.receiving_record_id);
           
           // Record all lots that will be consumed
           for (const lot of allocatedLots) {
             lotUsages.push({
+              stock_code_id: comp.material_stock_code_id,
               receiving_record_id: lot.receiving_record_id,
+              internal_lot_number: lot.internal_lot_number || '',
               quantity_used: lot.quantity_to_use,
             });
           }
           
-          preWeighMaterials.push({
+                    preWeighMaterials.push({
             material_id: comp.material_stock_code_id,
             material_name: material?.description || '',
             stock_code: material?.stock_code || '',
             required_quantity: requiredQty,
             quantity_weighed: undefined,
             uom: material?.unit_of_measure || '',
-            raw_material_batch_number: primaryLot.internal_lot_number || '',
-            internal_lot_number: primaryLot.internal_lot_number || '',
-            expiry_date: primaryLot.expiry_date || '',
+
+            // Pull all three fields from the actual receiving record:
+            // External Batch No. = supplier_batch_number (supplier's reference)
+            // Internal Lot No.   = internal_lot_number (LOT-YYYY-XXXX)
+            // Expiry             = expiry_date
+            raw_material_batch_number: primaryLotRec?.supplier_batch_number || '',
+            internal_lot_number: primaryLotRec?.internal_lot_number || primaryLot.internal_lot_number || '',
+            expiry_date: primaryLotRec?.expiry_date || primaryLot.expiry_date || '',
             approved: false,
           });
         } else {
@@ -249,7 +286,16 @@ const Production: React.FC = () => {
             expiry_date: '',
             approved: false,
           });
+          noLotsMaterials.push(material?.stock_code || comp.material_stock_code_id);
         }
+      }
+
+      if (noLotsMaterials.length > 0) {
+        toast.warning(
+          `No stock lots found for: ${[...new Set(noLotsMaterials)].join(', ')}. ` +
+          'Lot numbers will be blank — check that this material has accepted receiving records and that the FIFO SQL migration is applied.',
+          { duration: 10000 }
+        );
       }
 
       const result = await addProductionBatch({
@@ -268,32 +314,36 @@ const Production: React.FC = () => {
       } as any);
 
       if (result) {
+        // Reserve the required stock for this batch. Physical stock is NOT
+        // reduced - it is only set aside and linked to the batch/lots.
+        const reservations = lotUsages.length > 0
+          ? lotUsages.map(lot => ({
+              stock_code_id: lot.stock_code_id,
+              receiving_record_id: lot.receiving_record_id,
+              internal_lot_number: lot.internal_lot_number,
+              quantity: lot.quantity_used,
+            }))
+          // No specific lot allocated (e.g. direct stock): reserve at stock-code
+          // level so the reservation is still tracked against the batch.
+          : bom.components.map(comp => ({
+              stock_code_id: comp.material_stock_code_id,
+              receiving_record_id: null,
+              internal_lot_number: null,
+              quantity: comp.quantity_per_batch * parseFloat(formData.planned_batch_size),
+            }));
+
+        const reserveResults = await reserveStockForBatch(result.id, result.batch_number, reservations);
+
+        if (reserveResults === null) {
+          // Reservation failed (e.g. insufficient net stock raced). Rollback the
+          // just-created batch so we never leave a batch without its reservation.
+          await (supabase.from('fms_production_batches') as any).delete().eq('id', result.id);
+          toast.error(`Batch ${result.batch_number} could not be created - stock reservation failed (insufficient net stock?).`);
+          await refreshData();
+          continue;
+        }
+
         createdCount++;
-        
-        // Record FIFO lot usage in fms_materials_used
-        if (lotUsages.length > 0) {
-          await recordLotUsage(result.id, lotUsages);
-        }
-        
-        // Deduct stock for this batch's materials
-        const materialsToDeduct = bom.components.map(comp => ({
-          stock_code_id: comp.material_stock_code_id,
-          quantity: comp.quantity_per_batch * parseFloat(formData.planned_batch_size),
-        }));
-        
-        const deductionResults = await deductStockForBatch(
-          materialsToDeduct,
-          result.id,
-          result.batch_number
-        );
-        
-        // Collect low stock warnings
-        for (const dr of deductionResults) {
-          if (dr.is_low) {
-            const sc = getStockCodeById(dr.stock_code_id);
-            lowStockWarnings.push(`${sc?.stock_code || dr.stock_code_id} (${dr.new_quantity.toFixed(2)} remaining)`);
-          }
-        }
       }
     }
 
@@ -306,7 +356,7 @@ const Production: React.FC = () => {
       // Show low stock warnings (non-blocking - batch still created)
       if (lowStockWarnings.length > 0) {
         const uniqueWarnings = [...new Set(lowStockWarnings)];
-        toast.warning(`⚠️ LOW STOCK: ${uniqueWarnings.join(', ')}`, {
+        toast.warning(`âš ï¸ LOW STOCK: ${uniqueWarnings.join(', ')}`, {
           duration: 8000,
         });
       }
@@ -332,47 +382,64 @@ const Production: React.FC = () => {
     if (!batch) return;
 
     // Restore stock and lot usage for this cancelled batch
-    try {
-      // Get the materials used for this batch
-      const { data: materialsUsed } = await (supabase.from('fms_materials_used') as any)
-        .select('receiving_record_id, quantity_used')
-        .eq('batch_id', batchId);
+    // If this batch has active reservations (new-style), release them - the
+    // reserved stock was never deducted from physical stock, so freeing the
+    // reservation restores the available Net Stock.
+    const activeReservations = getReservationsForBatch(batchId).filter(r => r.status === 'reserved');
 
-      // Remove lot usage records so FIFO re-allocates to this lot
-      await (supabase.from('fms_materials_used') as any)
-        .delete()
-        .eq('batch_id', batchId);
-
-      // Restore stock for each material from the active BOM
-      const bom = getBOMByFinishedGoodId(batch.finished_good_id);
-      if (bom) {
-        const materialsToRestore = bom.components.map(comp => ({
-          stock_code_id: comp.material_stock_code_id,
-          quantity: comp.quantity_per_batch * batch.planned_batch_size,
-        }));
-        
-        for (const mat of materialsToRestore) {
-          await (supabase.rpc as any)('fms_apply_stock_movement', {
-            p_stock_code_id: mat.stock_code_id,
-            p_movement_type: 'adjustment',
-            p_quantity_change: mat.quantity,
-            p_batch_id: batchId,
-            p_batch_number: batch.batch_number,
-            p_reference_id: batch.batch_number,
-            p_notes: `Batch ${batch.batch_number} cancelled - stock restored`,
-            p_created_by: user?.id || null,
-          });
+    if (activeReservations.length > 0) {
+      try {
+        const released = await releaseBatchReservations(batchId, batch.batch_number);
+        if (!released) {
+          console.warn('[FMS] No active reservations released on cancel (may be legacy batch).');
         }
+      } catch (err) {
+        console.error('[FMS] Failed to release reservations on cancel:', err);
       }
-    } catch (err) {
-      console.error('[FMS] Failed to restore stock on cancel:', err);
+    } else {
+      // Legacy fallback: older batches deducted stock at creation, so restore it.
+      try {
+        // Get the materials used for this batch
+        const { data: materialsUsed } = await (supabase.from('fms_materials_used') as any)
+          .select('receiving_record_id, quantity_used')
+          .eq('batch_id', batchId);
+
+        // Remove lot usage records so FIFO re-allocates to this lot
+        await (supabase.from('fms_materials_used') as any)
+          .delete()
+          .eq('batch_id', batchId);
+
+        // Restore stock for each material from the active BOM
+        const bom = getBOMByFinishedGoodId(batch.finished_good_id);
+        if (bom) {
+          const materialsToRestore = bom.components.map(comp => ({
+            stock_code_id: comp.material_stock_code_id,
+            quantity: comp.quantity_per_batch * batch.planned_batch_size,
+          }));
+
+          for (const mat of materialsToRestore) {
+            await (supabase.rpc as any)('fms_apply_stock_movement', {
+              p_stock_code_id: mat.stock_code_id,
+              p_movement_type: 'adjustment',
+              p_quantity_change: mat.quantity,
+              p_batch_id: batchId,
+              p_batch_number: batch.batch_number,
+              p_reference_id: batch.batch_number,
+              p_notes: `Batch ${batch.batch_number} cancelled - stock restored`,
+              p_created_by: user?.id || null,
+            });
+          }
+        }
+      } catch (err) {
+        console.error('[FMS] Failed to restore stock on cancel:', err);
+      }
     }
 
     await updateProductionBatch(batchId, {
       status: 'cancelled',
       production_end: new Date().toISOString(),
     } as any);
-    toast.success('Batch cancelled - stock restored to lots');
+    toast.success('Batch cancelled - reserved stock released');
     await refreshData();
   };
 
@@ -386,49 +453,101 @@ const Production: React.FC = () => {
     await refreshData();
   };
 
-  const handleApprovePreWeigh = async (batchId: string, preWeighMaterials: PreWeighMaterial[]) => {
-    await updateProductionBatch(batchId, { 
-      pre_weigh_approved: true,
-      pre_weigh_approved_by: user?.id,
-      pre_weigh_approved_at: new Date().toISOString(),
-      pre_weigh_materials: preWeighMaterials,
-      status: 'manufacturing',
-    } as any);
-    toast.success('Pre-weigh checks approved');
-    await refreshData();
+  const handleApprovePreWeigh = async (
+  batchId: string,
+  preWeighMaterials: PreWeighMaterial[]
+) => {
+  const updates = {
+    pre_weigh_approved: true,
+    pre_weigh_approved_by: user?.id || '',
+    pre_weigh_approved_at: new Date().toISOString(),
+    pre_weigh_materials: preWeighMaterials,
+    status: 'manufacturing' as const,
   };
 
-  const handleUpdateStep = async (batchId: string, stepId: string, completed: boolean) => {
-    const batch = productionBatches.find(b => b.id === batchId);
-    if (!batch) return;
+  await updateProductionBatch(batchId, updates as any);
 
-    const updatedSteps = (batch.processing_steps as ProcessingStep[]).map(step => 
-      step.id === stepId 
-        ? { ...step, completed, completed_at: completed ? new Date().toISOString() : undefined, completed_by: completed ? user?.id : undefined }
-        : step
-    );
+  setSelectedBatch(prev =>
+    prev
+      ? {
+          ...prev,
+          ...updates,
+        }
+      : null
+  );
 
-    await updateProductionBatch(batchId, { processing_steps: updatedSteps });
-    await refreshData();
-    // Update local state immediately
-    setSelectedBatch(prev => prev ? { ...prev, processing_steps: updatedSteps } : null);
-  };
+  toast.success('Pre-weigh checks approved');
+};
 
-  const handleUpdateOrganolepticCheck = async (batchId: string, checkName: string, result: 'pass' | 'fail') => {
-    const batch = productionBatches.find(b => b.id === batchId);
-    if (!batch) return;
+ const handleUpdateStep = async (
+  batchId: string,
+  stepId: string,
+  completed: boolean
+) => {
+  const batch = productionBatches.find(b => b.id === batchId);
+  if (!batch) return;
 
-    const updatedChecks = (batch.quality_checks as OrganolepticCheck[]).map(check => 
-      check.name === checkName 
-        ? { ...check, result, checked_at: new Date().toISOString(), checked_by: user?.id }
-        : check
-    );
+  const updatedSteps = (batch.processing_steps as ProcessingStep[]).map(step =>
+    step.id === stepId
+      ? {
+          ...step,
+          completed,
+          completed_at: completed
+            ? new Date().toISOString()
+            : undefined,
+          completed_by: completed ? user?.id : undefined,
+        }
+      : step
+  );
 
-    await updateProductionBatch(batchId, { quality_checks: updatedChecks });
-    await refreshData();
-    // Update local state immediately
-    setSelectedBatch(prev => prev ? { ...prev, quality_checks: updatedChecks } : null);
-  };
+  await updateProductionBatch(batchId, {
+    processing_steps: updatedSteps,
+  });
+
+  // Update the open batch immediately
+  setSelectedBatch(prev =>
+    prev
+      ? {
+          ...prev,
+          processing_steps: updatedSteps,
+        }
+      : null
+  );
+};
+  
+const handleUpdateOrganolepticCheck = async (
+  batchId: string,
+  checkName: string,
+  result: 'pass' | 'fail'
+) => {
+  const batch = productionBatches.find(b => b.id === batchId);
+  if (!batch) return;
+
+  const updatedChecks = (batch.quality_checks as OrganolepticCheck[]).map(check =>
+    check.name === checkName
+      ? {
+          ...check,
+          result,
+          checked_at: new Date().toISOString(),
+          checked_by: user?.id,
+        }
+      : check
+  );
+
+  await updateProductionBatch(batchId, {
+    quality_checks: updatedChecks,
+  });
+
+  // Update the open batch immediately
+  setSelectedBatch(prev =>
+    prev
+      ? {
+          ...prev,
+          quality_checks: updatedChecks,
+        }
+      : null
+  );
+};
 
   const handleCloseBatch = async (batchId: string, finalData: {
     actual_quantity: number;
@@ -453,7 +572,31 @@ const Production: React.FC = () => {
       supervisor_id: user?.id,
     });
     toast.success('Batch closed successfully');
-    await refreshData();
+    // Production is complete - the reserved set-aside now becomes actual stock
+    // consumption. This records lot-level fms_materials_used traceability and
+    // deducts the physical stock (reserved -> consumed).
+    const batch = productionBatches.find(b => b.id === batchId);
+    const consumptionResults = await consumeBatchReservations(batchId, batch?.batch_number || '');
+
+    // Collect low stock warnings from the material consumption
+    const closeLowStockWarnings: string[] = [];
+    for (const cr of consumptionResults) {
+      if (cr.is_low) {
+        const sc = getStockCodeById(cr.stock_code_id);
+        closeLowStockWarnings.push(`${sc?.stock_code || cr.stock_code_id} (${cr.new_quantity_on_hand.toFixed(2)} remaining)`);
+      }
+    }
+
+            toast.success('Batch closed successfully - reserved stock consumed');
+    if (closeLowStockWarnings.length > 0) {
+      const uniqueWarnings = [...new Set(closeLowStockWarnings)];
+      toast.warning(`⚠️ LOW STOCK: ${uniqueWarnings.join(', ')}`, {
+        duration: 8000,
+      });
+    }
+    // NOTE: consumeBatchReservations already performs a forced full data
+    // refresh (fetchData(true)) in its finally block, so no extra
+    // refreshData() call is needed here.
   };
 
   // HTML escape utility to prevent XSS
@@ -471,6 +614,7 @@ const Production: React.FC = () => {
     if (!printWindow) return;
 
     // Fetch print logo setting
+    
     let printLogoUrl = '/images/print-logo.png';
     try {
       const { data } = await supabase
@@ -502,7 +646,7 @@ const Production: React.FC = () => {
         <td style="padding: 6px; border: 1px solid #ddd; font-size: 11px;">${escapeHtml(preWeighMat?.raw_material_batch_number || '')}</td>
         <td style="padding: 6px; border: 1px solid #ddd; font-size: 11px;">${escapeHtml(preWeighMat?.internal_lot_number || '')}</td>
         <td style="padding: 6px; border: 1px solid #ddd; font-size: 11px;">${preWeighMat?.expiry_date ? escapeHtml(formatDate(preWeighMat.expiry_date)) : ''}</td>
-        <td style="padding: 6px; border: 1px solid #ddd; text-align: center; font-size: 11px;">${preWeighMat?.approved ? '✓' : '○'}</td>
+        <td style="padding: 6px; border: 1px solid #ddd; text-align: center; font-size: 11px;">${preWeighMat?.approved ? 'âœ“' : 'â—‹'}</td>
       </tr>`;
     }).join('') || '';
 
@@ -511,7 +655,7 @@ const Production: React.FC = () => {
         <td style="padding: 6px; border: 1px solid #ddd; font-size: 11px;">${index + 1}</td>
         <td style="padding: 6px; border: 1px solid #ddd; font-size: 11px;">${escapeHtml(step.step_name || '')}</td>
         <td style="padding: 6px; border: 1px solid #ddd; font-size: 11px;">${escapeHtml(step.description || '')}</td>
-        <td style="padding: 6px; border: 1px solid #ddd; text-align: center; font-size: 11px;">${step.completed ? '✓' : '○'}</td>
+        <td style="padding: 6px; border: 1px solid #ddd; text-align: center; font-size: 11px;">${step.completed ? 'âœ“' : 'â—‹'}</td>
       </tr>`
     ).join('');
 
@@ -519,7 +663,7 @@ const Production: React.FC = () => {
       `<tr>
         <td style="padding: 6px; border: 1px solid #ddd; font-size: 11px;">${escapeHtml(check.name || '')}</td>
         <td style="padding: 6px; border: 1px solid #ddd; font-size: 11px;">${escapeHtml(check.expected_value || '')}</td>
-        <td style="padding: 6px; border: 1px solid #ddd; text-align: center; font-size: 11px;">${check.result === 'pass' ? 'P' : check.result === 'fail' ? 'F' : '○'}</td>
+        <td style="padding: 6px; border: 1px solid #ddd; text-align: center; font-size: 11px;">${check.result === 'pass' ? 'P' : check.result === 'fail' ? 'F' : 'â—‹'}</td>
       </tr>`
     ).join('');
 
@@ -584,7 +728,7 @@ const Production: React.FC = () => {
 
         <h2>4. BATCH INFORMATION</h2>
         <div class="info-grid">
-          <div class="info-item"><div class="info-label">Expected Qty (±100g)</div><div class="info-value">${batch.planned_batch_size} kg</div></div>
+          <div class="info-item"><div class="info-label">Expected Qty (Â±100g)</div><div class="info-value">${batch.planned_batch_size} kg</div></div>
           <div class="info-item"><div class="info-label">Actual Qty Produced</div><div class="info-value">${batch.actual_quantity_produced || '_______'}</div></div>
           <div class="info-item"><div class="info-label">Scrap/Waste</div><div class="info-value">${batch.scrap_waste || '_______'}</div></div>
           <div class="info-item"><div class="info-label">Checker Name</div><div class="info-value">_________________</div></div>
@@ -661,34 +805,48 @@ const Production: React.FC = () => {
     if (!batch) return;
 
     // Restore stock and lot usage for this batch before deletion
-    try {
-      await (supabase.from('fms_materials_used') as any)
-        .delete()
-        .eq('batch_id', batchId);
+    // Release any active reservations for this batch before deletion. For
+    // legacy batches that deducted stock at creation, restore it instead.
+    const activeReservations = getReservationsForBatch(batchId).filter(r => r.status === 'reserved');
 
-      // Restore stock for each material from the active BOM
-      const bom = getBOMByFinishedGoodId(batch.finished_good_id);
-      if (bom) {
-        const materialsToRestore = bom.components.map(comp => ({
-          stock_code_id: comp.material_stock_code_id,
-          quantity: comp.quantity_per_batch * batch.planned_batch_size,
-        }));
-        
-        for (const mat of materialsToRestore) {
-          await (supabase.rpc as any)('fms_apply_stock_movement', {
-            p_stock_code_id: mat.stock_code_id,
-            p_movement_type: 'adjustment',
-            p_quantity_change: mat.quantity,
-            p_batch_id: batchId,
-            p_batch_number: batch.batch_number,
-            p_reference_id: batch.batch_number,
-            p_notes: `Batch ${batch.batch_number} deleted - stock restored`,
-            p_created_by: user?.id || null,
-          });
-        }
+    if (activeReservations.length > 0) {
+      const released = await releaseBatchReservations(batchId, batch.batch_number);
+
+      if (!released) {
+        toast.error("Batch was not deleted because it's reserved stock could not be released");
+        return;
       }
-    } catch (err) {
-      console.error('[FMS] Failed to restore stock on delete:', err);
+
+    } else {
+      // Legacy fallback: restore just-in-time deducted stock
+      try {
+        await (supabase.from('fms_materials_used') as any)
+          .delete()
+          .eq('batch_id', batchId);
+
+        const bom = getBOMByFinishedGoodId(batch.finished_good_id);
+        if (bom) {
+          const materialsToRestore = bom.components.map(comp => ({
+            stock_code_id: comp.material_stock_code_id,
+            quantity: comp.quantity_per_batch * batch.planned_batch_size,
+          }));
+
+          for (const mat of materialsToRestore) {
+            await (supabase.rpc as any)('fms_apply_stock_movement', {
+              p_stock_code_id: mat.stock_code_id,
+              p_movement_type: 'adjustment',
+              p_quantity_change: mat.quantity,
+              p_batch_id: batchId,
+              p_batch_number: batch.batch_number,
+              p_reference_id: batch.batch_number,
+              p_notes: `Batch ${batch.batch_number} deleted - stock restored`,
+              p_created_by: user?.id || null,
+            });
+          }
+        }
+      } catch (err) {
+        console.error('[FMS] Failed to restore stock on delete:', err);
+      }
     }
 
     const { error } = await supabase.from('fms_production_batches').delete().eq('id', batchId);
@@ -696,7 +854,7 @@ const Production: React.FC = () => {
       toast.error('Failed to delete batch');
       return;
     }
-    toast.success('Batch deleted - stock restored to lots');
+    toast.success('Batch deleted - reserved stock released');
     await refreshData();
   };
 
@@ -834,7 +992,7 @@ const Production: React.FC = () => {
                   <div>
                     <p className="font-medium">{selectedProduct.description}</p>
                     <p className="text-sm text-muted-foreground">
-                      BOM Version {selectedBOM.version_number} • {selectedBOM.components?.length || 0} components
+                      BOM Version {selectedBOM.version_number} â€¢ {selectedBOM.components?.length || 0} components
                     </p>
                   </div>
 
@@ -848,17 +1006,21 @@ const Production: React.FC = () => {
                           <tr>
                             <th className="text-left py-2">Material</th>
                             <th className="text-right py-2">Required</th>
-                            <th className="text-right py-2">Available</th>
+                            <th className="text-right py-2">Physical Stock</th>
+                            <th className="text-right py-2">Reserved</th>
+                            <th className="text-right py-2">Net Stock</th>
                             <th className="text-center py-2">Status</th>
-                          </tr>
+                            </tr>
                         </thead>
                         <tbody>
                           {selectedBOMMaterials.map((item) => (
                             <tr key={item.id} className="border-t border-border">
                               <td className="py-2 pr-3">{item.material?.stock_code || 'Unknown'}</td>
                               <td className="py-2 text-right">{item.requiredQuantity.toFixed(2)} {item.material?.unit_of_measure}</td>
-                              <td className={`py-2 text-right ${item.availableStock < item.requiredQuantity ? 'text-destructive font-semibold' : 'text-success font-semibold'}`}>
-                                {item.availableStock.toFixed(2)} {item.material?.unit_of_measure}
+                              <td className="py-2 text-right">{item.physicalStock.toFixed(2)} {item.material?.unit_of_measure}</td>
+                              <td className="py-2 text-right">{item.reserved.toFixed(2)} {item.material?.unit_of_measure}</td>
+                              <td className={`py-2 text-right ${item.netStock < item.requiredQuantity ? 'text-destructive font-semibold' : 'text-success font-semibold'}`}>
+                                {item.netStock.toFixed(2)} {item.material?.unit_of_measure}
                               </td>
                               <td className="py-2 text-center">
                                 {item.isAvailable ? (
@@ -885,7 +1047,7 @@ const Production: React.FC = () => {
                         <XCircle className="h-5 w-5 text-destructive shrink-0 mt-0.5" />
                         <div>
                           <p className="text-sm font-semibold text-destructive">
-                            ⚠️ Insufficient Stock - {insufficientCount} material{insufficientCount > 1 ? 's' : ''} below required level
+                            âš ï¸ Insufficient Stock - {insufficientCount} material{insufficientCount > 1 ? 's' : ''} below required level
                           </p>
                           <p className="text-sm text-destructive/80 mt-1">
                             You can still proceed, but stock will go negative for these materials.
@@ -1157,11 +1319,18 @@ const Production: React.FC = () => {
                 handleCloseBatch(selectedBatch.id, data);
                 setViewDialogOpen(false);
               }}
-              onUpdateBatch={async (updates) => {
+
+                  onUpdateBatch={async (updates) => {
                 await updateProductionBatch(selectedBatch.id, updates);
-                await refreshData();
-                setSelectedBatch(prev => prev ? { ...prev, ...updates } : null);
-              }}
+
+                setSelectedBatch(prev =>
+                  prev ? { ...prev, ...updates } : null
+                );
+        }}
+
+                            reservations={getReservationsForBatch(selectedBatch.id)}
+              fifoAllocateLots={fifoAllocateLots}
+              getReceivingById={getReceivingById}
             />
           )}
         </DialogContent>
@@ -1179,7 +1348,10 @@ interface BatchManagementProps {
   onUpdateStep: (stepId: string, completed: boolean) => void;
   onUpdateOrganolepticCheck: (checkName: string, result: 'pass' | 'fail') => void;
   onCloseBatch: (data: any) => void;
-  onUpdateBatch: (updates: any) => Promise<void>;
+    onUpdateBatch: (updates: any) => Promise<void>;
+    reservations?: FMSStockReservation[];
+  fifoAllocateLots?: (stockCodeId: string, quantityRequired: number) => Promise<{ receiving_record_id: string; internal_lot_number?: string; quantity_to_use: number; expiry_date?: string }[]>;
+  getReceivingById?: (id: string | null | undefined) => any;
 }
 
 const BatchManagement: React.FC<BatchManagementProps> = ({
@@ -1191,6 +1363,9 @@ const BatchManagement: React.FC<BatchManagementProps> = ({
   onUpdateOrganolepticCheck,
   onCloseBatch,
   onUpdateBatch,
+  reservations,
+  fifoAllocateLots,
+  getReceivingById,
 }) => {
   const finishedGood = getStockCodeById(batch.finished_good_id);
   
@@ -1221,6 +1396,86 @@ const BatchManagement: React.FC<BatchManagementProps> = ({
     : buildMaterialsFromBOM();
   
   const [preWeighMaterials, setPreWeighMaterials] = useState<PreWeighMaterial[]>(initialMaterials);
+
+  // Auto-populate lot numbers from the database for materials that are missing
+  // them. Prefers the batch's own reserved lots (recorded at batch creation),
+  // falling back to a fresh FIFO allocation. The user should only need to enter
+  // Qty Weighed and tick the approval check.
+  const autoFilledRef = React.useRef(false);
+    useEffect(() => {
+    if (autoFilledRef.current) return;
+    if (batch.pre_weigh_approved || batch.status === 'closed' || batch.status === 'cancelled') return;
+
+    const needsFill = initialMaterials.some(m => !(m.internal_lot_number || '').trim());
+    if (!needsFill) {
+      autoFilledRef.current = true;
+      return;
+    }
+
+    const fillMissingLots = async () => {
+      let changed = false;
+      const stillMissing: string[] = [];
+      const next: PreWeighMaterial[] = [];
+      for (const m of initialMaterials) {
+        if ((m.internal_lot_number || '').trim()) {
+          next.push(m);
+          continue;
+        }
+        // 1. Prefer this batch's own reserved lots (exact traceability match)
+        const res = (reservations || []).find(
+          r => r.stock_code_id === m.material_id && r.status === 'reserved' && r.internal_lot_number
+        );
+        if (res?.internal_lot_number) {
+          changed = true;
+          const rec = getReceivingById?.(res.receiving_record_id);
+          next.push({
+            ...m,
+            raw_material_batch_number: m.raw_material_batch_number || rec?.supplier_batch_number || '',
+            internal_lot_number: rec?.internal_lot_number || res.internal_lot_number,
+            expiry_date: m.expiry_date || rec?.expiry_date || '',
+          });
+          continue;
+        }
+        // 2. Fall back to a fresh FIFO allocation from receiving records
+        if (fifoAllocateLots && m.required_quantity > 0) {
+          try {
+            const lots = await fifoAllocateLots(m.material_id, m.required_quantity);
+            if (lots.length > 0) {
+              changed = true;
+              const rec0 = getReceivingById?.(lots[0].receiving_record_id);
+              next.push({
+                ...m,
+                raw_material_batch_number: m.raw_material_batch_number || rec0?.supplier_batch_number || '',
+                internal_lot_number: rec0?.internal_lot_number || lots[0].internal_lot_number || '',
+                expiry_date: m.expiry_date || rec0?.expiry_date || lots[0].expiry_date || '',
+              });
+              continue;
+            }
+          } catch (err) {
+            console.error('[BatchSheet] FIFO auto-fill error:', err);
+          }
+        }
+        stillMissing.push(m.stock_code || m.material_name || 'material');
+        next.push(m);
+      }
+      autoFilledRef.current = true;
+      if (changed) {
+        setPreWeighMaterials(next);
+        onUpdateBatch({ pre_weigh_materials: next });
+      }
+      if (stillMissing.length > 0) {
+        toast.warning(
+          `Could not auto-fill lot numbers for: ${[...new Set(stillMissing)].join(', ')}. ` +
+          'Check that the material has accepted receiving records, and that the stock reservation/FIFO SQL migrations have been applied to the database.',
+          { duration: 10000 }
+        );
+      }
+    };
+
+    fillMissingLots();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const [checkerName, setCheckerName] = useState((batch.final_quality_checks as any)?.checker_name || '');
   const [infoCheckerName, setInfoCheckerName] = useState((batch as any)?.info_checker_name || '');
   const [stepsCheckerName, setStepsCheckerName] = useState((batch as any)?.steps_checker_name || '');
@@ -1281,6 +1536,11 @@ const BatchManagement: React.FC<BatchManagementProps> = ({
     setPreWeighMaterials(prev => prev.map((mat, i) => 
       i === index ? { ...mat, [field]: value } : mat
     ));
+    };
+
+  // Persist pre-weigh material edits to the database on blur
+  const savePreWeighMaterials = () => {
+    onUpdateBatch({ pre_weigh_materials: preWeighMaterials });
   };
 
   const allMaterialsApproved = preWeighMaterials.every(m => m.approved && m.raw_material_batch_number.trim() !== '' && (m.internal_lot_number || '').trim() !== '');
@@ -1373,56 +1633,58 @@ const BatchManagement: React.FC<BatchManagementProps> = ({
                               className="text-sm h-8 text-right w-24"
                             />
                           ) : (
-                            <span className="font-medium">{mat.quantity_weighed != null ? `${mat.quantity_weighed} ${mat.uom}` : '—'}</span>
+                            <span className="font-medium">{mat.quantity_weighed != null ? `${mat.quantity_weighed} ${mat.uom}` : 'â€”'}</span>
                           )}
                         </td>
                         <td className="p-2 border">
                           {batch.status === 'pre_weighing' && !batch.pre_weigh_approved ? (
                             <Input
-                              value={mat.raw_material_batch_number}
+                              type="text"
+                              value={mat.raw_material_batch_number || ''}
                               onChange={(e) => handlePreWeighMaterialChange(index, 'raw_material_batch_number', e.target.value)}
-                              placeholder="External batch..."
-                              className="text-sm h-8"
+                              placeholder="External batch no."
+                              className={`text-sm h-8 w-full ${!mat.raw_material_batch_number && '!border-red-500 !focus:ring-red-500'}`}
+                              onBlur={savePreWeighMaterials}
                             />
                           ) : (
-                            <span className="font-medium">{mat.raw_material_batch_number || '—'}</span>
+                            <span className="font-medium">
+                              {mat.raw_material_batch_number || '-'}
+                            </span>
                           )}
                         </td>
                         <td className="p-2 border">
                           {batch.status === 'pre_weighing' && !batch.pre_weigh_approved ? (
                             <Input
+                              type="text"
                               value={mat.internal_lot_number || ''}
                               onChange={(e) => handlePreWeighMaterialChange(index, 'internal_lot_number', e.target.value)}
-                              placeholder="LOT-..."
-                              className="text-sm h-8"
+                              placeholder="Internal lot no."
+                              className={`text-sm h-8 w-full ${!(mat.internal_lot_number) && '!border-red-500 !focus:ring-red-500'}`}
+                              onBlur={savePreWeighMaterials}
                             />
                           ) : (
-                            <span className="font-medium">{mat.internal_lot_number || '—'}</span>
+                            <span className="font-medium">
+                                                                                      {mat.internal_lot_number || '—'}
+                            </span>
                           )}
                         </td>
                         <td className="p-2 border">
-                          {batch.status === 'pre_weighing' && !batch.pre_weigh_approved ? (
-                            <Input
-                              type="date"
-                              value={mat.expiry_date || ''}
-                              onChange={(e) => handlePreWeighMaterialChange(index, 'expiry_date', e.target.value)}
-                              className="text-sm h-8"
-                            />
-                          ) : (
-                            <span className="font-medium">{mat.expiry_date ? formatDate(mat.expiry_date) : '—'}</span>
-                          )}
+                          <span className="font-medium">
+                            {mat.expiry_date ? formatDate(mat.expiry_date) : '—'}
+                          </span>
                         </td>
                         <td className="p-2 border text-center">
                           {batch.status === 'pre_weighing' && !batch.pre_weigh_approved ? (
                             <Switch
-                              checked={mat.approved}
-                              onCheckedChange={(checked) => handlePreWeighMaterialChange(index, 'approved', checked)}
-                              disabled={mat.raw_material_batch_number.trim() === '' || (mat.internal_lot_number || '').trim() === ''}
-                              className={mat.approved ? 'data-[state=checked]:bg-green-600' : ''}
-                            />
+                                checked={mat.approved}
+                                onCheckedChange={(checked) =>
+                                  handlePreWeighMaterialChange(index, 'approved', checked)
+                                }
+                                className={mat.approved ? 'data-[state=checked]:bg-green-600' : ''}
+                              />
                           ) : (
                             <span className={`text-lg ${mat.approved ? 'text-green-600' : 'text-muted-foreground'}`}>
-                              {mat.approved ? '✓' : '○'}
+                              {mat.approved ? 'âœ“' : 'â—‹'}
                             </span>
                           )}
                         </td>
@@ -1432,15 +1694,22 @@ const BatchManagement: React.FC<BatchManagementProps> = ({
                 </table>
               </div>
 
-              {batch.status === 'pre_weighing' && !batch.pre_weigh_approved && (
-                <Button 
-                  onClick={() => onApprovePreWeigh(preWeighMaterials)} 
-                  className="w-full"
-                  disabled={!allMaterialsApproved}
-                >
-                  <CheckCircle className="mr-2 h-4 w-4" />
-                  Approve Pre-Weigh ({preWeighMaterials.filter(m => m.approved).length}/{preWeighMaterials.length})
-                </Button>
+                            {batch.status === 'pre_weighing' && !batch.pre_weigh_approved && (
+                <>
+                  {!allMaterialsApproved && (
+                    <p className="text-xs text-muted-foreground mb-2">
+                      Approve button is disabled until all materials have a checked ✓, an External Batch No., and an Internal Lot No.
+                    </p>
+                  )}
+                  <Button
+                    onClick={() => onApprovePreWeigh(preWeighMaterials)}
+                    className="w-full"
+                    disabled={!allMaterialsApproved}
+                  >
+                    <CheckCircle className="mr-2 h-4 w-4" />
+                    Approve Pre-Weigh ({preWeighMaterials.filter(m => m.approved).length}/{preWeighMaterials.length})
+                  </Button>
+                </>
               )}
             </>
           ) : (
@@ -1449,6 +1718,41 @@ const BatchManagement: React.FC<BatchManagementProps> = ({
             </div>
           )}
         </div>
+{/* Reserved Stock / Reservation Traceability */}
+        {reservations && reservations.length > 0 && (
+          <div className="border-t pt-4 mt-4">
+            <p className="text-sm font-semibold mb-2">Reserved Stock (Lot Traceability)</p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm border-collapse">
+                <thead>
+                  <tr className="bg-muted/50">
+                    <th className="text-left p-2 border font-medium">Stock Code</th>
+                    <th className="text-left p-2 border font-medium">Lot No.</th>
+                    <th className="text-right p-2 border font-medium">Quantity Reserved</th>
+                    <th className="text-center p-2 border font-medium">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {reservations.map((res) => {
+                    const sc = getStockCodeById(res.stock_code_id);
+                    return (
+                      <tr key={res.id}>
+                        <td className="p-2 border">{sc?.stock_code || res.stock_code_id}</td>
+                        <td className="p-2 border">{res.internal_lot_number || '—'}</td>
+                        <td className="p-2 border text-right font-medium">{Number(res.quantity_reserved).toFixed(2)}</td>
+                        <td className="p-2 border text-center">
+                          {res.status === 'reserved' && <Badge variant="outline" className="text-amber-600 border-amber-600">Reserved</Badge>}
+                          {res.status === 'consumed' && <Badge variant="outline" className="text-green-600 border-green-600">Consumed</Badge>}
+                          {res.status === 'released' && <Badge variant="outline" className="text-muted-foreground border-border">Released</Badge>}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
 
         {batch.pre_weigh_approved && (
           <div className="rounded-lg bg-success/10 border border-success/20 p-3">
@@ -1595,7 +1899,7 @@ const BatchManagement: React.FC<BatchManagementProps> = ({
             </div>
             {check.result === 'fail' && (
               <div className="mt-2 p-2 rounded bg-destructive/20 text-destructive text-sm font-semibold">
-                ⚠️ Immediately inform head office - {check.name} check failed
+                âš ï¸ Immediately inform head office - {check.name} check failed
               </div>
             )}
           </div>
@@ -1604,7 +1908,7 @@ const BatchManagement: React.FC<BatchManagementProps> = ({
         {/* Warning for any failed checks */}
         {organolepticChecks.some(c => c.result === 'fail') && (
           <div className="p-3 rounded-lg bg-destructive/10 border border-destructive text-destructive font-semibold">
-            ⚠️ ATTENTION: One or more quality checks have FAILED. Immediately inform head office.
+            âš ï¸ ATTENTION: One or more quality checks have FAILED. Immediately inform head office.
           </div>
         )}
 
@@ -1632,7 +1936,7 @@ const BatchManagement: React.FC<BatchManagementProps> = ({
         {/* Expected vs Actual Quantity */}
         <div className="rounded-lg border border-primary/20 bg-primary/5 p-3">
           <div className="flex justify-between items-center">
-            <span className="text-sm font-medium">Expected Quantity (±100g tolerance):</span>
+            <span className="text-sm font-medium">Expected Quantity (Â±100g tolerance):</span>
             <span className="font-bold">{expectedQuantity} kg</span>
           </div>
         </div>
@@ -1652,7 +1956,7 @@ const BatchManagement: React.FC<BatchManagementProps> = ({
             </div>
             {finalData.actual_quantity && !withinTolerance && (
               <div className="p-2 rounded-lg bg-amber-100 dark:bg-amber-900/30 border border-amber-500 text-amber-800 dark:text-amber-200 text-sm font-semibold">
-                ⚠️ Quarantine batch for investigation. Variance exceeds ±100g tolerance.
+                âš ï¸ Quarantine batch for investigation. Variance exceeds Â±100g tolerance.
               </div>
             )}
           </div>

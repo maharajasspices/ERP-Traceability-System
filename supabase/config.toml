@@ -9,3 +9,6 @@ verify_jwt = false
 [functions.fms-stock-order]
 verify_jwt = false
 
+[functions.sign-contract]
+verify_jwt = false
+

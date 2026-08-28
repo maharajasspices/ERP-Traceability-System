@@ -28,6 +28,7 @@ const NotFound = lazy(() => import("./pages/NotFound"));
 const ResetPassword = lazy(() => import("./pages/ResetPassword"));
 const ForgotPassword = lazy(() => import("./pages/ForgotPassword"));
 const LandingPage = lazy(() => import("./pages/LandingPage"));
+const SignContract = lazy(() => import("./pages/SignContract"));
 const HRDashboard = lazy(() => import("./pages/HR/HRDashboard"));
 const HRLogin = lazy(() => import("./pages/HR/HRLogin"));
 const Employees = lazy(() => import("./pages/HR/Employees"));
@@ -108,6 +109,7 @@ const App = () => (
               <Route path="/reset-password" element={<ResetPassword />} />
               <Route path="/forgot-password" element={<ForgotPassword />} />
               <Route path="/" element={<LandingPage />} />
+              <Route path="/sign-contract" element={<SignContract />} />
               <Route element={<ProtectedRoute><QaViewerGuard><MainLayout /></QaViewerGuard></ProtectedRoute>}>
                 <Route path="/dashboard" element={<Dashboard />} />
                 <Route path="/stock-codes" element={<StockCodes />} />
