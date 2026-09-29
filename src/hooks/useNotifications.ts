@@ -51,6 +51,10 @@ export const useNotifications = () => {
 
   useEffect(() => {
     fetchNotifications();
+    // Poll so the bell reflects server-side notifications (e.g. a contract
+    // being signed) without requiring a manual page refresh.
+    const interval = setInterval(fetchNotifications, 15000);
+    return () => clearInterval(interval);
   }, [fetchNotifications]);
 
   const markAsRead = useCallback(async (notificationId: string) => {

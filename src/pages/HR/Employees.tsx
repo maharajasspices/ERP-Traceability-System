@@ -3,6 +3,7 @@ import { useHRData, HREmployee, HRWarning } from '@/hooks/useHRData';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 
+
 import {
   Users,
   UserCheck,
@@ -45,12 +46,15 @@ const Employees: React.FC = () => {
     deleteWarning,
     sendEmployeeEmail,
     sendContractForSignature,
+    sendContractViaWhatsApp,
     contractSignatures,
+
   } = useHRData();
 
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [departmentFilter, setDepartmentFilter] = useState('all');
+  const [employeeTab, setEmployeeTab] = useState<`employees` | `terminated`> (`employees`);
 
   const [selectedEmployee, setSelectedEmployee] =
     useState<HREmployee | null>(null);
@@ -60,6 +64,11 @@ const Employees: React.FC = () => {
   const [emailSubject, setEmailSubject] = useState('');
   const [emailMessage, setEmailMessage] = useState('');
   const [sendingEmail, setSendingEmail] = useState(false);
+
+  const [showTerminatedEmployee, setShowTerminatedEmployee] = useState(false);
+  const [terminatingEmployee, setTerminatingEmployee] = useState(false);
+  const [terminationDate, setTerminationDate] = useState('');
+  const [terminationReason, setTerminationReason] = useState('');
 
   const [showAddEmployee, setShowAddEmployee] = useState(false);
   const [showEditEmployee, setShowEditEmployee] = useState(false);
@@ -72,12 +81,14 @@ const Employees: React.FC = () => {
 
   // Contract signature state
   const [sendingContractSignature, setSendingContractSignature] = useState(false);
+  const [sendingContractWhatsApp, setSendingContractWhatsApp] = useState(false);
 
   // Warning state
   const [showWarningForm, setShowWarningForm] = useState(false);
   const [warningType, setWarningType] = useState<HRWarning['warning_type']>('verbal');
   const [warningReason, setWarningReason] = useState('');
   const [warningDetails, setWarningDetails] = useState('');
+  const [warningMeetingDate, setWarningMeetingDate] = useState('');
   const [warningSignature, setWarningSignature] = useState('');
   const [sendEmail, setSendEmail] = useState(false);
   const [sendWhatsApp, setSendWhatsApp] = useState(false);
@@ -140,6 +151,9 @@ const Employees: React.FC = () => {
     employee => employee.status === 'on_leave'
   ).length;
 
+  const terminatedEmployees = employees.filter(
+    employee => employee.status === `terminated`
+  ).length;
   // ------------------------------------------------------------
   // Departments
   // ------------------------------------------------------------
@@ -158,38 +172,79 @@ const Employees: React.FC = () => {
   // Search + filters
   // ------------------------------------------------------------
 
-  const filteredEmployees = useMemo(() => {
-    return employees.filter(employee => {
-      const fullName =
-        `${employee.first_name} ${employee.last_name}`.toLowerCase();
+  // const filteredEmployees = useMemo(() => {
+  //   return employees.filter(employee => {
+  //     const fullName =
+  //       `${employee.first_name} ${employee.last_name}`.toLowerCase();
 
-      const searchValue = search.toLowerCase();
+  //     const searchValue = search.toLowerCase();
 
-      const searchMatch =
-        fullName.includes(searchValue) ||
-        employee.employee_number
-          ?.toLowerCase()
-          .includes(searchValue) ||
-        employee.id_number
-          ?.toLowerCase()
-          .includes(searchValue);
+  //     const searchMatch =
+  //       fullName.includes(searchValue) ||
+  //       employee.employee_number
+  //         ?.toLowerCase()
+  //         .includes(searchValue) ||
+  //       employee.id_number
+  //         ?.toLowerCase()
+  //         .includes(searchValue);
 
-      const statusMatch =
-        statusFilter === 'all' ||
-        employee.status === statusFilter;
+  //     const statusMatch =
+  //       statusFilter === 'all' ||
+  //       employee.status === statusFilter;
 
-      const departmentMatch =
-        departmentFilter === 'all' ||
-        employee.department === departmentFilter;
+  //     const departmentMatch =
+  //       departmentFilter === 'all' ||
+  //       employee.department === departmentFilter;
 
-      return searchMatch && statusMatch && departmentMatch;
-    });
-  }, [
-    employees,
-    search,
-    statusFilter,
-    departmentFilter,
-  ]);
+  //     return searchMatch && statusMatch && departmentMatch;
+  //   });
+  // }, 
+
+ const filteredEmployees = useMemo(() => {
+  return employees.filter(employee => {
+    const fullName =
+      `${employee.first_name} ${employee.last_name}`.toLowerCase();
+
+    const searchValue = search.toLowerCase();
+
+    const searchMatch =
+      fullName.includes(searchValue) ||
+      employee.employee_number
+        ?.toLowerCase()
+        .includes(searchValue) ||
+      employee.id_number
+        ?.toLowerCase()
+        .includes(searchValue);
+
+    const tabMatch =
+      employeeTab === 'terminated'
+        ? employee.status === 'terminated'
+        : employee.status !== 'terminated';
+
+    const statusMatch =
+      statusFilter === 'all' ||
+      employee.status === statusFilter;
+
+    const departmentMatch =
+      departmentFilter === 'all' ||
+      employee.department === departmentFilter;
+
+    return (
+      searchMatch &&
+      tabMatch &&
+      statusMatch &&
+      departmentMatch
+    );
+  });
+}, [
+  employees,
+  employeeTab,
+  search,
+  statusFilter,
+  departmentFilter,
+]);
+
+ 
 
   // ------------------------------------------------------------
   // Attendance statistics
@@ -418,6 +473,54 @@ const Employees: React.FC = () => {
     }
   };
 
+  // __________________________________________
+  // Open terminate Employee Dialog
+  //___________________________________________
+
+ const handleOpenTerminateEmployee = () => {
+  if (!selectedEmployee) return;
+
+  setTerminationDate(
+    new Date().toISOString().split('T')[0]
+  );
+
+  setTerminationReason('');
+  setShowTerminatedEmployee(true);
+};
+  const handleTerminateEmployee = async () => {
+    if(!selectedEmployee) return;
+    
+
+    if (!terminationDate) {
+      toast.error('Please select a termination date.');
+      return;
+    }
+    if (!terminationReason) {
+      toast.error('Please select a reason for this termination')
+      return;
+    }
+
+    setTerminatingEmployee(true);
+
+    try {
+      const result = await updateEmployee(selectedEmployee.id, {
+        status: 'terminated',
+        termination_date : terminationDate,
+        termination_reason: terminationReason,
+      });
+      if (result) {
+        setSelectedEmployee({
+          ...selectedEmployee,
+          ...result,
+        });
+        setShowTerminatedEmployee(false);
+        setTerminationDate('');
+        setTerminationReason('');
+      }
+    } finally {
+      setTerminatingEmployee(false);
+    }
+  };
   // ------------------------------------------------------------
   // Handle document upload
   // ------------------------------------------------------------
@@ -470,7 +573,8 @@ const Employees: React.FC = () => {
         warningDetails || undefined,
         warningSignature || selectedEmployee.employee_number || undefined,
         sendEmail,
-        sendWhatsApp
+        sendWhatsApp,
+        warningMeetingDate || undefined
       );
 
       if (result) {
@@ -478,6 +582,7 @@ const Employees: React.FC = () => {
         setWarningType('verbal');
         setWarningReason('');
         setWarningDetails('');
+        setWarningMeetingDate('');
         setWarningSignature('');
         setSendEmail(false);
         setSendWhatsApp(false);
@@ -574,6 +679,35 @@ const Employees: React.FC = () => {
       setSendingContractSignature(false);
     }
   };
+
+ const handleSendContractViaWhatsApp = async () => {
+  if (!selectedEmployee) return;
+
+  const contract = getEmployeeContract();
+
+  if (!contract) {
+    toast.error(
+      'No contract document is attached to this employee yet. Upload one in the Documents section first.'
+    );
+    return;
+  }
+
+  if (!selectedEmployee.phone) {
+    toast.error('This employee has no phone number on file.');
+    return;
+  }
+
+  setSendingContractWhatsApp(true);
+
+  try {
+    await sendContractViaWhatsApp(
+      selectedEmployee.id,
+      contract.id
+    );
+  } finally {
+    setSendingContractWhatsApp(false);
+  }
+};
 
   // ------------------------------------------------------------
   // Loading
@@ -720,21 +854,81 @@ const Employees: React.FC = () => {
         </div>
 
       </div>
+         {/* ======================================================
+          employee table
+      ====================================================== */}
+
+   {/* ======================================================
+    EMPLOYEE TABS
+====================================================== */}
+
+<div className="border-b border-gray-200">
+  <div className="flex gap-8">
+
+    <button
+      type="button"
+      onClick={() => setEmployeeTab('employees')}
+      className={`border-b-2 px-1 pb-3 text-sm font-semibold transition ${
+        employeeTab === 'employees'
+          ? 'border-[#ef302b] text-[#ef302b]'
+          : 'border-transparent text-gray-500 hover:text-gray-700'
+      }`}
+    >
+      Employees
+    </button>
+
+    <button
+      type="button"
+      onClick={() => setEmployeeTab('terminated')}
+      className={`border-b-2 px-1 pb-3 text-sm font-semibold transition ${
+        employeeTab === 'terminated'
+          ? 'border-[#ef302b] text-[#ef302b]'
+          : 'border-transparent text-gray-500 hover:text-gray-700'
+      }`}
+    >
+      Terminated Employees
+
+      {terminatedEmployees > 0 && (
+        <span className="ml-2 rounded-full bg-red-100 px-2 py-0.5 text-xs text-red-700">
+          {terminatedEmployees}
+        </span>
+      )}
+    </button>
+
+  </div>
+</div>
+
+{/* ======================================================
+    TERMINATED EMPLOYEE RETENTION NOTICE
+====================================================== */}
+
+{employeeTab === 'terminated' && (
+  <div className="rounded-xl border border-red-100 bg-red-50 p-4">
+    <div className="flex gap-3">
+      <div>
+        <p className="text-sm font-semibold text-red-800">
+          Employee Record Retention
+        </p>
+
+        <p className="mt-1 text-sm text-red-700">
+          Terminated employee records will be retained for 5 years.
+          After the retention period, the records will be removed from
+          the relevant databases, subject to applicable legal and company
+          record-retention requirements.
+        </p>
+      </div>
+    </div>
+  </div>
+)}
 
       {/* ======================================================
           FILTERS
       ====================================================== */}
-
       <div className="rounded-2xl border bg-white p-4 shadow-sm">
-
         <div className="flex flex-col gap-3 lg:flex-row">
-
           {/* Search */}
-
           <div className="relative flex-1">
-
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-
             <input
               type="text"
               placeholder="Search by name, employee number or ID number..."
@@ -744,11 +938,8 @@ const Employees: React.FC = () => {
               }
               className="w-full rounded-xl border border-gray-200 py-3 pl-10 pr-4 text-sm outline-none transition focus:border-[#ef302b] focus:ring-2 focus:ring-red-100"
             />
-
           </div>
-
           {/* Status */}
-
           <select
             value={statusFilter}
             onChange={event =>
@@ -808,197 +999,138 @@ const Employees: React.FC = () => {
           EMPLOYEE TABLE
       ====================================================== */}
 
-      <div className="overflow-hidden rounded-2xl border bg-white shadow-sm">
+     {/* ======================================================
+    TERMINATED EMPLOYEE TABLE
+====================================================== */}
 
-        <div className="overflow-x-auto">
-
-          <table className="w-full min-w-[900px] text-left">
-
-            <thead className="border-b bg-gray-50">
-
-              <tr>
-
-                <th className="px-6 py-4 text-xs font-semibold uppercase text-gray-500">
-                  Employee
-                </th>
-
-                <th className="px-6 py-4 text-xs font-semibold uppercase text-gray-500">
-                  Employee No.
-                </th>
-
-                <th className="px-6 py-4 text-xs font-semibold uppercase text-gray-500">
-                  Department
-                </th>
-
-                <th className="px-6 py-4 text-xs font-semibold uppercase text-gray-500">
-                  Position
-                </th>
-
-                <th className="px-6 py-4 text-xs font-semibold uppercase text-gray-500">
-                  Contract
-                </th>
-
-                <th className="px-6 py-4 text-xs font-semibold uppercase text-gray-500">
-                  Status
-                </th>
-
-              </tr>
-
-            </thead>
-
-            <tbody className="divide-y">
-
-              {filteredEmployees.length === 0 ? (
-
-                <tr>
-
-                  <td
-                    colSpan={6}
-                    className="px-6 py-12 text-center text-sm text-gray-500"
+<div className="overflow-hidden rounded-2xl border bg-white shadow-sm">
+  <div className="overflow-x-auto">
+    <table className="w-full min-w-[800px] text-left">
+      <thead className="border-b bg-gray-50">
+        <tr>
+          <th className="px-6 py-4 text-xs font-semibold uppercase text-gray-500">
+            Employee
+          </th>
+          <th className="px-6 py-4 text-xs font-semibold uppercase text-gray-500">
+            Position
+          </th>
+          <th className="px-6 py-4 text-xs font-semibold uppercase text-gray-500">
+            {employeeTab === 'terminated' ? 'Date Terminated' : 'Contract Signed'}
+          </th>
+          <th className="px-6 py-4 text-xs font-semibold uppercase text-gray-500">
+            {employeeTab === 'terminated' ? 'Reason' : 'Active'}
+          </th>
+        </tr>
+      </thead>
+      <tbody className="divide-y">
+        {filteredEmployees.length === 0 ? (
+          <tr>
+            <td
+              colSpan={4}
+              className="px-6 py-12 text-center text-sm text-gray-500"
+            >
+              {employeeTab === 'terminated' ? 'No terminated employees found.' : 'No employees found.'}
+            </td>
+          </tr>
+        ) : (
+          filteredEmployees.map(employee => (
+            <tr
+              key={employee.id}
+              onClick={() =>
+                setSelectedEmployee(employee)
+              }
+              className="cursor-pointer transition hover:bg-gray-50"
+            >
+              {/* Employee */}
+              <td className="px-6 py-4">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-full bg-red-50 font-semibold text-[#ef302b]">
+                    {employee.first_name.charAt(0)}
+                    {employee.last_name.charAt(0)}
+                  </div>
+                  <div>
+                    <p className="font-semibold text-gray-900">
+                      {employee.first_name}{' '}
+                      {employee.last_name}
+                    </p>
+                    <p className="text-xs text-gray-500">
+                      {employee.email || 'No email'}
+                    </p>
+                  </div>
+                </div>
+              </td>
+              {/* Position */}
+              <td className="px-6 py-4 text-sm text-gray-600">
+                {employee.job_title || '—'}
+              </td>
+              {/* Date Terminated / Contract Signed */}
+              <td className="px-6 py-4 text-sm text-gray-600">
+                {employeeTab === 'terminated' ? (
+                  employee.termination_date
+                  ? new Date(employee.termination_date).toLocaleDateString(
+                      'en-ZA',
+                      {
+                        day: '2-digit',
+                        month: '2-digit',
+                        year: 'numeric',
+                      }
+                    )
+                  : '—')
+                  : employee.contract_signed ? (
+                    <span className="inline-flex items-center gap-1.5 rounded-full bg-green-100 px-2.5 py-1 text-xs font-semibold text-green-700">
+                      <FileCheck className="h-3.5 w-3.5" />
+                      Signed
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1.5 rounded-full bg-red-100 px-2.5 py-1 text-xs font-semibold text-red-700">
+                      <FileX className="h-3.5 w-3.5" />
+                      Not Signed
+                    </span>
+                  )}
+              </td>
+              {/* Reason / Active */}
+              <td className="px-6 py-4 text-sm text-gray-600">
+                {employeeTab === 'terminated' ? (employee.termination_reason || '—') : (
+                  <span
+                    className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ${getStatusClass(employee.status)}`}
                   >
-                    No employees found.
-                  </td>
-
-                </tr>
-
-              ) : (
-
-                filteredEmployees.map(employee => (
-
-                  <tr
-                    key={employee.id}
-                    onClick={() =>
-                      setSelectedEmployee(employee)
-                    }
-                    className="cursor-pointer transition hover:bg-gray-50"
-                  >
-
-                    <td className="px-6 py-4">
-
-                      <div className="flex items-center gap-3">
-
-                        <div className="flex h-10 w-10 items-center justify-center rounded-full bg-red-50 font-semibold text-[#ef302b]">
-                          {employee.first_name.charAt(0)}
-                          {employee.last_name.charAt(0)}
-                        </div>
-
-                        <div>
-
-                          <p className="font-semibold text-gray-900">
-                            {employee.first_name}{' '}
-                            {employee.last_name}
-                          </p>
-
-                          <p className="text-xs text-gray-500">
-                            {employee.email || 'No email'}
-                          </p>
-
-                        </div>
-
-                      </div>
-
-                    </td>
-
-                    <td className="px-6 py-4 text-sm text-gray-600">
-                      {employee.employee_number || '—'}
-                    </td>
-
-                    <td className="px-6 py-4 text-sm text-gray-600">
-                      {employee.department || '—'}
-                    </td>
-
-                    <td className="px-6 py-4 text-sm text-gray-600">
-                      {employee.job_title || '—'}
-                    </td>
-
-                    <td className="px-6 py-4">
-
-                      {employee.contract_signed ? (
-
-                        <span className="inline-flex items-center gap-1.5 rounded-full bg-green-100 px-3 py-1 text-xs font-medium text-green-700">
-
-                          <FileCheck className="h-3.5 w-3.5" />
-
-                          Signed
-
-                        </span>
-
-                      ) : (
-
-                        <span className="inline-flex items-center gap-1.5 rounded-full bg-red-100 px-3 py-1 text-xs font-medium text-red-700">
-
-                          <FileX className="h-3.5 w-3.5" />
-
-                          Not Signed
-
-                        </span>
-
-                      )}
-
-                    </td>
-
-                    <td className="px-6 py-4">
-
-                      <span
-                        className={`inline-flex rounded-full px-3 py-1 text-xs font-medium ${getStatusClass(
-                          employee.status
-                        )}`}
-                      >
-                        {getStatusLabel(employee.status)}
-                      </span>
-
-                    </td>
-
-                  </tr>
-
-                ))
-
-              )}
-
-            </tbody>
-
-          </table>
-
-        </div>
-
-      </div>
-
+                    {getStatusLabel(employee.status)}
+                  </span>
+                )}
+              </td>
+            </tr>
+          ))
+        )}
+      </tbody>
+    </table>
+  </div>
+</div>
       {/* ======================================================
           ADD EMPLOYEE MODAL
       ====================================================== */}
-
       {showAddEmployee && (
-
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
           onClick={() =>
             setShowAddEmployee(false)
           }
         >
-
           <div
             className="max-h-[90vh] w-full max-w-4xl overflow-y-auto rounded-2xl bg-white shadow-2xl"
             onClick={event =>
               event.stopPropagation()
             }
           >
-
             {/* Modal Header */}
-
             <div className="flex items-start justify-between border-b p-6">
-
               <div>
-
                 <h2 className="text-xl font-bold text-gray-900">
                   Add Employee
                 </h2>
-
                 <p className="mt-1 text-sm text-gray-500">
                   Add a new employee to the HR system.
                 </p>
-
               </div>
-
               <button
                 type="button"
                 onClick={() =>
@@ -1008,11 +1140,8 @@ const Employees: React.FC = () => {
               >
                 <X className="h-5 w-5" />
               </button>
-
             </div>
-
             {/* Form */}
-
             <form
               onSubmit={async (e) => {
                 e.preventDefault();
@@ -1838,9 +1967,104 @@ const Employees: React.FC = () => {
                     <Trash2 className="h-4 w-4" />
                     Delete
                   </button>
+                  {selectedEmployee.status !== 'terminated' && (
+                    <button
+                      type="button"
+                      onClick={handleOpenTerminateEmployee}
+                      className="flex items-center gap-2 rounded-lg border border-orange-200 bg-white px-4 py-2 text-sm font-medium text-orange-600 hover:bg-orange-50"
+                    >
+                      <UserX className="h-4 w-4" />
+                      Terminate Employee
+                    </button>
+                  )}
                 </div>
 
               </div>
+
+              {showTerminatedEmployee && (
+                <div className='mb-4 rounded-xl border border-orange-200 bg-orange-50 p-4'>
+                  <div className='flex items-start gap-3'>
+                    <UserX className='mt-0.5 h-5 w-5 text-orange-600'/>
+
+                    <div className='flex-1'>
+                      <h4 className='text-sm font-semibold text-orange-800'>
+                        Terminate { selectedEmployee.first_name} {selectedEmployee.last_name}?
+                      </h4>
+                      <p className='mt-1 text-sm text-orange-700'>
+                        This will mark the employee as terminated and move thier record to the Terminated Employees tab. Their HR records and documents will be retained.
+                      </p>
+                      <div className='mt-4 grid gap-4 sm:grid-cols-2'>
+                        {/*Termnation Date */}
+                        <div>
+                          <label className='mb-1 block text-sm font-medium text-gray-700'>
+                            Termination Date *
+                          </label>
+                          <input 
+                          type='date'
+                          value={terminationDate}
+                          onChange={event =>
+                            setTerminationDate(event.target.value)
+                          }
+                          className="w-full rounded-xl border-gray-200 bg-white px-4 oy-3 text-sm outline-none focus:border-[#ef302b] focus:ring-2 focus:ring-red-100"
+                          />
+                        </div>
+                        {/*Termination Reason*/}
+                        <div>
+                          <label className='mb-1 block text-sm font-medium text-gray-700'>
+                            Reason *
+                          </label>
+
+                          <select
+                          value={terminationReason}
+                          onChange={event => 
+                            setTerminationReason(event.target.value)
+                          }
+                          className='w-full rounded-xl border border-gray-200 bg-white px-4 py-3 text-sm outline-non focus:border-[#ef302b'
+                          >
+                            <option value=""></option>
+                            <option value="Resignation">Resignation</option>
+                            <option value="Dismissal">Dismissal</option>
+                            <option value="Retrenchment">Retrenchment</option>
+                            <option value="Contract Ended">Contract Ended</option>
+                            <option value="Retirement">Retirement</option>
+                            <option value="Abscounded">Abscounded</option>
+                            <option value="Other">Other</option>
+                          </select>
+                        </div>
+                      </div>
+                      <div className='mt-4 flex justify-end gap-2'>
+                        <button
+                        type='button'
+                        onClick={() => {
+                          setShowTerminatedEmployee(false);
+                          setTerminationDate('');
+                          setTerminationReason('');
+                        }}
+                        className="rounded-lg border bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                        type='button'
+                        onClick={handleTerminateEmployee}
+                        disabled={terminatingEmployee}
+                        className='flex items-center gap-2 rounded-lg bg-orange-600 px-4 py-2 text-sm font-semibold text-whitw hover:bg-orange-700 disabled: cursor-not-allowed disabled:opacity-60'
+                        >
+                          {terminatingEmployee ? (
+                            <Loader2 className="h-4 w-4 animate-spin"/>
+                          ) : (
+                            <UserX className="h-4 w-4"/>
+                          )}
+                          {terminatingEmployee
+                          ? 'Terminating ...'
+                          : 'Confirm Termination'
+                          }
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* Delete confirmation */}
 
@@ -2142,7 +2366,43 @@ const Employees: React.FC = () => {
                             )}
                             {sendingContractSignature ? 'Sending...' : 'Send for Signature'}
                           </button>
+                        )}v
+                       {!selectedEmployee.contract_signed && (
+                          <button
+                            type="button"
+                            onClick={handleSendContractViaWhatsApp}
+                            disabled={sendingContractWhatsApp}
+                            className="flex items-center gap-2 rounded-lg border border-green-300 bg-green-50 px-4 py-2 text-sm font-semibold text-green-700 hover:bg-green-100 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {sendingContractWhatsApp ? 'Sending...' : 'Send via WhatsApp'}
+                          </button>
                         )}
+
+
+    
+                        {/* View Signed Contract button */}
+                        {selectedEmployee.contract_signed && (
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              if (selectedEmployee.signed_contract_url) {
+                                window.open(selectedEmployee.signed_contract_url, '_blank');
+                                return;
+                              }
+                              const contract = getEmployeeContract();
+                              if (contract) {
+                                await handleDownloadDocument(contract);
+                              } else {
+                                toast.error('No signed contract document found for this employee.');
+                              }
+                            }}
+                            className="flex items-center gap-2 rounded-lg border border-green-300 bg-green-50 px-4 py-2 text-sm font-semibold text-green-700 hover:bg-green-100"
+                          >
+                            <FileCheck className="h-4 w-4" />
+                            View Contract
+                          </button>
+                        )}
+
                       </div>
                     );
                   })()}
@@ -2383,6 +2643,21 @@ const Employees: React.FC = () => {
                         <p className="mt-1 text-xs text-gray-500">
                           {selectedEmployee.email ? `Email: ${selectedEmployee.email}` : 'No email on file'} ·{' '}
                           {selectedEmployee.phone ? `Phone: ${selectedEmployee.phone}` : 'No phone on file'}
+                        </p>
+                      </div>
+
+                      <div className="sm:col-span-2">
+                        <label className="mb-1 block text-sm font-medium text-gray-700">
+                          Schedule a Meeting (optional)
+                        </label>
+                        <input
+                          type="datetime-local"
+                          value={warningMeetingDate}
+                          onChange={event => setWarningMeetingDate(event.target.value)}
+                          className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-[#ef302b]"
+                        />
+                        <p className="mt-1 text-xs text-gray-500">
+                          The scheduled meeting will appear on the dashboard and in the header bell until HR confirms or postpones it.
                         </p>
                       </div>
                     </div>

@@ -84,6 +84,7 @@ const StockCodes: React.FC = () => {
     has_allergens: false,
     allergen_types: [] as AllergenType[],
     approved_supplier_ids: [] as string[],
+    bom_uses_percentage: false,
     status: 'active' as StockStatus,
     low_stock_threshold: '0',
   });
@@ -98,6 +99,7 @@ const StockCodes: React.FC = () => {
       has_allergens: false,
       allergen_types: [],
       approved_supplier_ids: [],
+      bom_uses_percentage: false,
       status: 'active',
       low_stock_threshold: '0',
     });
@@ -117,6 +119,7 @@ const StockCodes: React.FC = () => {
         has_allergens: item.has_allergens || false,
         allergen_types: (item.allergen_types || []) as AllergenType[],
         approved_supplier_ids: item.approved_supplier_ids || [],
+        bom_uses_percentage: item.bom_uses_percentage ?? false,
         status: item.status as StockStatus,
         low_stock_threshold: level ? String(level.low_stock_threshold) : '0',
       });
@@ -145,8 +148,8 @@ const StockCodes: React.FC = () => {
         console.error('[FMS] Failed to save low stock threshold:', levelError);
       }
 
-      const { stock_code, description, item_type, unit_of_measure, storage_condition, has_allergens, allergen_types, approved_supplier_ids, status } = formData;
-      await updateStockCode(editingItem.id, { stock_code, description, item_type, unit_of_measure, storage_condition, has_allergens, allergen_types, approved_supplier_ids, status });
+      const { stock_code, description, item_type, unit_of_measure, storage_condition, has_allergens, allergen_types, approved_supplier_ids, status, bom_uses_percentage } = formData;
+      await updateStockCode(editingItem.id, { stock_code, description, item_type, unit_of_measure, storage_condition, has_allergens, allergen_types, approved_supplier_ids, bom_uses_percentage, status });
       logActivity({
         action_type: 'update',
         entity_type: 'stock_code',
@@ -166,8 +169,8 @@ const StockCodes: React.FC = () => {
         toast.error('Stock code already exists');
         return;
       }
-      const { stock_code, description, item_type, unit_of_measure, storage_condition, has_allergens, allergen_types, approved_supplier_ids, status } = formData;
-      const newStockCode = await addStockCode({ stock_code, description, item_type, unit_of_measure, storage_condition, has_allergens, allergen_types, approved_supplier_ids, status });
+      const { stock_code, description, item_type, unit_of_measure, storage_condition, has_allergens, allergen_types, approved_supplier_ids, status, bom_uses_percentage } = formData;
+      const newStockCode = await addStockCode({ stock_code, description, item_type, unit_of_measure, storage_condition, has_allergens, allergen_types, approved_supplier_ids, bom_uses_percentage, status });
       
       // Create stock level record with threshold for new stock code
       if (newStockCode) {
@@ -453,6 +456,18 @@ const StockCodes: React.FC = () => {
                 </p>
               </div>
 
+              {/* BOM uses percentage */}
+              <div className="flex items-center justify-between rounded-lg border border-border p-3">
+                <div>
+                  <Label htmlFor="bom_uses_percentage">BOM uses %</Label>
+                  <p className="text-sm text-muted-foreground">Component quantities on this product's BOM are entered as percentages that should total 100%.</p>
+                </div>
+                <Checkbox
+                  id="bom_uses_percentage"
+                  checked={formData.bom_uses_percentage}
+                  onCheckedChange={(checked) => setFormData(prev => ({ ...prev, bom_uses_percentage: !!checked }))}
+                />
+              </div>
               {/* Status */}
               <div className="flex items-center justify-between rounded-lg border border-border p-3">
                 <div>
@@ -528,6 +543,7 @@ const StockCodes: React.FC = () => {
                 <th>Type</th>
                 <th>UOM</th>
                 <th>Storage</th>
+                <th>BOM %</th>
                 <th>Allergens</th>
                 <th>Low Stock</th>
                 <th>Status</th>
@@ -546,6 +562,13 @@ const StockCodes: React.FC = () => {
                   </td>
                   <td>{item.unit_of_measure}</td>
                   <td className="capitalize">{item.storage_condition}</td>
+                  <td>
+                    {item.bom_uses_percentage ? (
+                      <Badge variant="outline" className="bg-primary/10 text-primary border-primary/30">Yes</Badge>
+                    ) : (
+                      <span className="text-muted-foreground">No</span>
+                    )}
+                  </td>
                   <td>
                     {item.has_allergens && item.allergen_types && item.allergen_types.length > 0 ? (
                       <div className="flex flex-wrap gap-1">
@@ -620,7 +643,7 @@ const StockCodes: React.FC = () => {
               ))}
                   {filteredStockCodes.length === 0 && (
                 <tr>
-                  <td colSpan={9} className="py-8 text-center text-muted-foreground">
+                  <td colSpan={10} className="py-8 text-center text-muted-foreground">
                     <Package className="mx-auto mb-2 h-8 w-8 opacity-50" />
                     <p>No stock codes found</p>
                   </td>

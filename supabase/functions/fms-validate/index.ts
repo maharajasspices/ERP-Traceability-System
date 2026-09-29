@@ -11,7 +11,7 @@ const getAllowedOrigin = (requestOrigin: string | null): string => {
     .map((o) => o.trim())
     .filter(Boolean);
 
-  // If no origins are configured, allow all origins (security is enforced by JWT auth)
+  // If no ordddigins are configured, allow all origins (security is enforced by JWT auth)
   if (envOrigins.length === 0) {
     return requestOrigin || '*';
   }
@@ -63,6 +63,7 @@ const stockCodeSchema = z.object({
   allergen_types: z.array(z.string().max(50)).max(20).default([]),
   custom_allergens: z.array(z.string().max(100)).max(10).optional().nullable(),
   approved_supplier_ids: z.array(z.string().uuid()).default([]),
+  bom_uses_percentage: z.boolean().optional().default(false),
   status: z.enum(['active', 'inactive']).default('active'),
 });
 
@@ -76,7 +77,7 @@ const receivingSchema = z.object({
   expiry_date: z.string().optional().nullable(),
   delivery_note_number: z.string().max(50).optional().nullable(),
   quality_checks: z.record(z.any()).default({}),
-  status: z.enum(['accepted', 'rejected', 'partial', 'pending']).default('pending'),
+  status: z.enum(['accepted', 'declined', 'partial', 'pending']).default('pending'),
   rejection_reason: z.string().max(500).optional().nullable(),
   received_by: z.string().uuid(),
   received_at: z.string().optional(),
@@ -98,6 +99,7 @@ const organolepticParameterSchema = z.object({
 
 const bomSchema = z.object({
   finished_good_id: z.string().uuid(),
+  parent_finished_good_id: z.string().uuid().optional().nullable(),
   version_number: z.number().int().positive().default(1),
   effective_date: z.string().min(1),
   status: z.enum(['active', 'obsolete']).default('active'),

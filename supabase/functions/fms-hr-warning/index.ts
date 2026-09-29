@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import nodemailer from "npm:nodemailer@6.9.16";
 
 // CORS allowlist
 const getAllowedOrigin = (requestOrigin: string | null): string => {
@@ -29,42 +30,63 @@ const createCorsHeaders = (requestOrigin: string | null) => ({
   'Access-Control-Allow-Credentials': 'true',
 });
 
-// Send email via Resend (or fallback to console log if not configured)
+// Send email via the company SMTP server — the SAME transport used by
+// send-hr-email / sign-contract / fms-stock-order (SMTP_HOST / SMTP_PORT /
+// SMTP_USER / SMTP_PASS secrets), so no extra provider setup is required.
 async function sendEmail(to: string, subject: string, html: string) {
-  const resendApiKey = Deno.env.get('RESEND_API_KEY');
-  const fromEmail = Deno.env.get('RESEND_FROM_EMAIL') || 'zulaigah.benjamin@maharajasspices.co.za';
+  const fromEmail =
+    Deno.env.get('SMTP_USER') || 'zulaigah.benjamin@maharajasspices.co.za';
 
-  if (!resendApiKey) {
-    console.error('[fms-hr-warning] RESEND_API_KEY not configured. Email would be sent to:', to);
-    console.error('[fms-hr-warning] Subject:', subject);
-    console.error('[fms-hr-warning] Body:', html);
+  const smtpPass = Deno.env.get('SMTP_PASS');
+  if (!smtpPass) {
+    console.error('[fms-hr-warning] SMTP_PASS not configured. Email would be sent to:', to);
     return {
       sent: false,
-      reason: 'RESEND_API_KEY not configured. Add the RESEND_API_KEY secret (and optionally RESEND_FROM_EMAIL) in Supabase Dashboard → Settings → Edge Functions → Secrets.',
+      reason: 'SMTP_PASS secret not configured. Add it in Supabase Dashboard → Settings → Edge Functions → Secrets.',
     };
   }
 
-  const res = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${resendApiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      from: fromEmail,
-      to: [to],
+  const port = Number(Deno.env.get('SMTP_PORT') || '465');
+
+  try {
+    const transporter = nodemailer.createTransport({
+      // Port 465 uses implicit SSL/TLS ("secure"), not STARTTLS.
+      host: Deno.env.get('SMTP_HOST') || 'mail.maharajasspices.co.za',
+      port,
+      secure: port === 465,
+      auth: {
+        user: fromEmail,
+        pass: smtpPass,
+      },
+    });
+
+    const info = await transporter.sendMail({
+      from: `"Maharaja Spices HR" <${fromEmail}>`,
+      to,
+      replyTo: fromEmail,
       subject,
       html,
-    }),
-  });
+    });
 
-  if (!res.ok) {
-    const errText = await res.text();
-    console.error('[fms-hr-warning] Resend error:', errText);
-    return { sent: false, reason: `Resend API error: ${errText}` };
+    console.log(`[fms-hr-warning] Email sent to ${to}: messageId=${info?.messageId}`);
+    return { sent: true };
+  } catch (smtpErr) {
+    console.error('[fms-hr-warning] SMTP error:', smtpErr);
+    return {
+      sent: false,
+      reason: smtpErr instanceof Error ? `SMTP error: ${smtpErr.message}` : 'SMTP error while sending email',
+    };
   }
+}
 
-  return { sent: true };
+//Generate a secure token for the employee's HR meeting booking link 
+function generateBookingToken(): string {
+  const bytes =  new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+
+  return Array.from(bytes)
+  .map((byte) => byte.toString(16).padStart(2, '0'))
+  .join('');
 }
 
 // Send WhatsApp via Twilio (or fallback to console log if not configured)
@@ -127,6 +149,71 @@ async function sendNotificationsForWarning(adminClient: any, warning: any, emplo
     day: 'numeric',
   });
 
+  let bookingUrl = '';
+  if (sendEmailFlag && employee.email) {
+    try{
+      //Reuse an existing booking link if this warning was already emailed
+     const { data: existingMeeting, error: meetingLookupError } = await adminClient
+  .from('fms_hr_warnings')
+  .select('booking_token, meeting_status')
+  .eq('id', warning.id)
+  .maybeSingle();
+
+if (meetingLookupError) {
+  console.error(
+    '[fms-hr-warning] Meeting lookup error:',
+    meetingLookupError
+  );
+
+  throw new Error(
+    `Meeting lookup failed: ${meetingLookupError.message}`
+  );
+}
+
+      let bookingToken = existingMeeting?.booking_token;
+
+      if (!bookingToken) {
+        bookingToken = generateBookingToken();
+
+        const { error: bookingError } = await adminClient
+          .from('fms_hr_warnings')
+          .update ({
+            meeting_requested: true,
+            meeting_status:'pending',
+            booking_token: bookingToken,
+          })
+          .eq('id', warning.id);
+
+          if (bookingError) {
+              console.error(
+                '[fms-hr-warning] Failed to create meeting booking token:',
+                bookingError
+              );
+
+              throw new Error(
+                `Failed to create meeting booking token: ${bookingError.message}`
+              );
+            }
+
+      }
+   if (bookingToken) {
+  const appUrl =
+    Deno.env.get('APP_URL') ||
+    'http://localhost:8084';
+
+  bookingUrl =
+    `${appUrl}/book-hr-meeting?token=${encodeURIComponent(bookingToken)}`;
+
+  console.log('[fms-hr-warning] BOOKING URL:', bookingUrl);
+}
+    }catch (bookingErr) {
+      console.error(
+         '[fms-hr-warning] Booking link generation error:',
+          bookingErr
+      )
+    }
+  }
+
   const emailSubject = `Formal ${warningTypeLabel} Warning - ${employeeName}`;
   const emailHtml = `
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e5e7eb; border-radius: 8px;">
@@ -148,9 +235,37 @@ async function sendNotificationsForWarning(adminClient: any, warning: any, emplo
         <p style="margin: 0 0 24px; color: #374151; font-size: 14px; line-height: 1.6;">
           Please take this warning seriously and address the matter immediately. Further disciplinary action may be taken if the issue persists.
         </p>
-        <div style="border-top: 1px solid #e5e7eb; padding-top: 16px;">
-          <p style="margin: 0 0 4px; color: #6b7280; font-size: 12px;">Issued by HR Department</p>
-          <p style="margin: 0; color: #111827; font-size: 14px; font-weight: 600;">Signature: ${warning.signature}</p>
+                <div style="border-top: 1px solid #e5e7eb; padding-top: 16px;">
+          <p style="margin: 0 0 4px; color: #6b7280; font-size: 12px;">
+            Issued by HR Department
+          </p>
+
+          <p style="margin: 0 0 20px; color: #111827; font-size: 14px; font-weight: 600;">
+            Signature: ${warning.signature}
+          </p>
+
+          ${
+            bookingUrl
+              ? `
+                <div style="background: #f3f4f6; padding: 20px; border-radius: 8px; text-align: center;">
+                  <p style="margin: 0 0 12px; color: #374151; font-size: 14px; line-height: 1.5;">
+                    If you would like to discuss this warning with HR, you can book a meeting with the HR department.
+                  </p>
+
+                  <a
+                    href="${bookingUrl}"
+                    style="display: inline-block; background: #111827; color: #ffffff; text-decoration: none; padding: 12px 22px; border-radius: 6px; font-size: 14px; font-weight: 600;"
+                  >
+                    📅 Book a Meeting with HR
+                  </a>
+
+                  <p style="margin: 12px 0 0; color: #6b7280; font-size: 11px;">
+                    Click the button above to choose a suitable date and time.
+                  </p>
+                </div>
+              `
+              : ''
+          }
         </div>
       </div>
     </div>

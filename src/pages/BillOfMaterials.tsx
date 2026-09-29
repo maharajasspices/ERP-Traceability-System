@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
-import { useFMSData } from '@/hooks/useFMSData';
+import { useFMSData, bomParentIds } from '@/hooks/useFMSData';
+import { SearchableMultiSelect } from '@/components/ui/searchable-select';
 import { useSupplierPrices, formatZAR } from '@/hooks/useSupplierPrices';
 import { useFMSAuth } from '@/context/FMSAuthContext';
 import { useDeletePermission } from '@/hooks/useDeletePermission';
@@ -13,7 +14,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
-import { Plus, Search, FileText, Trash2, Eye, Copy, Loader2, Printer, LayoutGrid, Table } from 'lucide-react';
+import { Plus, Search, FileText, Trash2, Eye, Copy, Loader2, Printer, LayoutGrid, Table, Pencil } from 'lucide-react';
 
 const formatDate = (date: string | Date): string => {
   return new Date(date).toLocaleDateString('en-GB', {
@@ -22,6 +23,11 @@ const formatDate = (date: string | Date): string => {
     year: 'numeric',
   });
 };
+
+// Floating-point tolerance (in percentage points) when validating that
+// component percentages total approximately 100%. 100% and 99.999% are accepted;
+// 98% and 101% are rejected.
+const PCT_BOM_TOLERANCE = 0.05;
 
 // Organoleptic Parameters interface
 interface OrganolepticParameter {
@@ -38,7 +44,7 @@ interface ProcessingStep {
 const BillOfMaterials: React.FC = () => {
   const { user } = useFMSAuth();
   const { canDelete } = useDeletePermission();
-  const { boms, stockCodes, loading, addBOM, updateBOM, refreshData } = useFMSData();
+  const { boms, stockCodes, loading, addBOM, updateBOM, setBomFinishedGoods, refreshData } = useFMSData();
   const { avgPriceForStockCode } = useSupplierPrices();
 
   // Recursive per-kg cost: raw/packaging -> supplier avg price;
@@ -123,6 +129,7 @@ const BillOfMaterials: React.FC = () => {
 
   const [formData, setFormData] = useState({
     finished_good_id: '',
+    parent_finished_good_ids: [] as string[],
     effective_date: new Date().toISOString().split('T')[0],
     components: [] as { material_id: string; quantity: string }[],
     processing_steps: [] as ProcessingStep[],
@@ -137,6 +144,7 @@ const BillOfMaterials: React.FC = () => {
   const resetForm = () => {
     setFormData({
       finished_good_id: '',
+      parent_finished_good_ids: [] as string[],
       effective_date: new Date().toISOString().split('T')[0],
       components: [],
       processing_steps: [],
@@ -265,6 +273,18 @@ const BillOfMaterials: React.FC = () => {
       return;
     }
 
+    const finishedGood = getStockCode(formData.finished_good_id);
+    const isPercentageBOM = finishedGood?.bom_uses_percentage === true;
+
+    // Percentage BOMs: component percentages must total approximately 100%.
+    if (isPercentageBOM) {
+      const totalPct = formData.components.reduce((s, c) => s + (parseFloat(c.quantity) || 0), 0);
+      if (Math.abs(totalPct - 100) > PCT_BOM_TOLERANCE) {
+        toast.error(`Component percentages must total approximately 100% (current total: ${totalPct.toFixed(3)}%).`);
+        return;
+      }
+    }
+
     const existingBOMs = boms.filter(b => b.finished_good_id === formData.finished_good_id);
     const newVersion = existingBOMs.length > 0 
       ? Math.max(...existingBOMs.map(b => b.version_number)) + 1 
@@ -278,12 +298,16 @@ const BillOfMaterials: React.FC = () => {
 
     const components = formData.components.map((comp) => ({
       material_stock_code_id: comp.material_id,
-      quantity_per_batch: parseFloat(comp.quantity),
+      quantity_per_batch: isPercentageBOM ? parseFloat(comp.quantity) / 100 : parseFloat(comp.quantity),
     }));
 
     // Include processing steps and organoleptic parameters in the BOM
     const bomData = {
       finished_good_id: formData.finished_good_id,
+      // Legacy column seeds the first link; the join-table rows below are the
+      // source of truth for which finished products this BOM belongs to.
+      // Null for finished-product BOMs.
+      parent_finished_good_id: formData.parent_finished_good_ids[0] || null,
       version_number: newVersion,
       effective_date: formData.effective_date,
       status: 'active',
@@ -295,6 +319,10 @@ const BillOfMaterials: React.FC = () => {
     const result = await addBOM(bomData as any, components);
     
     if (result) {
+      // Persist ALL finished-product links in the join table (no new version).
+      if (formData.parent_finished_good_ids.length > 0) {
+        await setBomFinishedGoods(result.id, formData.parent_finished_good_ids);
+      }
       const fg = getStockCode(formData.finished_good_id);
       logActivity({
         action_type: 'create',
@@ -323,6 +351,8 @@ const BillOfMaterials: React.FC = () => {
 
   const handleCreateNewVersion = (bom: typeof boms[0]) => {
     const bomData = bom as any;
+    const finishedGood = getStockCode(bom.finished_good_id);
+    const isPercentageBOM = finishedGood?.bom_uses_percentage === true;
     const defaultParams: OrganolepticParameter[] = [
       { name: 'Colour', expected_value: '' },
       { name: 'Texture', expected_value: '' },
@@ -338,10 +368,11 @@ const BillOfMaterials: React.FC = () => {
 
     setFormData({
       finished_good_id: bom.finished_good_id,
+      parent_finished_good_ids: bomParentIds(bom as any),
       effective_date: new Date().toISOString().split('T')[0],
       components: bom.components.map(c => ({
         material_id: c.material_stock_code_id,
-        quantity: c.quantity_per_batch.toString(),
+        quantity: isPercentageBOM ? (c.quantity_per_batch * 100).toFixed(3) : c.quantity_per_batch.toString(),
       })),
       processing_steps: (bomData.processing_steps || []).map((step: any, index: number) => ({
         step_order: index + 1,
@@ -351,6 +382,95 @@ const BillOfMaterials: React.FC = () => {
       organoleptic_parameters: [...mergedParams, ...customParams],
     });
     setDialogOpen(true);
+  };
+
+  // -----------------------------------------------------------------------
+  // Edit the finished-product LINKS (fms_bom_finished_goods join rows) on an
+  // EXISTING BOM header — supports MULTIPLE finished products per BOM, no new
+  // version required.
+  // -----------------------------------------------------------------------
+  const [editLinkOpen, setEditLinkOpen] = useState(false);
+  const [editLinkBom, setEditLinkBom] = useState<typeof boms[0] | null>(null);
+  const [editLinkParents, setEditLinkParents] = useState<string[]>([]);
+  const [savingLink, setSavingLink] = useState(false);
+
+  const toggleEditLinkParent = (id: string) => {
+    setEditLinkParents(prev => (prev.includes(id) ? prev.filter(p => p !== id) : [...prev, id]));
+  };
+
+  const handleEditBOMLink = (bom: typeof boms[0]) => {
+    setEditLinkBom(bom);
+    setEditLinkParents(bomParentIds(bom as any));
+    setEditLinkOpen(true);
+  };
+
+  const handleSaveBOMLink = async () => {
+    if (!editLinkBom) return;
+    setSavingLink(true);
+    try {
+      // Replace the join rows for this BOM in fms_bom_finished_goods, then
+      // keep the legacy single column in sync (first link, or NULL). Never
+      // creates a new BOM version; ingredients/calculations are untouched.
+      const desired = Array.from(new Set(editLinkParents.filter(Boolean)));
+      const { error: delError } = await supabase
+        .from('fms_bom_finished_goods')
+        .delete()
+        .eq('bom_id', editLinkBom.id);
+      if (delError) throw delError;
+      if (desired.length > 0) {
+        const { error: insError } = await supabase
+          .from('fms_bom_finished_goods')
+          .insert(desired.map(fgId => ({ bom_id: editLinkBom.id, finished_good_id: fgId })));
+        if (insError) throw insError;
+      }
+      const legacy = desired[0] || null;
+      const { data, error } = await supabase
+        .from('fms_bom')
+        .update({ parent_finished_good_id: legacy })
+        .eq('id', editLinkBom.id)
+        .select()
+        .single();
+      if (error || !data) {
+        console.error('[BOM] finished-good links update error:', error);
+        const msg = (error as any)?.message || 'Unknown database error';
+        const code = (error as any)?.code ? ` (code ${(error as any).code})` : '';
+        const hint = /column|schema cache|PGRST204|does not exist|42703|42P01/i.test(msg)
+          ? ' — the link tables are missing. Apply supabase/migrations/20260921000000_bom_parent_finished_good.sql first (and redeploy if using a hosted DB).'
+          : '';
+        toast.error(`Failed to save finished-product links: ${msg}${code}${hint}`);
+        return;
+      }
+
+      const product = getStockCode(editLinkBom.finished_good_id);
+      const parents = desired.map(id => getStockCode(id)?.stock_code).filter(Boolean);
+      logActivity({
+        action_type: 'update',
+        entity_type: 'bom',
+        entity_id: `${product?.stock_code || 'Unknown'} v${editLinkBom.version_number}`,
+        entity_name: product?.description || 'Unknown product',
+        details: {
+          field: 'bom_finished_good_links',
+          parent_finished_goods: parents,
+        },
+      });
+      toast.success(
+        desired.length === 0
+          ? 'Finished-product links removed from the existing BOM'
+          : `Finished-product links updated (${parents.join(', ') || desired.length} selected)`
+      );
+      setEditLinkOpen(false);
+      setEditLinkBom(null);
+      await refreshData();
+      // Keep the view dialog in sync if it is showing this BOM
+      setSelectedBOM(prev => (prev && prev.id === data.id
+        ? { ...prev, parent_finished_good_id: (data as any).parent_finished_good_id, parent_finished_good_ids: desired } as any
+        : prev));
+    } catch (e: any) {
+      console.error('[BOM] finished-good links update failed:', e);
+      toast.error('Failed to save finished-product links: ' + (e?.message || 'Unknown error'));
+    } finally {
+      setSavingLink(false);
+    }
   };
 
   const handleDeleteBOM = async (bomId: string) => {
@@ -403,6 +523,10 @@ const BillOfMaterials: React.FC = () => {
   const handlePrintBOM = async (bom: typeof boms[0]) => {
     const finishedGood = getStockCode(bom.finished_good_id);
     const bomData = bom as any;
+    const isPercentageBOM = finishedGood?.bom_uses_percentage === true;
+    const totalPct = isPercentageBOM
+      ? bom.components.reduce((s, c) => s + (Number(c.quantity_per_batch) || 0) * 100, 0)
+      : 0;
     const printWindow = window.open('', '_blank');
     if (!printWindow) return;
 
@@ -425,10 +549,13 @@ const BillOfMaterials: React.FC = () => {
 
     const componentsHtml = bom.components.map((comp) => {
       const material = getStockCode(comp.material_stock_code_id);
+      const qtyDisplay = isPercentageBOM
+        ? `${(Number(comp.quantity_per_batch) * 100).toFixed(3)}%`
+        : `${escapeHtml(String(comp.quantity_per_batch))} ${escapeHtml(material?.unit_of_measure || '')}`;
       return `<tr>
         <td style="padding: 8px; border: 1px solid #ddd;">${escapeHtml(material?.stock_code || '')}</td>
         <td style="padding: 8px; border: 1px solid #ddd;">${escapeHtml(material?.description || '')}</td>
-        <td style="padding: 8px; border: 1px solid #ddd; text-align: right;">${escapeHtml(String(comp.quantity_per_batch))} ${escapeHtml(material?.unit_of_measure || '')}</td>
+        <td style="padding: 8px; border: 1px solid #ddd; text-align: right;">${qtyDisplay}</td>
       </tr>`;
     }).join('');
 
@@ -484,9 +611,12 @@ const BillOfMaterials: React.FC = () => {
         </div>
         <h3>Components</h3>
         <table>
-          <thead><tr><th>Stock Code</th><th>Description</th><th style="text-align: right;">Qty per Batch</th></tr></thead>
+          <thead><tr><th>Stock Code</th><th>Description</th><th style="text-align: right;">${isPercentageBOM ? 'Quantity (%)' : 'Qty per Batch'}</th></tr></thead>
           <tbody>${componentsHtml}</tbody>
         </table>
+        ${isPercentageBOM ? `
+        <p style="text-align: right; font-size: 13px; color: #333; margin-top: -10px; margin-bottom: 20px;">Total % <strong>${totalPct.toFixed(3)}%</strong> ${Math.abs(totalPct - 100) > PCT_BOM_TOLERANCE ? '<span style="color:#b45309;">— should equal 100%</span>' : '— should equal 100%'}</p>
+        ` : ''}
         ${stepsHtml ? `
         <h3>Processing Steps</h3>
         <table>
@@ -527,6 +657,66 @@ const BillOfMaterials: React.FC = () => {
   const selectedFinishedGood = formData.finished_good_id 
     ? getStockCode(formData.finished_good_id) 
     : null;
+const isPercentageBOM = selectedFinishedGood?.bom_uses_percentage === true;
+
+// ---------------------------------------------------------------------------
+// "Where Used" explorer: pick any stock code (raw material, WIP, packaging,
+// finished good) and see every BOM it appears in, its dosage there, and the
+// BOM status/version. This is the reverse lookup of the BOM components view.
+// ---------------------------------------------------------------------------
+const whereUsedOptions: SearchableSelectOption[] = useMemo(() =>
+  stockCodes
+    .filter(sc => sc.status === 'active')
+    .slice()
+    .sort((a, b) => a.stock_code.localeCompare(b.stock_code))
+    .map(sc => ({
+      value: sc.id,
+      label: sc.stock_code,
+      sublabel: sc.description,
+      badge: sc.item_type.replace('_', ' '),
+    })),
+  [stockCodes]
+);
+const [whereUsedId, setWhereUsedId] = useState('');
+const [whereUsedIncludeObsolete, setWhereUsedIncludeObsolete] = useState(false);
+interface WhereUsedRow {
+  bomId: string;
+  bomProductId: string;
+  version: number;
+  status: string;
+  dosageRaw: number;
+  dosageDisplay: string;
+  /** Every finished product this BOM version is linked to (join table). */
+  parentFgIds: string[];
+}
+const whereUsedRows: WhereUsedRow[] = useMemo(() => {
+  if (!whereUsedId) return [];
+  const rows: WhereUsedRow[] = [];
+  for (const bom of boms) {
+    if (bom.status === 'obsolete' && !whereUsedIncludeObsolete) continue;
+    const comp = (bom.components || []).find((c: any) => c.material_stock_code_id === whereUsedId);
+    if (!comp) continue;
+    const parentProduct = getStockCode(bom.finished_good_id);
+    const usesPct = (parentProduct as any)?.bom_uses_percentage === true;
+    const raw = Number((comp as any).quantity_per_batch) || 0;
+    rows.push({
+      bomId: bom.id,
+      bomProductId: bom.finished_good_id,
+      version: bom.version_number,
+      status: bom.status,
+      dosageRaw: raw,
+      dosageDisplay: usesPct ? `${(raw * 100).toFixed(3)}%` : `${raw} ${getStockCode(whereUsedId)?.unit_of_measure || ''}`.trim(),
+      parentFgIds: bomParentIds(bom as any),
+    });
+  }
+  return rows.sort((a, b) => {
+    const pa = getStockCode(a.bomProductId)?.stock_code || '';
+    const pb = getStockCode(b.bomProductId)?.stock_code || '';
+    if (pa !== pb) return pa.localeCompare(pb);
+    return b.version - a.version;
+  });
+}, [boms, whereUsedId, whereUsedIncludeObsolete, stockCodes]);
+const whereUsedSelected = whereUsedId ? getStockCode(whereUsedId) : null;
 
   if (loading) {
     return (
@@ -604,6 +794,25 @@ const BillOfMaterials: React.FC = () => {
                 </div>
               </div>
 
+              {/* Explicit finished-product links for WIP sub-assembly BOMs */}
+              {selectedFinishedGood?.item_type === 'work_in_progress' && (
+                <div className="space-y-2">
+                  <Label>Belongs to Finished Product(s)</Label>
+                  <SearchableMultiSelect
+                    options={finishedGoodOptions.filter(o => {
+                      const sc = getStockCode(o.value);
+                      return sc?.item_type === 'finished_good';
+                    })}
+                    value={formData.parent_finished_good_ids}
+                    onValueChange={(value) => setFormData(prev => ({ ...prev, parent_finished_good_ids: value }))}
+                    placeholder="Type to search the finished products this WIP belongs to..."
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Link this WIP BOM to every finished product it is made for (e.g. WPIC009 → APIC002, APIC003). The Batch Sheet uses these links to show exactly the stages belonging to that product.
+                  </p>
+                </div>
+              )}
+
               {selectedFinishedGood && (
                 <div className="rounded-lg border border-primary/20 bg-primary/5 p-3">
                   <p className="font-medium">{selectedFinishedGood.description}</p>
@@ -666,9 +875,9 @@ const BillOfMaterials: React.FC = () => {
                           </div>
                           <div className="flex items-center gap-2 w-full sm:w-auto">
                             <div className="w-24">
-                              <Input type="number" value={comp.quantity} onChange={(e) => updateComponent(index, 'quantity', e.target.value)} placeholder="Qty" min="0" step="0.01" />
+                              <Input type="number" value={comp.quantity} onChange={(e) => updateComponent(index, 'quantity', e.target.value)} placeholder={isPercentageBOM ? 'Qty %' : 'Qty'} min="0" step="0.01" />
                             </div>
-                            <div className="w-16 text-sm text-muted-foreground pt-2">{material?.unit_of_measure || 'UOM'}</div>
+                            <div className="w-16 text-sm text-muted-foreground pt-2">{isPercentageBOM ? '%' : (material?.unit_of_measure || 'UOM')}</div>
                             <Button type="button" variant="ghost" size="icon" onClick={() => removeComponent(index)}>
                               <Trash2 className="h-4 w-4 text-destructive" />
                             </Button>
@@ -681,15 +890,17 @@ const BillOfMaterials: React.FC = () => {
                 {formData.components.length > 0 && (() => {
                   const total = formData.components.reduce((s, c) => s + (parseFloat(c.quantity) || 0), 0);
                   const display = total.toFixed(4).replace(/\.?0+$/, '');
-                  const off = Math.abs(total - 1) > 0.0001;
+                  const off = isPercentageBOM
+                    ? Math.abs(total - 100) > PCT_BOM_TOLERANCE
+                    : Math.abs(total - 1) > 0.0001;
                   return (
                     <div className="flex items-center justify-between rounded-lg border border-border bg-muted/30 px-3 py-2 text-sm">
-                      <span className="font-semibold">Total Qty per Batch</span>
+                      <span className="font-semibold">{isPercentageBOM ? 'Total %' : 'Total Qty per Batch'}</span>
                       <div className="flex items-center gap-2">
                         {off && (
-                          <span className="text-xs italic text-muted-foreground">suggested should equal 1</span>
+                          <span className="text-xs italic text-muted-foreground">{isPercentageBOM ? 'components should total 100%' : 'suggested should equal 1'}</span>
                         )}
-                        <span className="font-semibold">{display}</span>
+                        <span className="font-semibold">{isPercentageBOM ? `${total.toFixed(3)}%` : display}</span>
                       </div>
                     </div>
                   );
@@ -774,6 +985,112 @@ const BillOfMaterials: React.FC = () => {
         </div>
       </div>
 
+      {/* Where Used explorer: reverse lookup — pick any raw material / WIP / finished
+          good and see every BOM it is used in, with its dosage and where it is used. */}
+      <div className="rounded-xl border border-border bg-card p-3 sm:p-4 space-y-3">
+        <div>
+          <h3 className="font-semibold text-foreground text-sm sm:text-base">Where Used</h3>
+          <p className="text-xs sm:text-sm text-muted-foreground">Select a raw material, WIP or finished good to see every BOM it appears in, its dosage there, and where it is used.</p>
+        </div>
+        <div className="flex flex-col sm:flex-row gap-2 sm:items-end">
+          <div className="flex-1 space-y-1">
+            <Label>Material / Product *</Label>
+            <SearchableSelect
+              options={whereUsedOptions}
+              value={whereUsedId}
+              onValueChange={setWhereUsedId}
+              placeholder="Type to search any stock code..."
+            />
+          </div>
+          <Button
+            variant={whereUsedIncludeObsolete ? 'default' : 'outline'}
+            size="sm"
+            onClick={() => setWhereUsedIncludeObsolete(v => !v)}
+          >
+            {whereUsedIncludeObsolete ? 'Including Archived' : 'Include Archived'}
+          </Button>
+          {whereUsedId && (
+            <Button variant="ghost" size="sm" onClick={() => setWhereUsedId('')}>Clear</Button>
+          )}
+        </div>
+        {whereUsedId && (
+          <div className="rounded-lg border border-border overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Used In (BOM)</th>
+                    <th>Description</th>
+                    <th>Version</th>
+                    <th className="text-right">Dosage</th>
+                    <th>Belongs To</th>
+                    <th>Status</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {whereUsedRows.map((row) => {
+                    const parentProduct = getStockCode(row.bomProductId);
+                    const parentLinks = row.parentFgIds
+                      .map(id => getStockCode(id))
+                      .filter(Boolean) as { stock_code: string; description?: string }[];
+                    const bom = boms.find(b => b.id === row.bomId);
+                    return (
+                      <tr key={row.bomId}>
+                        <td className="font-medium">{parentProduct?.stock_code}</td>
+                        <td className="max-w-xs truncate">{parentProduct?.description}</td>
+                        <td><Badge variant="outline">v{row.version}</Badge></td>
+                        <td className="text-right font-medium">{row.dosageDisplay}</td>
+                        <td>
+                          {parentLinks.length === 0
+                            ? <span className="text-muted-foreground">—</span>
+                            : (
+                              <div className="flex flex-wrap gap-1">
+                                {parentLinks.map(p => (
+                                  <Badge key={p.stock_code} variant="outline" title={p.description}>{p.stock_code}</Badge>
+                                ))}
+                              </div>
+                            )}
+                        </td>
+                        <td>
+                          <span className={row.status === 'active' ? 'badge-active' : 'badge-inactive'}>
+                            {row.status}
+                          </span>
+                        </td>
+                        <td>
+                          {bom && (
+                            <Button variant="ghost" size="sm" onClick={() => handleViewBOM(bom)} title="View BOM">
+                              <Eye className="h-4 w-4" />
+                            </Button>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {whereUsedRows.length === 0 && (
+                    <tr>
+                      <td colSpan={7} className="text-center py-8">
+                        <FileText className="mx-auto mb-2 h-8 w-8 text-muted-foreground/50" />
+                        <p className="font-medium text-foreground">
+                          {whereUsedSelected?.stock_code} is not used in any {whereUsedIncludeObsolete ? '' : 'active '}BOM
+                        </p>
+                        <p className="mt-1 text-sm text-muted-foreground">Try including archived BOMs, or check the stock code.</p>
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+            {whereUsedRows.length > 0 && (
+              <div className="border-t border-border bg-muted/30 px-3 py-2 text-xs sm:text-sm text-muted-foreground">
+                {whereUsedSelected?.stock_code} is used in <strong>{whereUsedRows.length}</strong> BOM{whereUsedRows.length === 1 ? '' : 's'}
+                {whereUsedIncludeObsolete ? ' (including archived)' : ' (active only)'}.
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
       {/* Table View */}
       {viewMode === 'table' ? (
         <div className="rounded-xl border border-border bg-card overflow-hidden">
@@ -815,6 +1132,9 @@ const BillOfMaterials: React.FC = () => {
                           </Button>
                           <Button variant="ghost" size="sm" onClick={() => handlePrintBOM(bom)} title="Print">
                             <Printer className="h-4 w-4" />
+                          </Button>
+                          <Button variant="ghost" size="sm" onClick={() => handleEditBOMLink(bom)} title="Edit finished-product link">
+                            <Pencil className="h-4 w-4" />
                           </Button>
                           <Button variant="ghost" size="sm" onClick={() => handleCreateNewVersion(bom)} title="New Version">
                             <Copy className="h-4 w-4" />
@@ -890,6 +1210,9 @@ const BillOfMaterials: React.FC = () => {
                   <Button variant="outline" size="sm" onClick={() => handlePrintBOM(bom)} title="Print BOM">
                     <Printer className="h-4 w-4" />
                   </Button>
+                  <Button variant="outline" size="sm" className="flex-1" onClick={() => handleEditBOMLink(bom)}>
+                    <Pencil className="mr-1 h-4 w-4" />Edit Link
+                  </Button>
                   <Button variant="outline" size="sm" className="flex-1" onClick={() => handleCreateNewVersion(bom)}>
                     <Copy className="mr-1 h-4 w-4" />New Version
                   </Button>
@@ -933,6 +1256,7 @@ const BillOfMaterials: React.FC = () => {
           <DialogHeader><DialogTitle>Bill of Materials Details</DialogTitle></DialogHeader>
           {selectedBOM && (() => {
             const bomData = selectedBOM as any;
+            const viewIsPercent = getStockCode(selectedBOM.finished_good_id)?.bom_uses_percentage === true;
             const defaultParams = [
               { name: 'Colour', expected_value: '' },
               { name: 'Texture', expected_value: '' },
@@ -964,11 +1288,28 @@ const BillOfMaterials: React.FC = () => {
                   </div>
                 </div>
 
+                {bomParentIds(bomData).length > 0 && (
+                  <div>
+                    <Label className="text-muted-foreground">Belongs to Finished Product(s)</Label>
+                    <div className="flex flex-wrap gap-1.5 pt-1">
+                      {bomParentIds(bomData).map(id => {
+                        const parentSc = getStockCode(id);
+                        return (
+                          <Badge key={id} variant="secondary" title={parentSc?.description}>
+                            {parentSc?.stock_code || id}
+                            {parentSc?.description ? ` — ${parentSc.description}` : ''}
+                          </Badge>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
                 <div className="space-y-2">
                   <Label className="font-semibold">Components</Label>
                   <div className="rounded-lg border border-border overflow-hidden">
                     <table className="data-table">
-                      <thead><tr><th>Material</th><th>Description</th><th className="text-right">Qty per Batch</th><th className="text-right">Price / kg</th><th className="text-right">Line Cost</th></tr></thead>
+                      <thead><tr><th>Material</th><th>Description</th><th className="text-right">{viewIsPercent ? 'Quantity (%)' : 'Qty per Batch'}</th><th className="text-right">Price / kg</th><th className="text-right">Line Cost</th></tr></thead>
                       <tbody>
                         {selectedBOM.components.map((comp) => {
                           const material = getStockCode(comp.material_stock_code_id);
@@ -978,7 +1319,7 @@ const BillOfMaterials: React.FC = () => {
                             <tr key={comp.id}>
                               <td className="font-medium">{material?.stock_code}</td>
                               <td>{material?.description}</td>
-                              <td className="text-right">{comp.quantity_per_batch} {material?.unit_of_measure}</td>
+                              <td className="text-right">{viewIsPercent ? `${(Number(comp.quantity_per_batch) * 100).toFixed(3)}%` : `${comp.quantity_per_batch} ${material?.unit_of_measure}`}</td>
                               <td className="text-right">{formatZAR(price)}</td>
                               <td className="text-right">{formatZAR(lineCost)}</td>
                             </tr>
@@ -996,7 +1337,7 @@ const BillOfMaterials: React.FC = () => {
                           return (
                             <tr className="border-t font-semibold bg-muted/30">
                               <td colSpan={2} className="text-right">Total</td>
-                              <td className="text-right">{totalQty.toFixed(4).replace(/\.?0+$/, '')}</td>
+                              <td className="text-right">{viewIsPercent ? `${(totalQty * 100).toFixed(3)}%` : totalQty.toFixed(4).replace(/\.?0+$/, '')}</td>
                               <td className="text-right text-xs text-muted-foreground">{missing ? '(partial)' : ''}</td>
                               <td className="text-right">{formatZAR(totalCost)}</td>
                             </tr>
@@ -1010,8 +1351,12 @@ const BillOfMaterials: React.FC = () => {
                     const missing = selectedBOM.components.some(c => costPerKg(c.material_stock_code_id) == null);
                     return (
                       <>
-                        {Math.abs(total - 1) > 0.0001 && (
-                          <p className="text-xs text-muted-foreground italic">Note: suggested total should equal 1 (current: {total.toFixed(4).replace(/\.?0+$/, '')}).</p>
+                        {viewIsPercent ? (
+                          <p className="text-xs text-muted-foreground italic">Total % <strong>{(total * 100).toFixed(3)}%</strong> {Math.abs(total * 100 - 100) > PCT_BOM_TOLERANCE ? '— should equal 100%' : '— should equal 100%'}.</p>
+                        ) : (
+                          Math.abs(total - 1) > 0.0001 && (
+                            <p className="text-xs text-muted-foreground italic">Note: suggested total should equal 1 (current: {total.toFixed(4).replace(/\.?0+$/, '')}).</p>
+                          )
                         )}
                         {missing && (
                           <p className="text-xs text-amber-600 italic">Some materials have no price available — total cost is partial. Set prices under Suppliers → Materials & Pricing, or ensure WIP components have an active BOM.</p>
@@ -1099,6 +1444,66 @@ const BillOfMaterials: React.FC = () => {
               </div>
             );
           })()}
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit finished-product LINKS (join table) on an existing BOM */}
+      <Dialog open={editLinkOpen} onOpenChange={setEditLinkOpen}>
+        <DialogContent className="sm:max-w-[500px]">
+          <DialogHeader>
+            <DialogTitle>Edit Finished-Product Links</DialogTitle>
+            <DialogDescription>
+              Update which finished products this BOM belongs to — saved directly on this BOM version, no new version is created.
+            </DialogDescription>
+          </DialogHeader>
+          {editLinkBom && (() => {
+            const product = getStockCode(editLinkBom.finished_good_id);
+            const parentOptions = finishedGoodOptions.filter(o => {
+              const sc = getStockCode(o.value);
+              return sc?.item_type === 'finished_good';
+            });
+            return (
+              <div className="space-y-4 py-2">
+                <div className="rounded-lg border border-border p-3">
+                  <Label className="text-muted-foreground">BOM</Label>
+                  <p className="font-medium">{product?.stock_code} — {product?.description}</p>
+                  <p className="text-sm text-muted-foreground">Version {editLinkBom.version_number} · {editLinkBom.status}</p>
+                </div>
+                <div className="space-y-2">
+                  <Label>Belongs to Finished Product(s)</Label>
+                  <SearchableMultiSelect
+                    options={parentOptions}
+                    value={editLinkParents}
+                    onValueChange={setEditLinkParents}
+                    placeholder="Type to search the finished products this BOM belongs to..."
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    e.g. WPIC009 → APIC002, APIC003. The Batch Sheet uses these links to show exactly the stages belonging to each finished product.
+                  </p>
+                  {/* Quick toggle list of currently linked products */}
+                  {editLinkParents.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 pt-1">
+                      {editLinkParents.map(id => {
+                        const sc = getStockCode(id);
+                        return (
+                          <Badge key={id} variant="secondary" className="cursor-pointer" onClick={() => toggleEditLinkParent(id)} title="Click to remove">
+                            {sc?.stock_code || id} ×
+                          </Badge>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditLinkOpen(false)} disabled={savingLink}>Cancel</Button>
+            <Button onClick={handleSaveBOMLink} disabled={savingLink}>
+              {savingLink && <Loader2 className="mr-1 h-4 w-4 animate-spin" />}
+              Save Link
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

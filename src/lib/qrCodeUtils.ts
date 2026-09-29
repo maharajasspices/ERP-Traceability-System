@@ -216,3 +216,181 @@ export function printQRCodes(qr1: string, qr2: string, batchNumber: string, addi
   `);
   printWindow.document.close();
 }
+
+
+// ============================================================
+// Finished-goods expiry / best-before sticker (30 x 30 mm)
+// ============================================================
+
+// Physical sticker geometry. All layout below is expressed in millimetres and
+// converted to device pixels at print DPI, so the sticker stays exactly 3 cm
+// x 3 cm on paper while the text scales with it (hard-coded px sizes did not:
+// at 300 DPI a 22 px glyph is only ~1.9 mm tall on the physical sticker, which
+// is too small to read).
+const STICKER_SIZE_MM = 30;
+const STICKER_DPI = 300;
+
+export function renderExpirySticker(
+  batchNumber: string,
+  manufacturedDate: string,
+  bestBefore: string
+): HTMLCanvasElement | null {
+  const mmToPx = (mm: number) => (mm / 25.4) * STICKER_DPI;
+  const px = Math.round(mmToPx(STICKER_SIZE_MM)); // ~354 px
+
+  const canvas = document.createElement('canvas');
+  canvas.width = px;
+  canvas.height = px;
+
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+
+  // Safe margin so nothing bleeds off the sticker when the cutter is slightly
+  // off, and so text never touches the edge.
+  const marginMm = 2;
+  const margin = mmToPx(marginMm);
+  const maxWidth = px - margin * 2;
+  const centerX = px / 2;
+
+  // White background
+  ctx.fillStyle = '#FFFFFF';
+  ctx.fillRect(0, 0, px, px);
+
+  ctx.fillStyle = '#000000';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'alphabetic';
+
+  // Type sizes in millimetres of cap-ish height.
+  const labelMm = 2.4;   // ~7 pt
+  const valueMm = 3.4;   // ~9.5 pt
+
+  /**
+   * Draw `text` centred at x, shrinking the font (never below minRatio of the
+   * requested size) until it fits within maxWidth. Long batch numbers would
+   * otherwise overflow the 3 cm sticker.
+   */
+  const drawFitted = (
+    text: string,
+    x: number,
+    y: number,
+    sizeMm: number,
+    minRatio = 0.55
+  ) => {
+    let sizePx = mmToPx(sizeMm);
+    const minPx = sizePx * minRatio;
+
+    ctx.font = `bold ${sizePx}px Arial`;
+    while (ctx.measureText(text).width > maxWidth && sizePx > minPx) {
+      sizePx -= 1;
+      ctx.font = `bold ${sizePx}px Arial`;
+    }
+
+    ctx.fillText(text, x, y);
+  };
+
+  // Three evenly spaced rows. Baseline positions are measured from the top so
+  // the layout fills the sticker instead of bunching at the top.
+  const drawSection = (
+    label: string,
+    value: string,
+    labelBaselineMm: number,
+    valueBaselineMm: number
+  ) => {
+    ctx.font = `bold ${mmToPx(labelMm)}px Arial`;
+    ctx.fillText(label, centerX, mmToPx(labelBaselineMm));
+
+    drawFitted(value || '—', centerX, mmToPx(valueBaselineMm), valueMm);
+  };
+
+  drawSection(
+    'BATCH NUMBER:',
+    batchNumber || '—',
+    6.5,
+    11.5
+  );
+
+  drawSection(
+    'MANUFACTURED:',
+    manufacturedDate || '—',
+    15.5,
+    20.5
+  );
+
+  drawSection(
+    'BEST BEFORE:',
+    bestBefore || '—',
+    24,
+    29 - marginMm * 0.5
+  );
+
+  return canvas;
+}
+
+
+// Download the 30 x 30 mm expiry sticker as a PNG image
+export function downloadExpirySticker(
+  batchNumber: string,
+  manufacturedDate: string,
+  bestBefore: string
+): void {
+  const canvas = renderExpirySticker(batchNumber, manufacturedDate, bestBefore);
+  if (!canvas) return;
+
+  const link = document.createElement('a');
+  const safe = (batchNumber || 'STICKER').replace(/[^a-zA-Z0-9_-]/g, '_');
+  link.download = `BestBefore_${safe}.png`;
+  link.href = canvas.toDataURL('image/png');
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+}
+
+// Open a print window sized for the 30 x 30 mm label (4-up) and auto print
+export function printExpiryStickers(
+  batchNumber: string,
+  manufacturedDate: string,
+  bestBefore: string,
+  copies = 4
+): void {
+  const canvas = renderExpirySticker(batchNumber, manufacturedDate, bestBefore);
+  if (!canvas) return;
+
+  const printWindow = window.open('', '_blank');
+  if (!printWindow) return;
+  const imgSrc = canvas.toDataURL('image/png');
+  const safeBatch = escapeHtml(batchNumber || 'STICKER');
+
+  const stickers = Array.from({ length: copies }, () =>
+    `<img class="sticker" src="${imgSrc}" alt="${safeBatch}" />`
+  ).join('\n      ');
+
+  printWindow.document.write(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>Best Before Sticker - ${safeBatch}</title>
+      <style>
+        @page { size: 30mm 30mm; margin: 0; }
+        html, body { margin: 0; padding: 0; }
+        .no-print { display: none; }
+        .sheet { display: flex; flex-wrap: wrap; gap: 0; }
+        .sticker { width: 30mm; height: 30mm; display: block; }
+        @media print {
+          .sticker { page-break-inside: avoid; }
+        }
+      </style>
+    </head>
+    <body>
+      <div class="no-print" style="padding: 12px; font-family: Arial, sans-serif;">
+        <p>Printing best-before sticker for batch <strong>${safeBatch}</strong> (${copies} copies on a 30 x 30 mm label).</p>
+        <button onclick="window.print()">Print</button>
+      </div>
+      <div class="sheet">
+      ${stickers}
+      </div>
+      <script>setTimeout(function(){ window.print(); }, 700);</script>
+    </body>
+    </html>
+  `);
+  printWindow.document.close();
+}

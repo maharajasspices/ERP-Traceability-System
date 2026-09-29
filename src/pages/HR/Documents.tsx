@@ -7,7 +7,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { supabase} from '@/integrations/supabase/client'
-
+//zulaigah.benjamin@maharajasspices.co.za
 const DOCUMENT_TYPES = [
   { value: 'contract', label: 'Contract' },
   { value: 'id_document', label: 'ID Document' },
@@ -24,10 +24,13 @@ const typeStyles: Record<string, string> = {
   other: 'bg-muted text-muted-foreground border-border',
 };
 
+
+
 const Documents: React.FC = () => {
   const { documents, employees, contractSignatures, loading, uploadingDocument, uploadDocument, deleteDocument, sendContractForSignature } = useHRData();
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
+
 
   const [showUpload, setShowUpload] = useState(false);
   const [uploadEmployeeId, setUploadEmployeeId] = useState('');
@@ -44,6 +47,7 @@ const Documents: React.FC = () => {
     employees.forEach((e) => map.set(e.id, { first_name: e.first_name, last_name: e.last_name, contract_signed: e.contract_signed, contract_signed_date: e.contract_signed_date }));
     return map;
   }, [employees]);
+
 
   const filtered = useMemo(() => {
     return documents.filter((d) => {
@@ -84,6 +88,7 @@ const Documents: React.FC = () => {
     }
   };
 
+
   const handleDelete = async () => {
     if (!deleteTarget) return;
     const doc = documents.find((d) => d.id === deleteTarget);
@@ -91,7 +96,7 @@ const Documents: React.FC = () => {
     setDeleteTarget(null);
   };
 
-  // Send a contract document to its employee for electronic signature.
+    // Send a contract document to its employee for electronic signature.
   const handleSendForSignature = async (doc: HRDocument) => {
     if (!doc.employee_id) {
       toast.error('This document is not linked to an employee.');
@@ -104,6 +109,7 @@ const Documents: React.FC = () => {
       setSendingSignatureId(null);
     }
   };
+
 
   // The latest pending signing request for a given contract document.
   const getDocumentSignature = (documentId?: string) => {
@@ -280,16 +286,29 @@ const Documents: React.FC = () => {
                       {new Date(d.created_at).toLocaleDateString()}
                     </td>
                     <td className="px-4 py-3">
-                      <div className="flex items-center gap-2">
-                        <a
-                          href={d.file_path}
-                          target="_blank"
-                          rel="noopener noreferrer"
+                                             <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={async (e) => {
+                            e.preventDefault();
+                            if (!d.file_path) {
+                              toast.error('This document has no file attached.');
+                              return;
+                            }
+                            const { data, error } = await supabase.storage
+                              .from('hr-documents')
+                              .createSignedUrl(d.file_path, 60);
+                            if (error || !data?.signedUrl) {
+                              toast.error(error?.message ?? 'Failed to open document.');
+                              return;
+                            }
+                            window.open(data.signedUrl, '_blank', 'noopener,noreferrer');
+                          }}
                           className="inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1 text-xs font-medium text-foreground transition-colors hover:bg-muted"
                         >
                           <Download className="h-3.5 w-3.5" />
                           View
-                        </a>
+                        </button>
                         {d.document_type === 'contract' && d.employee_id && (
                           (() => {
                             const docSig = getDocumentSignature(d.id);

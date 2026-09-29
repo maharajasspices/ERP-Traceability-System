@@ -67,6 +67,7 @@ export const stockCodeSchema = z.object({
   has_allergens: z.boolean().default(false),
   allergen_types: z.array(z.string().max(50)).max(20).default([]),
   approved_supplier_ids: z.array(z.string().uuid('Invalid supplier ID')).default([]),
+  bom_uses_percentage: z.boolean().optional().default(false),
   status: z.enum(['active', 'inactive']).default('active'),
 });
 
@@ -90,7 +91,7 @@ export const receivingSchema = z.object({
     .optional()
     .nullable(),
   quality_checks: z.record(z.any()).default({}),
-  status: z.enum(['accepted', 'rejected', 'partial', 'pending']).default('pending'),
+  status: z.enum(['accepted', 'declined', 'partial', 'pending']).default('pending'),
   rejection_reason: z.string()
     .max(500, 'Rejection reason must be less than 500 characters')
     .optional()
@@ -116,6 +117,9 @@ const organolepticParameterSchema = z.object({
 // BOM validation schema
 export const bomSchema = z.object({
   finished_good_id: z.string().uuid('Invalid finished good'),
+  parent_finished_good_id: z.string().uuid('Invalid parent finished good')
+    .optional()
+    .nullable(),
   version_number: z.number().int().positive().default(1),
   effective_date: z.string().min(1, 'Effective date is required'),
   status: z.enum(['active', 'obsolete']).default('active'),

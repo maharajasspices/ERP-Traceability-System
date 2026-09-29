@@ -153,4 +153,150 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
   );
 };
 
+interface SearchableMultiSelectProps {
+  options: SearchableSelectOption[];
+  value: string[];
+  onValueChange: (value: string[]) => void;
+  placeholder?: string;
+  disabled?: boolean;
+  className?: string;
+}
+
+export const SearchableMultiSelect: React.FC<SearchableMultiSelectProps> = ({
+  options,
+  value,
+  onValueChange,
+  placeholder = 'Search...',
+  disabled = false,
+  className,
+}) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const selectedOptions = useMemo(() =>
+    value.map((v) => options.find((opt) => opt.value === v)).filter(Boolean) as SearchableSelectOption[],
+    [options, value]
+  );
+
+  const filteredOptions = useMemo(() => {
+    if (!searchQuery) return options.slice(0, 50);
+    return options.filter(opt =>
+      opt.label.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      opt.sublabel?.toLowerCase().includes(searchQuery.toLowerCase())
+    ).slice(0, 50);
+  }, [options, searchQuery]);
+
+  // Close on outside click
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setIsOpen(false);
+        setSearchQuery('');
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const toggle = (optionValue: string) => {
+    if (value.includes(optionValue)) {
+      onValueChange(value.filter((v) => v !== optionValue));
+    } else {
+      onValueChange([...value, optionValue]);
+    }
+    setSearchQuery('');
+  };
+
+  const remove = (e: React.MouseEvent, optionValue: string) => {
+    e.stopPropagation();
+    onValueChange(value.filter((v) => v !== optionValue));
+  };
+
+  return (
+    <div ref={containerRef} className={cn("relative", className)}>
+      <div
+        className={cn(
+          "flex items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background cursor-pointer transition-all duration-200",
+          isOpen && "ring-2 ring-ring ring-offset-2",
+          disabled && "opacity-50 cursor-not-allowed"
+        )}
+        onClick={() => !disabled && setIsOpen(!isOpen)}
+      >
+        {isOpen ? (
+          <Input
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder={placeholder}
+            className="border-0 p-0 h-auto focus-visible:ring-0 focus-visible:ring-offset-0"
+            autoFocus
+            onClick={(e) => e.stopPropagation()}
+          />
+        ) : (
+          <span className={cn(
+            "truncate flex flex-wrap gap-1",
+            selectedOptions.length === 0 && "text-muted-foreground"
+          )}>
+            {selectedOptions.length === 0
+              ? placeholder
+              : selectedOptions.map((opt) => (
+                <Badge key={opt.value} variant="secondary" className="gap-1">
+                  {opt.label}
+                  <X
+                    className="h-3 w-3 cursor-pointer hover:text-foreground"
+                    onClick={(e) => remove(e, opt.value)}
+                  />
+                </Badge>
+              ))}
+          </span>
+        )}
+        <div className="flex items-center gap-1 ml-2">
+          <ChevronDown className={cn(
+            "h-4 w-4 text-muted-foreground transition-transform duration-200",
+            isOpen && "rotate-180"
+          )} />
+        </div>
+      </div>
+
+      {isOpen && (
+        <div className="absolute z-50 w-full mt-1 bg-popover border border-border rounded-md shadow-lg max-h-60 overflow-auto animate-fade-in">
+          {filteredOptions.length === 0 ? (
+            <div className="px-3 py-6 text-center text-sm text-muted-foreground">
+              No results found
+            </div>
+          ) : (
+            filteredOptions.map((option) => (
+              <div
+                key={option.value}
+                className={cn(
+                  "px-3 py-2 cursor-pointer text-sm transition-colors hover:bg-accent",
+                  value.includes(option.value) && "bg-accent"
+                )}
+                onClick={() => toggle(option.value)}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex-1 min-w-0">
+                    <div className="font-medium truncate">{option.label}</div>
+                    {option.sublabel && (
+                      <div className="text-xs text-muted-foreground truncate">{option.sublabel}</div>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2 ml-2">
+                    {option.badge && (
+                      <Badge variant="outline" className="text-xs">{option.badge}</Badge>
+                    )}
+                    {value.includes(option.value) && (
+                      <Check className="h-4 w-4 text-primary" />
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
 export default SearchableSelect;

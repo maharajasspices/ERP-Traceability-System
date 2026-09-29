@@ -1,79 +1,114 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import nodemailer from "npm:nodemailer@6.9.16";
 
 // CORS allowlist
-const getAllowedOrigin = (requestOrigin: string | null): string => {
-  const envOrigins = (Deno.env.get('ALLOWED_ORIGINS') || Deno.env.get('ALLOWED_ORIGIN') || '')
-    .split(',')
-    .map((o) => o.trim())
-    .filter(Boolean);
+// CORS configuration
+const ALLOWED_ORIGINS = [
+  "http://localhost:8084",
+  "http://10.0.0.124:8084",
+  "https://erp.maharajasspices.com",
+];
 
-  if (requestOrigin) {
-    if (envOrigins.includes(requestOrigin)) return requestOrigin;
-    if (
-      requestOrigin.startsWith('http://localhost:') ||
-      requestOrigin.startsWith('https://localhost:')
-    ) {
-      return requestOrigin;
-    }
+const getAllowedOrigin = (requestOrigin: string | null): string => {
+  if (!requestOrigin) {
+    return ALLOWED_ORIGINS[0];
   }
 
-  if (envOrigins.length === 1) return envOrigins[0];
+  // Allow the known ERP environments
+  if (ALLOWED_ORIGINS.includes(requestOrigin)) {
+    return requestOrigin;
+  }
 
-  return '';
+  // Also allow localhost on any port for local development
+  if (
+    requestOrigin.startsWith("http://localhost:") ||
+    requestOrigin.startsWith("https://localhost:")
+  ) {
+    return requestOrigin;
+  }
+
+  // Allow the local network IP on port 8084
+  if (requestOrigin === "http://10.0.0.124:8084") {
+    return requestOrigin;
+  }
+
+  return "";
 };
 
-const createCorsHeaders = (requestOrigin: string | null) => ({
-  'Access-Control-Allow-Origin': getAllowedOrigin(requestOrigin),
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-  'Access-Control-Allow-Credentials': 'true',
-});
+const createCorsHeaders = (requestOrigin: string | null) => {
+  const allowedOrigin = getAllowedOrigin(requestOrigin);
 
-// Send email via Resend
-async function sendEmail(to: string, subject: string, html: string) {
-  const resendApiKey = Deno.env.get('RESEND_API_KEY');
-  const fromEmail = Deno.env.get('RESEND_FROM_EMAIL') || 'orders@maharajasspices.co.za';
+  return {
+    "Access-Control-Allow-Origin": allowedOrigin,
+    "Access-Control-Allow-Headers":
+      "authorization, x-client-info, apikey, content-type",
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Credentials": "true",
+    "Content-Type": "application/json",
+  };
+};
 
-  if (!resendApiKey) {
-    console.error('[fms-stock-order] RESEND_API_KEY not configured. Email would be sent to:', to);
-    console.error('[fms-stock-order] Subject:', subject);
-    console.error('[fms-stock-order] Body:', html);
-    return {
-      sent: false,
-      reason: 'RESEND_API_KEY not configured. Add the RESEND_API_KEY secret in Supabase Dashboard → Settings → Edge Functions → Secrets.',
-    };
+// Send email via the company SMTP server — the SAME provider and secrets
+// the working send-contract-signature / send-hr-email functions use
+// (SMTP_HOST / SMTP_PORT / SMTP_USER / SMTP_PASS). Purchase orders are
+// sent from Zulaigah Benjamin's mailbox.
+const FROM_EMAIL = Deno.env.get("STOCK_ORDER_FROM_EMAIL") || "zulaigah.benjamin@maharajasspices.co.za";
+const FROM_NAME = "Maharaja's Spices";
+
+function createTransporter() {
+  const smtpUser = Deno.env.get("SMTP_USER") || FROM_EMAIL;
+  const smtpPass = Deno.env.get("SMTP_PASS");
+  if (!smtpPass) {
+    throw new Error(
+      "SMTP_PASS secret not configured. Add it in Supabase Dashboard → Settings → Edge Functions → Secrets."
+    );
   }
 
-  const res = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${resendApiKey}`,
-      'Content-Type': 'application/json',
+  const port = Number(Deno.env.get("SMTP_PORT") || "465");
+
+  return nodemailer.createTransport({
+    // Port 465 uses implicit SSL/TLS ("secure"), not STARTTLS.
+    host: Deno.env.get("SMTP_HOST") || "mail.maharajasspices.co.za",
+    port,
+    secure: port === 465,
+    auth: {
+      user: smtpUser,
+      pass: smtpPass,
     },
-    body: JSON.stringify({
-      from: fromEmail,
-      to: [to],
+  });
+}
+
+async function sendEmail(to: string, subject: string, html: string) {
+  try {
+    const transporter = createTransporter();
+    const info = await transporter.sendMail({
+      from: `"${FROM_NAME}" <${FROM_EMAIL}>`,
+      to,
+      replyTo: FROM_EMAIL,
       subject,
       html,
-    }),
-  });
-
-  if (!res.ok) {
-    const errText = await res.text();
-    console.error('[fms-stock-order] Resend error:', errText);
-    return { sent: false, reason: `Resend API error: ${errText}` };
+    });
+    return { sent: true, messageId: info?.messageId ?? null };
+  } catch (err) {
+    console.error("[fms-stock-order] SMTP error:", err);
+    return {
+      sent: false,
+      reason: err instanceof Error ? `SMTP error: ${err.message}` : "SMTP error while sending email",
+    };
   }
-
-  return { sent: true };
 }
 
 serve(async (req) => {
   const requestOrigin = req.headers.get('Origin');
   const corsHeaders = createCorsHeaders(requestOrigin);
 
-  if (req.method === 'OPTIONS') {
-    return new Response(null, { headers: corsHeaders });
-  }
+ if (req.method === "OPTIONS") {
+  return new Response("ok", {
+    status: 200,
+    headers: corsHeaders,
+  });
+}
 
   try {
     const authHeader = req.headers.get('Authorization');
@@ -188,7 +223,7 @@ serve(async (req) => {
       });
 
       const sc = stockCode as any;
-      const emailSubject = `Purchase Order - ${sc.stock_code} (${sc.description})`;
+      const emailSubject = `Purchase Order - ${sc.description}`;
       const emailHtml = `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #e5e7eb; border-radius: 8px;">
           <div style="background: #ef302b; color: white; padding: 16px 24px; border-radius: 8px 8px 0 0;">
@@ -204,20 +239,12 @@ serve(async (req) => {
             <div style="background: #f9fafb; border-left: 4px solid #ef302b; padding: 16px; margin: 0 0 16px; border-radius: 4px;">
               <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
                 <tr>
-                  <td style="padding: 4px 0; color: #6b7280; width: 40%;">Stock Code:</td>
-                  <td style="padding: 4px 0; font-weight: 600; color: #111827;">${sc.stock_code}</td>
-                </tr>
-                <tr>
-                  <td style="padding: 4px 0; color: #6b7280;">Description:</td>
+                  <td style="padding: 4px 0; color: #6b7280; width: 40%;">Description:</td>
                   <td style="padding: 4px 0; font-weight: 600; color: #111827;">${sc.description}</td>
                 </tr>
                 <tr>
                   <td style="padding: 4px 0; color: #6b7280;">Quantity Required:</td>
                   <td style="padding: 4px 0; font-weight: 600; color: #111827;">${quantity} ${sc.unit_of_measure}</td>
-                </tr>
-                <tr>
-                  <td style="padding: 4px 0; color: #6b7280;">Current Stock:</td>
-                  <td style="padding: 4px 0; color: #ef302b; font-weight: 600;">${currentStock} ${sc.unit_of_measure}</td>
                 </tr>
                 <tr>
                   <td style="padding: 4px 0; color: #6b7280;">Low Stock Threshold:</td>
@@ -239,8 +266,32 @@ serve(async (req) => {
 
       const result = await sendEmail(supplier.email, emailSubject, emailHtml);
 
+      // Record the email in fms_supplier_order_emails for Pending Delivery tracking
+      // (only if the email was actually sent successfully)
+      let recorded = false;
+      let recordError = null;
+      if (result.sent) {
+        const { error: recErr } = await adminClient
+          .from('fms_supplier_order_emails')
+          .insert({
+            supplier_id,
+            stock_code_id,
+            quantity,
+            notes: notes || null,
+            status: 'pending',
+            emailed_by: user.id,
+          });
+
+        if (recErr) {
+          console.error('[fms-stock-order] Failed to record supplier order email:', recErr);
+          recordError = recErr.message || 'Failed to record order in database';
+        } else {
+          recorded = true;
+        }
+      }
+
       return new Response(
-        JSON.stringify({ success: true, ...result }),
+        JSON.stringify({ success: true, ...result, recorded, recordError }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
@@ -310,15 +361,12 @@ serve(async (req) => {
         const sc = stockCodeMap.get(item.stock_code_id);
         if (!sc) return '';
         const level = stockLevelMap.get(item.stock_code_id);
-        const currentStock = level?.quantity_on_hand ?? 0;
         const threshold = level?.low_stock_threshold ?? 0;
         const qty = Number(item.quantity || 0);
         return `
           <tr>
-            <td style="padding: 8px; border: 1px solid #e5e7eb; color: #111827; font-weight: 600;">${sc.stock_code}</td>
             <td style="padding: 8px; border: 1px solid #e5e7eb; color: #374151;">${sc.description}</td>
             <td style="padding: 8px; border: 1px solid #e5e7eb; color: #111827; font-weight: 600; text-align: right;">${qty} ${sc.unit_of_measure}</td>
-            <td style="padding: 8px; border: 1px solid #e5e7eb; color: #ef302b; text-align: right;">${currentStock} ${sc.unit_of_measure}</td>
             <td style="padding: 8px; border: 1px solid #e5e7eb; color: #111827; text-align: right;">${threshold} ${sc.unit_of_measure}</td>
           </tr>
         `;
@@ -340,10 +388,8 @@ serve(async (req) => {
             <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
               <thead>
                 <tr style="background: #f9fafb;">
-                  <th style="padding: 8px; border: 1px solid #e5e7eb; text-align: left; color: #6b7280;">Stock Code</th>
                   <th style="padding: 8px; border: 1px solid #e5e7eb; text-align: left; color: #6b7280;">Description</th>
                   <th style="padding: 8px; border: 1px solid #e5e7eb; text-align: right; color: #6b7280;">Qty Required</th>
-                  <th style="padding: 8px; border: 1px solid #e5e7eb; text-align: right; color: #6b7280;">Current Stock</th>
                   <th style="padding: 8px; border: 1px solid #e5e7eb; text-align: right; color: #6b7280;">Min. Reorder</th>
                 </tr>
               </thead>
@@ -365,8 +411,34 @@ serve(async (req) => {
 
       const result = await sendEmail(supplier.email, emailSubject, emailHtml);
 
+      // Record each item in fms_supplier_order_emails for Pending Delivery tracking
+      // (only if the email was actually sent successfully)
+      let recorded = false;
+      let recordError = null;
+      if (result.sent && items.length > 0) {
+        const { error: recErr } = await adminClient
+          .from('fms_supplier_order_emails')
+          .insert(
+            items.map((item: any) => ({
+              supplier_id,
+              stock_code_id: item.stock_code_id,
+              quantity: Number(item.quantity || 0),
+              notes: notes || null,
+              status: 'pending',
+              emailed_by: user.id,
+            }))
+          );
+
+        if (recErr) {
+          console.error('[fms-stock-order] Failed to record supplier order emails:', recErr);
+          recordError = recErr.message || 'Failed to record orders in database';
+        } else {
+          recorded = true;
+        }
+      }
+
       return new Response(
-        JSON.stringify({ success: true, ...result }),
+        JSON.stringify({ success: true, ...result, recorded, recordError }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }

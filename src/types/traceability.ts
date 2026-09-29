@@ -60,8 +60,8 @@ export interface StockCode {
 // Receiving Log
 export interface ReceivingRecord {
   id: string;
-  internal_lot_number: string;
-  received_at: string;
+  internal_lot_numner: string;
+  receieved_at: string;
   stock_code_id: string;
   stock_code?: StockCode;
   quantity_received: number;
@@ -72,7 +72,7 @@ export interface ReceivingRecord {
   expiry_date?: string | null;
   delivery_note_number?: string;
   quality_checks: ReceivingQualityCheck;
-  status: 'accepted' | 'rejected' | 'partial';
+  status: 'accepted' | 'declined' | 'partial';
   rejection_reason?: string;
   received_by: string;
   created_at: string;
@@ -89,7 +89,7 @@ export interface ReceivingQualityCheck {
   notes?: string;
 }
 
-// Bill of Materials
+//Bill of Materials
 export interface BillOfMaterials {
   id: string;
   finished_good_id: string;
@@ -103,6 +103,8 @@ export interface BillOfMaterials {
   updated_at: string;
   created_by: string;
 }
+
+
 
 export interface BomComponent {
   id: string;

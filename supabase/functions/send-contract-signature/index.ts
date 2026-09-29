@@ -125,6 +125,86 @@ async function sendEmail(to: string, subject: string, html: string) {
   }
 }
 
+function normalizeWhatsAppNumber(phone: string): string {
+  let cleaned = phone.replace(/[^\d+]/g, "");
+
+  // Convert South African local numbers like 0743428180
+  // to international format +27743428180.
+  if (cleaned.startsWith("0")) {
+    cleaned = `+27${cleaned.substring(1)}`;
+  }
+
+  // Ensure the number starts with +
+  if (!cleaned.startsWith("+")) {
+    cleaned = `+${cleaned}`;
+  }
+
+  return cleaned;
+}
+
+async function sendWhatsApp(to: string, message: string) {
+  try {
+    const accessToken = Deno.env.get("WHATSAPP_ACCESS_TOKEN");
+    const phoneNumberId = Deno.env.get("WHATSAPP_PHONE_NUMBER_ID");
+
+    if (!accessToken || !phoneNumberId) {
+      return {
+        sent: false,
+        reason: "WhatsApp secrets are not configured.",
+      };
+    }
+
+    const recipient = normalizeWhatsAppNumber(to);
+
+    const response = await fetch(
+      `https://graph.facebook.com/v23.0/${phoneNumberId}/messages`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          messaging_product: "whatsapp",
+          recipient_type: "individual",
+          to: recipient,
+          type: "text",
+          text: {
+            preview_url: false,
+            body: message,
+          },
+        }),
+      }
+    );
+
+    const result = await response.json();
+
+    if (!response.ok) {
+      console.error("[send-contract-signature] WhatsApp error:", result);
+
+      return {
+        sent: false,
+        reason: result?.error?.message || "WhatsApp message failed.",
+      };
+    }
+
+    return {
+      sent: true,
+      messageId: result?.messages?.[0]?.id ?? null,
+    };
+  } catch (err) {
+    console.error("[send-contract-signature] WhatsApp error:", err);
+
+    return {
+      sent: false,
+      reason:
+        err instanceof Error
+          ? err.message
+          : "WhatsApp error while sending message",
+    };
+  }
+}
+
 function escapeHtml(value: string): string {
   return value
     .replace(/&/g, "&amp;")
@@ -201,7 +281,7 @@ serve(async (req) => {
     // ---- Resolve the employee server-side -------------------------------
     const { data: employee, error: empError } = await adminClient
       .from("fms_hr_employees")
-      .select("first_name, last_name, email")
+      .select("first_name, last_name, email, phone")
       .eq("id", employeeId)
       .maybeSingle();
 
@@ -301,30 +381,66 @@ serve(async (req) => {
       </div>
     `;
 
-    const emailResult = await sendEmail(employee.email, emailSubject, emailHtml);
+   const emailResult = await sendEmail(employee.email, emailSubject, emailHtml);
 
-    console.log(
-      `[send-contract-signature] Request ${signingRequest.id} for ${employeeName} (${employee.email}); email sent=${emailResult.sent}`
-    );
-    if (!emailResult.sent) {
-      console.warn("[send-contract-signature] Email not sent:", emailResult.reason);
-    }
+const whatsappResult = employee.phone
+  ? await sendWhatsApp(
+      employee.phone,
+      `Hello ${employeeName},
 
-    return new Response(
-      JSON.stringify({
-        success: true,
-        signing_request: {
-          id: signingRequest.id,
-          status: signingRequest.status,
-          expires_at: signingRequest.expires_at,
-        },
-        email: emailResult,
-      }),
-      { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
-  } catch (error) {
-    console.error("[send-contract-signature] Unexpected error:", error);
-    return jsonError(corsHeaders, "Internal server error", 500);
+Your employment contract from Maharaja's Spices is ready for signing.
+
+Please review and sign your contract using this secure link:
+
+${signingUrl}
+
+This link expires on ${expiresAt.toLocaleDateString("en-ZA", {
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+      })}.
+
+Maharaja's Spices HR`
+    )
+  : {
+      sent: false,
+      reason: "Employee has no phone number on file.",
+    };
+
+console.log(
+  `[send-contract-signature] Request ${signingRequest.id} for ${employeeName} (${employee.email}); email sent=${emailResult.sent}; WhatsApp sent=${whatsappResult.sent}`
+);
+
+if (!emailResult.sent) {
+  console.warn(
+    "[send-contract-signature] Email not sent:",
+    emailResult.reason
+  );
+}
+
+if (!whatsappResult.sent) {
+  console.warn(
+    "[send-contract-signature] WhatsApp not sent:",
+    whatsappResult.reason
+  );
+}
+
+return new Response(
+  JSON.stringify({
+    success: true,
+    signing_request: {
+      id: signingRequest.id,
+      status: signingRequest.status,
+      expires_at: signingRequest.expires_at,
+    },
+    email: emailResult,
+    whatsapp: whatsappResult,
+  }),
+  {
+    status: 200,
+    headers: {
+      ...corsHeaders,
+      "Content-Type": "application/json",
+    },
   }
-});
-
+);

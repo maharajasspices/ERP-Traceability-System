@@ -47,6 +47,8 @@ import {
   XCircle,
   Truck,
   ShoppingCart,
+  Clock,
+  Download,
 } from 'lucide-react';
 
 import { exportToExcel } from '@/lib/exportUtils';
@@ -58,9 +60,15 @@ const StockTracking: React.FC = () => {
     stockCodes,
     stockLevels,
     stockMovements,
+    stockReservations,
+    productionBatches,
+    supplierOrderEmails,
+    addSupplierOrderEmails,
+    updateSupplierOrderEmailStatus,
     loading,
     refreshData,
     getStockCodeById,
+    getReceivingById,
     suppliers,
   } = useFMSData();
 
@@ -70,6 +78,37 @@ const StockTracking: React.FC = () => {
   >('all');
   const [stockCodeFilter, setStockCodeFilter] = useState('all');
   const [activeTab, setActiveTab] = useState('levels');
+  const [levelTypeFilter, setLevelTypeFilter] = useState('all');
+  const [reportMonth, setReportMonth] = useState(
+    () => new Date().toISOString().slice(0, 7) // YYYY-MM, current month
+  );
+  // Filters controlling which items are included in the monthly report table
+  const [reportSearch, setReportSearch] = useState('');
+  const [reportStatusFilter, setReportStatusFilter] = useState<'all' | 'ok' | 'low' | 'negative'>('all');
+  const [reportHideZeroStock, setReportHideZeroStock] = useState(false);
+
+  // ------------------------------------------------------------
+  // "Where is this stock reserved?" dialog
+  // ------------------------------------------------------------
+  const [reservationDialogOpen, setReservationDialogOpen] = useState(false);
+  const [reservationCodeId, setReservationCodeId] = useState<string | null>(null);
+
+  const orderReservations = useMemo(() => {
+    if (!reservationCodeId) return [];
+    return (stockReservations || [])
+      .filter((r) => r.stock_code_id === reservationCodeId)
+      .sort((a, b) => (a.created_at < b.created_at ? -1 : 1));
+  }, [stockReservations, reservationCodeId]);
+
+  const reservationStockCode = useMemo(() => {
+    if (!reservationCodeId) return null;
+    return getStockCodeById(reservationCodeId);
+  }, [reservationCodeId, getStockCodeById]);
+
+  const getBatchStatus = (batchId: string): string => {
+    const b = productionBatches.find((x) => x.id === batchId);
+    return b ? b.status : 'unknown';
+  };
 
   // ------------------------------------------------------------
   // Single-item order dialog
@@ -153,6 +192,9 @@ const StockTracking: React.FC = () => {
         };
       })
       .filter((row) => {
+        if (levelTypeFilter !== 'all' && row.stockCode.item_type !== levelTypeFilter) {
+          return false;
+        }
         if (!searchQuery) return true;
 
         const q = searchQuery.toLowerCase();
@@ -171,7 +213,7 @@ const StockTracking: React.FC = () => {
           b.stockCode.stock_code
         );
       });
-  }, [stockCodes, levelMap, searchQuery]);
+  }, [stockCodes, levelMap, searchQuery, levelTypeFilter]);
 
   // ------------------------------------------------------------
   // Supplier groups
@@ -446,6 +488,142 @@ const StockTracking: React.FC = () => {
   };
 
   // ------------------------------------------------------------
+  // Monthly stock holding report (per item type)
+  // One report for raw materials, one for finished goods
+  // ------------------------------------------------------------
+
+  const monthRange = useMemo(() => {
+    const [year, month] = reportMonth.split('-').map(Number);
+    const start = new Date(year, month - 1, 1);
+    const end = new Date(year, month, 0, 23, 59, 59, 999); // last day of month
+    return { start, end };
+  }, [reportMonth]);
+
+  const handleExportMonthlyHolding = (itemType: 'raw_material' | 'finished_good') => {
+    const { start, end } = monthRange;
+
+    // Movements that fall within the selected month
+    const monthMovements = (stockMovements || []).filter((m) => {
+      const d = new Date(m.created_at);
+      return d >= start && d <= end;
+    });
+
+    const rows = stockCodes
+      .filter((sc) => sc.status === 'active' && sc.item_type === itemType)
+      .map((sc) => {
+        const level = levelMap.get(sc.id);
+        const qty = level?.quantity_on_hand ?? 0;
+        const reserved = level?.reserved_quantity ?? 0;
+        const netStock = qty - reserved;
+        const threshold = level?.low_stock_threshold ?? 0;
+        const isLow = netStock < 0 || netStock <= threshold;
+
+        // Month activity from the movement audit trail
+        const codeMovements = monthMovements.filter((m) => m.stock_code_id === sc.id);
+        const receivedThisMonth = codeMovements
+          .filter((m) => m.movement_type === 'receipt' && m.quantity_change > 0)
+          .reduce((sum, m) => sum + m.quantity_change, 0);
+        const usedThisMonth = codeMovements
+          .filter((m) => m.movement_type === 'batch_usage')
+          .reduce((sum, m) => sum + Math.abs(m.quantity_change), 0);
+        const adjustedThisMonth = codeMovements
+          .filter((m) => m.movement_type === 'adjustment')
+          .reduce((sum, m) => sum + m.quantity_change, 0);
+
+        return {
+          'Stock Code': sc.stock_code,
+          Description: sc.description,
+          UOM: sc.unit_of_measure,
+          'Quantity On Hand': qty,
+          Reserved: reserved,
+          'Net Stock': netStock,
+          'Received This Month': receivedThisMonth,
+          'Used This Month': usedThisMonth,
+          'Adjustments This Month': adjustedThisMonth,
+          'Low Stock Threshold': threshold,
+          Status: isLow ? (qty < 0 ? 'NEGATIVE' : 'LOW') : 'OK',
+        };
+      })
+      .sort((a, b) => a['Stock Code'].localeCompare(b['Stock Code']));
+
+    // Apply user-selected filters to the report table
+    const q = reportSearch.trim().toLowerCase();
+    const filteredRows = rows.filter((r) => {
+      if (
+        q &&
+        !r['Stock Code'].toLowerCase().includes(q) &&
+        !r.Description.toLowerCase().includes(q)
+      ) {
+        return false;
+      }
+
+      if (reportStatusFilter !== 'all') {
+        const status = String(r.Status);
+        if (reportStatusFilter === 'ok' && status !== 'OK') return false;
+        if (reportStatusFilter === 'low' && status !== 'LOW') return false;
+        if (reportStatusFilter === 'negative' && status !== 'NEGATIVE') return false;
+      }
+
+      if (reportHideZeroStock && Number(r['Net Stock']) === 0) {
+        return false;
+      }
+
+      return true;
+    });
+
+    if (filteredRows.length === 0) {
+      toast.warning('No items match the selected report filters');
+      return;
+    }
+
+    const reportRows = filteredRows;
+
+    // Summary rows (built from the filtered rows)
+    const totalOnHand = reportRows.reduce((s, r) => s + Number(r['Quantity On Hand']), 0);
+    const totalNet = reportRows.reduce((s, r) => s + Number(r['Net Stock']), 0);
+    const filterNotes: string[] = [];
+    if (reportSearch.trim()) filterNotes.push(`Search: "${reportSearch.trim()}"`);
+    if (reportStatusFilter !== 'all') filterNotes.push(`Status: ${reportStatusFilter}`);
+    if (reportHideZeroStock) filterNotes.push('Zero-stock items hidden');
+    const summary = [
+      {
+        'Stock Code': `STOCK HOLDING REPORT - ${itemType === 'raw_material' ? 'RAW MATERIALS' : 'FINISHED GOODS'}`,
+        Description: `Month: ${reportMonth}`,
+        UOM: '',
+        'Quantity On Hand': '',
+        Reserved: '',
+        'Net Stock': '',
+        'Received This Month': '',
+        'Used This Month': '',
+        'Adjustments This Month': '',
+        'Low Stock Threshold': '',
+        Status: `Generated: ${new Date().toLocaleDateString('en-GB')}${filterNotes.length > 0 ? ' | ' + filterNotes.join(', ') : ''}`,
+      },
+      {},
+      ...reportRows,
+      {},
+      {
+        'Stock Code': 'TOTAL',
+        Description: `${reportRows.length} item(s)`,
+        UOM: '',
+        'Quantity On Hand': totalOnHand,
+        Reserved: '',
+        'Net Stock': totalNet,
+        'Received This Month': reportRows.reduce((s, r) => s + Number(r['Received This Month']), 0),
+        'Used This Month': reportRows.reduce((s, r) => s + Number(r['Used This Month']), 0),
+        'Adjustments This Month': reportRows.reduce((s, r) => s + Number(r['Adjustments This Month']), 0),
+        'Low Stock Threshold': '',
+        Status: '',
+      },
+    ];
+
+    const label = itemType === 'raw_material' ? 'Raw_Materials' : 'Finished_Goods';
+    exportToExcel(summary, `Stock_Holding_${label}_${reportMonth}`);
+
+    toast.success(`${label.replace('_', ' ')} stock holding report exported for ${reportMonth}`);
+  };
+
+  // ------------------------------------------------------------
   // Single item supplier order
   // ------------------------------------------------------------
 
@@ -483,6 +661,7 @@ const StockTracking: React.FC = () => {
     setSendingOrder(true);
     setEmailError('');
 
+
     try {
       const { data, error } =
         await supabase.functions.invoke(
@@ -514,9 +693,25 @@ const StockTracking: React.FC = () => {
       if (data?.sent) {
         setEmailSent(true);
 
-        toast.success(
-          'Order email sent to supplier'
-        );
+        // Check if the order was recorded in the database for Pending Delivery tracking
+        if (data?.recorded) {
+          toast.success(
+            'Order email sent to supplier'
+          );
+        } else if (data?.recordError) {
+          // Email was sent but recording failed - show warning
+          toast.warning(
+            `Email sent but could not be tracked: ${data.recordError}. Please refresh the page.`
+          );
+        } else {
+          toast.success(
+            'Order email sent to supplier'
+          );
+        }
+
+        // Re-fetch supplier order emails from the database
+        // (the edge function records the email after sending)
+        await refreshData();
       } else {
         const reason =
           data?.reason ||
@@ -539,6 +734,26 @@ const StockTracking: React.FC = () => {
       setSendingOrder(false);
     }
   };
+
+  // Mark an emailed order as received (removes it from Pending Delivery)
+  const handleMarkDeliveryReceived = async (id: string) => {
+    const res = await updateSupplierOrderEmailStatus(id, 'received');
+    if (res) {
+      toast.success('Marked as received');
+    }
+  };
+
+  const handleMarkDeliveryCancelled = async (id: string) => {
+    const res = await updateSupplierOrderEmailStatus(id, 'cancelled');
+    if (res) {
+      toast.success('Marked as cancelled');
+    }
+  };
+
+  const pendingDeliveries = useMemo(
+    () => (supplierOrderEmails || []).filter((e) => e.status === 'pending'),
+    [supplierOrderEmails]
+  );
 
   // ------------------------------------------------------------
   // Supplier order selection
@@ -747,9 +962,25 @@ const StockTracking: React.FC = () => {
         if (data?.sent) {
           setSupplierOrderSent(true);
 
-          toast.success(
-            'Order email sent to supplier'
-          );
+          // Check if the orders were recorded in the database for Pending Delivery tracking
+          if (data?.recorded) {
+            toast.success(
+              'Order email sent to supplier'
+            );
+          } else if (data?.recordError) {
+            // Email was sent but recording failed - show warning
+            toast.warning(
+              `Email sent but could not be tracked: ${data.recordError}. Please refresh the page.`
+            );
+          } else {
+            toast.success(
+              'Order email sent to supplier'
+            );
+          }
+
+          // Re-fetch supplier order emails from the database
+          // (the edge function records the emails after sending)
+          await refreshData();
         } else {
           const reason =
             data?.reason ||
@@ -932,6 +1163,7 @@ const StockTracking: React.FC = () => {
             )}
           </TabsTrigger>
 
+          
           <TabsTrigger
             value="movements"
             className="gap-2"
@@ -963,13 +1195,26 @@ const StockTracking: React.FC = () => {
                 className="pl-9"
               />
             </div>
+
+            <Select value={levelTypeFilter} onValueChange={(v) => setLevelTypeFilter(v)}>
+              <SelectTrigger className="w-full sm:w-[220px]">
+                <SelectValue placeholder="Filter by type" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Types</SelectItem>
+                <SelectItem value="raw_material">Raw Material</SelectItem>
+                <SelectItem value="packaging">Packaging</SelectItem>
+                <SelectItem value="work_in_progress">Work In Progress</SelectItem>
+                <SelectItem value="finished_good">Finished Good</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
 
-          <div className="rounded-xl border border-border bg-card overflow-hidden">
-<div className="overflow-x-auto max-h-[600px] overflow-y-auto">
-  <table className="data-table">
-    <thead className="sticky top-0 bg-card z-20">
-
+          {/* Monthly stock holding report downloads */}
+        <div className="rounded-xl border border-border bg-card overflow-hidden">
+          <div className="overflow-x-auto max-h-[600px] overflow-y-auto">
+            <table className="data-table">
+               <thead className="sticky top-0 bg-card z-20">
                   <tr>
                     <th>Stock Code</th>
                     <th>Description</th>
@@ -1071,7 +1316,21 @@ const StockTracking: React.FC = () => {
                         )}
                       </td>
 
-                      <td>
+                      <td className="whitespace-nowrap">
+                        {(stockReservations || []).filter((r) => r.stock_code_id === row.stockCode.id).length > 0 && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="gap-1 text-xs mb-1"
+                            onClick={() => {
+                              setReservationCodeId(row.stockCode.id);
+                              setReservationDialogOpen(true);
+                            }}
+                          >
+                            <Package className="h-3 w-3" />
+                            View Reservations
+                          </Button>
+                        )}
                         {row.isLow && (
                           <Button
                             variant="outline"
@@ -2322,6 +2581,87 @@ const StockTracking: React.FC = () => {
               )}
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* =====================================================
+          WHERE IS THIS STOCK RESERVED? (reservations for a stock code)
+      ===================================================== */}
+
+      <Dialog
+        open={reservationDialogOpen}
+        onOpenChange={(open) =>
+          setReservationDialogOpen(open)
+        }
+      >
+        <DialogContent className="sm:max-w-[800px] max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>
+              Stock Reservations —{' '}
+              {reservationStockCode
+                ? `${reservationStockCode.stock_code} - ${reservationStockCode.description}`
+                : ''}
+            </DialogTitle>
+
+            <DialogDescription>
+              Every Batch Sheet that has this material set aside (reserved) from your physical stock. The Batch status tells you whether it's still in progress, or the reservation was already consumed/released.
+            </DialogDescription>
+          </DialogHeader>
+
+          {orderReservations.length === 0 ? (
+            <p className="py-6 text-center text-sm text-muted-foreground">
+              No reservations found for this stock item.
+
+            </p>
+          ) : (
+            <div className="overflow-x-auto rounded-lg border">
+              <table className="w-full text-sm">
+                <thead className="bg-muted/50">
+                  <tr>
+                    <th className="px-3 py-2 text-left font-medium">Batch Number</th>
+                    <th className="px-3 py-2 text-left font-medium">Batch Status</th>
+                    <th className="px-3 py-2 text-left font-medium">Lot Number</th>
+                    <th className="px-3 py-2 text-left font-medium">Expiry Date</th>
+                    <th className="px-3 py-2 text-right font-medium">Qty Reserved</th>
+                    <th className="px-3 py-2 text-left font-medium">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {orderReservations.map((r) => (
+                    <tr key={r.id} className="border-t">
+                      <td className="px-3 py-2 font-medium">{r.batch_number || '—'}</td>
+                      <td className="px-3 py-2 capitalize">{getBatchStatus(r.batch_id).replace('_', ' ')}</td>
+                      <td className="px-3 py-2">{r.internal_lot_number || '—'}</td>
+                      <td className="px-3 py-2">
+                        {(() => {
+                          const rec = getReceivingById(r.receiving_record_id);
+                          return rec?.expiry_date ? new Date(rec.expiry_date).toLocaleDateString() : '—';
+                        })()}
+                      </td>
+                      <td className="px-3 py-2 text-right">
+                        {Number(r.quantity_reserved).toFixed(2)}{' '}{reservationStockCode?.unit_of_measure || ''}
+                      </td>
+                      <td className="px-3 py-2">
+                        {r.status === 'reserved' ? (
+                          <Badge className="bg-amber-500 text-white">Reserved</Badge>
+                        ) : r.status === 'consumed' ? (
+                          <Badge className="bg-green-600 text-white">Consumed</Badge>
+                        ) : (
+                          <Badge variant="outline">Released</Badge>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setReservationDialogOpen(false)}>
+              Close
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

@@ -1,10 +1,11 @@
 import React from 'react';
 import { useLocation } from 'react-router-dom';
-import { MobileSidebar } from './Sidebar';
 import { Search } from 'lucide-react';
+import { MobileSidebar } from './Sidebar';
 import { Input } from '@/components/ui/input';
 import { NotesDropdown } from './NotesDropdown';
 import { UserMenu } from './UserMenu';
+import { WarningMeetingsBell } from '@/components/WarningMeetings';
 
 const pageTitles: Record<string, string> = {
   '/dashboard': 'Dashboard',
@@ -29,12 +30,6 @@ export const Header: React.FC = () => {
       <div className=" flex flex-1 items-center gap-4">
         <h1> { pageTitle }</h1>
       </div>
-      <div className="flex flex-1 items-center gap-4">
-        <h1 className="text-lg font-semibold text-foreground md:text-xl">
-          {pageTitle}
-        </h1>
-      </div>
-
       <div className="flex items-center gap-2">
         {/* Search */}
         <div className="relative hidden md:block">
@@ -45,6 +40,9 @@ export const Header: React.FC = () => {
             className="w-[200px] pl-8 lg:w-[280px]"
           />
         </div>
+
+        {/* Warning meeting reminders (HR only) */}
+        <WarningMeetingsBell />
 
         {/* Notes */}
         <NotesDropdown />

@@ -15,12 +15,15 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Switch } from '@/components/ui/switch';
 import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
-import { Plus, Search, Factory, Printer, Eye, Play, CheckCircle, XCircle, Clock, FileText, Loader2, QrCode, Trash2, Download, Edit2, Camera, Table, Copy } from 'lucide-react';
-import { generateQRCodePair, printQRCodes, downloadQRCodeWithLabel, generateQRCodeImage, copyQRCodeWithLabel } from '@/lib/qrCodeUtils';
+import { Plus, Search, Factory, Printer, Eye, Play, CheckCircle, XCircle, Clock, FileText, Loader2, QrCode, Trash2, Download, Edit2, Camera, Table, Copy, Tag, Sparkles, CalendarDays } from 'lucide-react';
+import { generateQRCodePair, printQRCodes, downloadQRCodeWithLabel, generateQRCodeImage, copyQRCodeWithLabel, renderExpirySticker, downloadExpirySticker, printExpiryStickers } from '@/lib/qrCodeUtils';
 import { QRScanner } from '@/components/QRScanner';
+import { PickleBatchWorkflow, ensurePickleRunForBatch, isPickleBatch, computeBatchMaterialRequirements, fetchFreshBomsForPlan } from '@/components/pickle/PickleBatchWorkflow';
 import { exportToExcel } from '@/lib/exportUtils';
 import { format } from 'date-fns';
 import { extractBestScanIdentifier } from '@/lib/scanParser';
+import { SuggestedBatchSheets } from '@/components/dashboard/SuggestedBatchSheets';
+import { PlannedProductionQueue } from '@/components/dashboard/PlannedProductionQueue';
 type BatchStatus = 'draft' | 'pre_weighing' | 'manufacturing' | 'in_progress' | 'closed' | 'cancelled';
 type QualityCheckResult = 'pass' | 'fail' | 'pending';
 
@@ -73,16 +76,28 @@ const defaultProcessingSteps: Omit<ProcessingStep, 'id'>[] = [
 
 const Production: React.FC = () => {
   const { user } = useFMSAuth();
-    const { stockCodes, boms, productionBatches, loading, addProductionBatch, updateProductionBatch, getStockCodeById, getBOMByFinishedGoodId, refreshData, deductStockForBatch, stockLevels, fifoAllocateLots, recordLotUsage, stockReservations, reserveStockForBatch, releaseBatchReservations, consumeBatchReservations, getReservationsForBatch, getReceivingById } = useFMSData();
-  
+    const { stockCodes, boms, receivingRecords, productionBatches, loading, addProductionBatch,updateProductionBatch, getStockCodeById, getBOMByFinishedGoodId, refreshData, deductStockForBatch, stockLevels, fifoAllocateLots, recordLotUsage, stockReservations, reserveStockForBatch, releaseBatchReservations, consumeBatchReservations, getReservationsForBatch, getReceivingById } = useFMSData();
+
+  const getBOMById = (bomId: string | null | undefined) => {
+  if (!bomId) return null;
+  return boms.find(bom => bom.id === bomId) || null;
+};
   // Helper to get BOM by ID
-  const getBOMById = (bomId: string) => boms.find(b => b.id === bomId);
+
   const { canDelete } = useDeletePermission();
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<BatchStatus | 'all'>('all');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+  const [materialFilter, setMaterialFilter] = useState<string>('all');
+  const [productFilter, setProductFilter] = useState<string>('all');
   const [dialogOpen, setDialogOpen] = useState(false);
   const [viewDialogOpen, setViewDialogOpen] = useState(false);
   const [selectedBatch, setSelectedBatch] = useState<typeof productionBatches[0] | null>(null);
+
+  // Queued batch sheets ("Add Another Batch Sheet" — same concept as Receiving Log)
+  const [batchLines, setBatchLines] = useState<BatchConfig[]>([]);
+  const [creatingBatch, setCreatingBatch] = useState(false);
 
   // Allow FG, WIP, and RM for batch sheet creation
   const eligibleProducts = stockCodes.filter(sc => 
@@ -100,6 +115,38 @@ const Production: React.FC = () => {
     })),
     [eligibleProducts]
   );
+
+  // Raw materials used across all active BOMs — for filtering batches by material
+  const materialOptions: SearchableSelectOption[] = useMemo(() => {
+    const uniqueIds = new Set<string>();
+    boms.forEach(bom => {
+      if (bom.status !== 'active') return;
+      (bom.components || []).forEach(c => uniqueIds.add(c.material_stock_code_id));
+    });
+    return Array.from(uniqueIds)
+      .map(id => getStockCodeById(id))
+      .filter((sc): sc is NonNullable<typeof sc> => !!sc)
+      .map(sc => ({ value: sc.id, label: sc.stock_code, sublabel: sc.description }));
+  }, [boms, getStockCodeById]);
+
+  // Finished products that actually appear on batch sheets — for filtering
+  const finishedProductFilterOptions: SearchableSelectOption[] = useMemo(() => {
+    const distinctIds = new Set(productionBatches.map(b => b.finished_good_id));
+    return Array.from(distinctIds)
+      .map(id => getStockCodeById(id))
+      .filter((sc): sc is NonNullable<typeof sc> => !!sc)
+      .map(sc => ({ value: sc.id, label: sc.stock_code, sublabel: sc.description }));
+  }, [productionBatches, getStockCodeById]);
+
+  // Reset all filters back to defaults
+  const clearFilters = () => {
+    setSearchQuery('');
+    setStatusFilter('all');
+    setDateFrom('');
+    setDateTo('');
+    setMaterialFilter('all');
+    setProductFilter('all');
+  };
 
   // Form state
   const [formData, setFormData] = useState({
@@ -154,15 +201,95 @@ const Production: React.FC = () => {
     });
   };
 // create batch function
+  interface BatchConfig {
+    finished_good_id: string;
+    planned_batch_size: string;
+    planned_production_date: string;
+    production_instructions: string;
+    number_of_batches: string;
+  }
+
   const handleCreateBatch = async () => {
-    if (!formData.finished_good_id || !formData.planned_batch_size) {
+    // All queued lines plus whatever is currently in the form
+    const currentLine: BatchConfig[] =
+      formData.finished_good_id && parseFloat(formData.planned_batch_size) > 0
+        ? [{ ...formData }]
+        : [];
+    const lines = [...batchLines, ...currentLine];
+
+    if (lines.length === 0) {
       toast.error('Please fill in all required fields');
       return;
     }
 
-    const numberOfBatches = Math.max(1, Math.min(50, parseInt(formData.number_of_batches) || 1));
+    setCreatingBatch(true);
+    try {
+      let totalCreated = 0;
+      let failedLines = 0;
+      for (const line of lines) {
+        const created = await createBatchesFor(line);
+        if (created > 0) {
+          totalCreated += created;
+        } else {
+          failedLines++;
+        }
+      }
 
+      if (totalCreated > 0) {
+        toast.success(
+          `Successfully created ${totalCreated} batch sheet${totalCreated > 1 ? 's' : ''}` +
+            (lines.length - failedLines > 1 ? ` across ${lines.length - failedLines} product lines` : '')
+        );
+        setDialogOpen(false);
+        setBatchLines([]);
+        resetForm();
+      } else {
+        toast.error('No batch sheets were created — check stock availability and BOMs');
+      }
+    } finally {
+      setCreatingBatch(false);
+    }
+  };
+
+  // "Add Another Batch Sheet" — queue the current entry and reset line-level
+  // fields, keeping the shared date/instructions (same UX as Receiving Log)
+
+  //add another batch sheet -que the current entry and reset line levels fields, keeping the shared date/ints
+  const handleAddAnotherBatch = () => {
+    if (!formData.finished_good_id || !(parseFloat(formData.planned_batch_size) > 0)) {
+      toast.error('Select a product and enter a planned batch size first');
+      return;
+    }
     const bom = getBOMByFinishedGoodId(formData.finished_good_id);
+    if (!bom) {
+      toast.error('No active BOM found for this product');
+      return;
+    }
+    setBatchLines(prev => [...prev, { ...formData }]);
+    setFormData(prev => ({
+      ...prev,
+      finished_good_id: '',
+      planned_batch_size: '',
+      number_of_batches: '1',
+    }));
+    toast.success('Batch sheet added — add another or click Create Batch');
+  };
+
+  const handleRemoveBatchLine = (idx: number) => {
+    setBatchLines(prev => prev.filter((_, i) => i !== idx));
+  };
+
+  const openCreateDialog = () => {
+    setBatchLines([]);
+    resetForm();
+    setDialogOpen(true);
+  };
+
+  // Core creation logic — shared by the single and multi-batch-sheet dialogs
+  const createBatchesFor = async (cfg: BatchConfig): Promise<number> => {
+    const numberOfBatches = Math.max(1, Math.min(50, parseInt(cfg.number_of_batches) || 1));
+
+    const bom = getBOMByFinishedGoodId(cfg.finished_good_id);
     if (!bom) {
       toast.error('No active BOM found for this product');
       return;
@@ -170,31 +297,43 @@ const Production: React.FC = () => {
 
     const bomData = bom as any;
 
+    // Percentage BOMs (bom_uses_percentage): component values are percentages
+    // of their parent quantity, so the full BOM/WIP tree is expanded
+    // recursively with parentQty × (percentage / 100) quantities and shared
+    // WIPs deduplicated. Non-percentage BOMs keep the existing per-batch
+    // quantity behaviour (quantity_per_batch × batch size).
+    const plannedQty = parseFloat(cfg.planned_batch_size) || 0;
+    const usesPercentageBom = (getStockCodeById(cfg.finished_good_id) as any)?.bom_uses_percentage === true;
+    const requirementList: { stock_code_id: string; quantity: number }[] = usesPercentageBom
+      ? computeBatchMaterialRequirements(stockCodes, boms, cfg.finished_good_id, plannedQty)
+      : bom.components.map(comp => ({
+          stock_code_id: comp.material_stock_code_id,
+          quantity: comp.quantity_per_batch * plannedQty,
+        }));
+
     // Use steps from BOM if available, otherwise default
     const bomSteps = bomData.processing_steps as ProcessingStep[] | undefined;
 
     let createdCount = 0;
     const lowStockWarnings: string[] = [];
 
-    // Hard block: a Batch Sheet may not reserve more than the Net Stock available.
-    // Net Stock = Physical Stock (quantity_on_hand) - Reserved. Validate across all
-    // requested batches before creating anything so we never leave orphans behind.
-    const totalRequired = bom.components.map((comp) => {
-      const stockLevel = stockLevels.find(sl => sl.stock_code_id === comp.material_stock_code_id);
+    // Low-stock check: warn but DO NOT block. A batch sheet may still be created
+    // even when there is no/insufficient stock — the shortage is surfaced here
+    // (and again as LOW STOCK warnings after creation) so the manager can decide.
+    // Net Stock = Physical Stock (quantity_on_hand) - Reserved.
+    const totalRequired = requirementList.map((req) => {
+      const stockLevel = stockLevels.find(sl => sl.stock_code_id === req.stock_code_id);
       const physical = stockLevel?.quantity_on_hand ?? 0;
       const reserved = stockLevel?.reserved_quantity ?? 0;
       const netStock = physical - reserved;
-      const required = comp.quantity_per_batch * parseFloat(formData.planned_batch_size) * numberOfBatches;
-      return { material: getStockCodeById(comp.material_stock_code_id), required, netStock };
+      const required = req.quantity * numberOfBatches;
+      return { material: getStockCodeById(req.stock_code_id), required, netStock };
     });
     const shortMaterials = totalRequired.filter(m => m.required > m.netStock);
     if (shortMaterials.length > 0) {
-      toast.error(
-        `Cannot create batch sheet - insufficient net stock for: ${shortMaterials
-          .map(m => `${m.material?.stock_code || 'material'} (need ${m.required.toFixed(2)}, net available ${m.netStock.toFixed(2)})`)
-          .join(', ')}`
+      lowStockWarnings.push(
+        `${shortMaterials.map(m => `${m.material?.stock_code || 'material'} (need ${m.required.toFixed(2)}, net available ${m.netStock.toFixed(2)})`).join(', ')}`
       );
-      return;
     }
     
     for (let b = 0; b < numberOfBatches; b++) {
@@ -231,12 +370,12 @@ const Production: React.FC = () => {
       const noLotsMaterials: string[] = [];
       const lotUsages: { stock_code_id: string; receiving_record_id: string; internal_lot_number: string; quantity_used: number }[] = [];
       
-      for (const comp of bom.components) {
-        const material = getStockCodeById(comp.material_stock_code_id);
-        const requiredQty = comp.quantity_per_batch * parseFloat(formData.planned_batch_size);
+      for (const req of requirementList) {
+        const material = getStockCodeById(req.stock_code_id);
+        const requiredQty = req.quantity;
         
         // Get FIFO-allocated lots for this material
-        const allocatedLots = await fifoAllocateLots(comp.material_stock_code_id, requiredQty);
+        const allocatedLots = await fifoAllocateLots(req.stock_code_id, requiredQty);
         
         if (allocatedLots.length > 0) {
                     // Use the first (oldest) lot - this is the primary lot
@@ -248,7 +387,7 @@ const Production: React.FC = () => {
           // Record all lots that will be consumed
           for (const lot of allocatedLots) {
             lotUsages.push({
-              stock_code_id: comp.material_stock_code_id,
+              stock_code_id: req.stock_code_id,
               receiving_record_id: lot.receiving_record_id,
               internal_lot_number: lot.internal_lot_number || '',
               quantity_used: lot.quantity_to_use,
@@ -256,7 +395,7 @@ const Production: React.FC = () => {
           }
           
                     preWeighMaterials.push({
-            material_id: comp.material_stock_code_id,
+            material_id: req.stock_code_id,
             material_name: material?.description || '',
             stock_code: material?.stock_code || '',
             required_quantity: requiredQty,
@@ -275,7 +414,7 @@ const Production: React.FC = () => {
         } else {
           // No lots available - create with empty fields
           preWeighMaterials.push({
-            material_id: comp.material_stock_code_id,
+            material_id: req.stock_code_id,
             material_name: material?.description || '',
             stock_code: material?.stock_code || '',
             required_quantity: requiredQty,
@@ -286,7 +425,7 @@ const Production: React.FC = () => {
             expiry_date: '',
             approved: false,
           });
-          noLotsMaterials.push(material?.stock_code || comp.material_stock_code_id);
+          noLotsMaterials.push(material?.stock_code || req.stock_code_id);
         }
       }
 
@@ -299,12 +438,12 @@ const Production: React.FC = () => {
       }
 
       const result = await addProductionBatch({
-        finished_good_id: formData.finished_good_id,
+        finished_good_id: cfg.finished_good_id,
         bom_id: bom.id,
-        planned_batch_size: parseFloat(formData.planned_batch_size),
+        planned_batch_size: parseFloat(cfg.planned_batch_size),
         status: 'draft',
-        planned_production_date: formData.planned_production_date,
-        production_instructions: formData.production_instructions,
+        planned_production_date: cfg.planned_production_date,
+        production_instructions: cfg.production_instructions,
         processing_steps: processingSteps,
         quality_checks: organolepticChecks,
         pre_weigh_approved: false,
@@ -325,42 +464,42 @@ const Production: React.FC = () => {
             }))
           // No specific lot allocated (e.g. direct stock): reserve at stock-code
           // level so the reservation is still tracked against the batch.
-          : bom.components.map(comp => ({
-              stock_code_id: comp.material_stock_code_id,
+          : requirementList.map(req => ({
+              stock_code_id: req.stock_code_id,
               receiving_record_id: null,
               internal_lot_number: null,
-              quantity: comp.quantity_per_batch * parseFloat(formData.planned_batch_size),
+              quantity: req.quantity,
             }));
 
         const reserveResults = await reserveStockForBatch(result.id, result.batch_number, reservations);
 
         if (reserveResults === null) {
-          // Reservation failed (e.g. insufficient net stock raced). Rollback the
-          // just-created batch so we never leave a batch without its reservation.
-          await (supabase.from('fms_production_batches') as any).delete().eq('id', result.id);
-          toast.error(`Batch ${result.batch_number} could not be created - stock reservation failed (insufficient net stock?).`);
-          await refreshData();
-          continue;
+          // Reservation could not be placed (e.g. insufficient net stock or
+          // no stock at all). Keep the batch sheet — it was explicitly allowed
+          // to be created with low/no stock — and only skip the reservation.
+          // Stock can be reserved once material is received.
+          lowStockWarnings.push(`${result.batch_number}: stock could not be reserved (insufficient net stock) — batch created without reservation.`);
+          createdCount++;
+        } else {
+          createdCount++;
         }
-
-        createdCount++;
       }
     }
 
+    await refreshData();
     if (createdCount > 0) {
-      setDialogOpen(false);
-      resetForm();
-      await refreshData();
       toast.success(`Successfully created ${createdCount} batch sheet${createdCount > 1 ? 's' : ''}`);
       
       // Show low stock warnings (non-blocking - batch still created)
       if (lowStockWarnings.length > 0) {
         const uniqueWarnings = [...new Set(lowStockWarnings)];
-        toast.warning(`âš ï¸ LOW STOCK: ${uniqueWarnings.join(', ')}`, {
+        toast.warning(`¸⚠️ LOW STOCK: ${uniqueWarnings.join(', ')}`, {
           duration: 8000,
         });
       }
     }
+
+    return createdCount;
   };
 
   const handleStartProduction = async (batchId: string) => {
@@ -373,6 +512,35 @@ const Production: React.FC = () => {
       status: 'pre_weighing',
       production_start: new Date().toISOString(),
     });
+    // Pickle finished products: generate the pickle stage workflow from the
+    // product's BOM dependencies (idempotent). Non-pickle batches are unaffected.
+    // ensurePickleRunForBatch plans against freshly fetched BOMs internally, so
+    // a just-saved parent_finished_good_id link is honoured immediately.
+    if (batch && isPickleBatch(batch, getStockCodeById)) {
+      const runId = await ensurePickleRunForBatch({ batch, stockCodes, boms, userId: user?.id });
+      // Refresh the shared BOM/batch context so the workflow dialog (and any
+      // reopen) sees the same BOM headers the generator just planned against.
+      await refreshData().catch(() => undefined);
+      try {
+        const fresh = await fetchFreshBomsForPlan();
+        console.log('[PickleBatchPlan] post-start verification for', batch.batch_number, ':',
+          (fresh ?? boms).filter((b: any) => ['active', undefined, null].includes(b.status) || b.status !== 'obsolete').length,
+          'live BOMs; plan stages:',
+          (await import('@/components/pickle/PickleBatchWorkflow')).buildPickleBatchPlan(
+            stockCodes, fresh ?? boms, batch.finished_good_id, Number(batch.planned_batch_size) || 0,
+          ).map((s: any) => `${(stockCodes.find((sc: any) => sc.id === s.stockCodeId)?.stock_code) || s.stockCodeId}=${s.totalQty}`).join(', '));
+      } catch { /* verification log only */ }
+      // Open the batch detail immediately with the started status so the pickle
+      // stages show underneath the header (the local `batch` copy is stale).
+      setSelectedBatch({ ...batch, status: 'pre_weighing', production_start: new Date().toISOString() });
+      setViewDialogOpen(true);
+      if (runId) {
+        toast.success('Production started — pickle stages generated');
+      } else {
+        toast.error('Production started, but pickle stages could not be generated.');
+      }
+      return;
+    }
     toast.success('Production started');
     await refreshData();
   };
@@ -410,7 +578,7 @@ const Production: React.FC = () => {
           .eq('batch_id', batchId);
 
         // Restore stock for each material from the active BOM
-        const bom = getBOMByFinishedGoodId(batch.finished_good_id);
+         const bom = getBOMById(batch.bom_id);
         if (bom) {
           const materialsToRestore = bom.components.map(comp => ({
             stock_code_id: comp.material_stock_code_id,
@@ -799,6 +967,48 @@ const handleUpdateOrganolepticCheck = async (
     }
   };
 
+  // ---- Best-Before (expiry) sticker — 30 x 30 mm ----
+  const [stickerDialogBatch, setStickerDialogBatch] = useState<typeof productionBatches[0] | null>(null);
+  const [stickerManufDate, setStickerManufDate] = useState('');
+  const [stickerBestBefore, setStickerBestBefore] = useState('');
+  const [stickerCopies, setStickerCopies] = useState(4);
+
+  const handleOpenExpirySticker = (batch: typeof productionBatches[0]) => {
+    setStickerDialogBatch(batch);
+    setStickerManufDate(String(batch.planned_production_date || '').slice(0, 10));
+    setStickerBestBefore('');
+    setStickerCopies(4);
+  };
+
+  const fmtStickerDate = (raw: string) => {
+    if (!raw) return '';
+    const d = new Date(`${raw.slice(0, 10)}T00:00:00`);
+    if (isNaN(d.getTime())) return raw;
+    return d.toLocaleDateString('en-ZA', { day: '2-digit', month: 'short', year: 'numeric' });
+  };
+
+  const handleDownloadSticker = () => {
+    if (!stickerDialogBatch) return;
+    if (!stickerBestBefore) { toast.error('Please enter a Best Before date'); return; }
+    downloadExpirySticker(
+      stickerDialogBatch.batch_number,
+      fmtStickerDate(stickerManufDate),
+      fmtStickerDate(stickerBestBefore)
+    );
+    toast.success('Best-before sticker downloaded');
+  };
+
+  const handlePrintSticker = () => {
+    if (!stickerDialogBatch) return;
+    if (!stickerBestBefore) { toast.error('Please enter a Best Before date'); return; }
+    printExpiryStickers(
+      stickerDialogBatch.batch_number,
+      fmtStickerDate(stickerManufDate),
+      fmtStickerDate(stickerBestBefore),
+      stickerCopies
+    );
+  };
+
 //Dekete Batch Function
   const handleDeleteBatch = async (batchId: string) => {
     const batch = productionBatches.find(b => b.id === batchId);
@@ -906,14 +1116,71 @@ const handleUpdateOrganolepticCheck = async (
     toast.success('Batch sheet exported to Excel');
   };
 
-  const filteredBatches = productionBatches.filter(batch => {
-    const query = searchQuery.toLowerCase();
-    const finishedGood = getStockCodeById(batch.finished_good_id);
-    const productName = finishedGood?.description?.toLowerCase() || '';
-    const matchesSearch = batch.batch_number.toLowerCase().includes(query) || productName.includes(query);
-    const matchesStatus = statusFilter === 'all' || batch.status === statusFilter;
-    return matchesSearch && matchesStatus;
-  });
+ const filteredBatches = productionBatches.filter(batch => {
+  const query = searchQuery.toLowerCase();
+
+  const finishedGood = getStockCodeById(batch.finished_good_id);
+  const productName = finishedGood?.description?.toLowerCase() || '';
+
+  const matchesSearch =
+    batch.batch_number.toLowerCase().includes(query) ||
+    productName.includes(query);
+
+  const matchesStatus =
+    statusFilter === 'all' || batch.status === statusFilter;
+
+  // Drafted-date range filter
+  const draftDate = (batch.created_at || '').slice(0, 10);
+
+  const matchesDate =
+    (!dateFrom || draftDate >= dateFrom) &&
+    (!dateTo || draftDate <= dateTo);
+
+  // Raw material filter — use the exact BOM assigned to this batch
+  const matchesMaterial =
+    materialFilter === 'all' ||
+    (() => {
+      const bom = getBOMById(batch.bom_id);
+
+      return (
+        !!bom &&
+        (bom.components || []).some(
+          c => c.material_stock_code_id === materialFilter
+        )
+      );
+    })();
+
+  const matchesProduct =
+    productFilter === 'all' ||
+    batch.finished_good_id === productFilter;
+
+  return (
+    matchesSearch &&
+    matchesStatus &&
+    matchesDate &&
+    matchesMaterial &&
+    matchesProduct
+  );
+});
+
+// Total quantity of the selected raw material used across the filtered batches
+const filteredMaterialTotal = useMemo(() => {
+  if (materialFilter === 'all') return 0;
+
+  return filteredBatches.reduce((sum, batch) => {
+    const bom = getBOMById(batch.bom_id);
+
+    const comp = (bom?.components || []).find(
+      c => c.material_stock_code_id === materialFilter
+    );
+
+    return comp
+      ? sum + comp.quantity_per_batch * batch.planned_batch_size
+      : sum;
+  }, 0);
+}, [filteredBatches, materialFilter, boms]);
+
+  const selectedFilterMaterial = materialFilter !== 'all' ? getStockCodeById(materialFilter) : null;
 
   const selectedProduct = formData.finished_good_id 
     ? getStockCodeById(formData.finished_good_id) 
@@ -943,7 +1210,35 @@ const handleUpdateOrganolepticCheck = async (
   }
 
   return (
-    <div className="space-y-4 sm:space-y-6 animate-fade-in px-2 sm:px-0">
+    <Tabs defaultValue="batches" className="w-full">
+      <TabsList className="grid w-full max-w-2xl grid-cols-3">
+        <TabsTrigger value="batches" className="gap-2 text-xs sm:text-sm">
+          <Factory className="h-4 w-4" />
+          Batch Sheets
+        </TabsTrigger>
+        <TabsTrigger value="planned" className="gap-2 text-xs sm:text-sm">
+          <CalendarDays className="h-4 w-4" />
+          Planned Queue
+        </TabsTrigger>
+        <TabsTrigger value="suggested" className="gap-2 text-xs sm:text-sm">
+          <Sparkles className="h-4 w-4" />
+          Suggested Batch Sheets
+        </TabsTrigger>
+      </TabsList>
+
+      {/* Planned Production Queue for the next working day. Selecting a batch
+          here only queues its Batch Sheet for printing: it does not start
+          production and does not change the batch status. The operator starts
+          production the next morning with the existing Start action above. */}
+      <TabsContent value="planned" className="mt-4">
+        <PlannedProductionQueue
+          productionBatches={productionBatches}
+          getStockCodeById={getStockCodeById}
+        />
+      </TabsContent>
+
+      <TabsContent value="batches">
+      <div className="space-y-4 sm:space-y-6 animate-fade-in px-2 sm:px-0">
       {/* Header */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
@@ -961,14 +1256,16 @@ const handleUpdateOrganolepticCheck = async (
               </Button>
             }
           />
+          <Button
+            onClick={openCreateDialog}
+            size="sm"
+            className="gap-2 transition-transform hover:scale-105"
+          >
+            <Plus className="h-4 w-4" />
+            <span className="hidden sm:inline">Create Batch Sheet</span>
+          </Button>
           <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-            <DialogTrigger asChild>
-              <Button onClick={resetForm} size="sm" className="gap-2 transition-transform hover:scale-105">
-                <Plus className="h-4 w-4" />
-                <span className="hidden sm:inline">Create Batch Sheet</span>
-              </Button>
-            </DialogTrigger>
-          <DialogContent className="sm:max-w-[600px] max-h-[90vh] overflow-y-auto">
+            <DialogContent className="sm:max-w-[600px] max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>Create Batch Sheet</DialogTitle>
               <DialogDescription>
@@ -992,7 +1289,7 @@ const handleUpdateOrganolepticCheck = async (
                   <div>
                     <p className="font-medium">{selectedProduct.description}</p>
                     <p className="text-sm text-muted-foreground">
-                      BOM Version {selectedBOM.version_number} â€¢ {selectedBOM.components?.length || 0} components
+                      BOM Version {selectedBOM.version_number} • {selectedBOM.components?.length || 0} components
                     </p>
                   </div>
 
@@ -1114,56 +1411,231 @@ const handleUpdateOrganolepticCheck = async (
                   rows={3}
                 />
               </div>
+
+              {batchLines.length > 0 && (
+                <div className="rounded-lg border border-primary/20 bg-primary/5 p-3">
+                  <p className="text-sm font-semibold mb-2">
+                    Queued batch sheets ({batchLines.reduce((sum, l) => sum + (parseInt(l.number_of_batches) || 1), 0)} total)
+                  </p>
+                  <div className="space-y-2">
+                    {batchLines.map((line, idx) => {
+                      const product = getStockCodeById(line.finished_good_id);
+                      return (
+                        <div key={idx} className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2">
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-medium truncate">
+                              {product?.stock_code || 'Unknown'} - {product?.description || ''}
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              {line.planned_batch_size} kg × {parseInt(line.number_of_batches) || 1} sheet(s) · {line.planned_production_date}
+                            </p>
+                          </div>
+                          <Button variant="ghost" size="sm" onClick={() => handleRemoveBatchLine(idx)} disabled={creatingBatch}>
+                            <Trash2 className="h-4 w-4 text-destructive" />
+                          </Button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
 
             <DialogFooter className="flex-col sm:flex-row gap-2">
-              <Button variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>
+              <Button variant="outline" onClick={() => setDialogOpen(false)} disabled={creatingBatch}>Cancel</Button>
+              <Button
+                variant="outline"
+                onClick={handleAddAnotherBatch}
+                disabled={creatingBatch || !selectedBOM}
+                className="gap-2"
+              >
+                <Plus className="h-4 w-4" />
+                Add Another Batch Sheet
+              </Button>
               {hasInsufficientStock ? (
-                <Button 
-                  onClick={handleCreateBatch} 
-                  disabled={!selectedBOM}
+                <Button
+                  onClick={handleCreateBatch}
+                  disabled={creatingBatch || (!selectedBOM && batchLines.length === 0)}
                   variant="destructive"
                   className="gap-2"
                 >
+                  {creatingBatch && <Loader2 className="h-4 w-4 animate-spin" />}
                   <XCircle className="h-4 w-4" />
                   Proceed Anyway ({insufficientCount} low)
                 </Button>
               ) : (
-                <Button onClick={handleCreateBatch} disabled={!selectedBOM}>
-                  <CheckCircle className="mr-2 h-4 w-4" />
-                  Create Batch
+                <Button onClick={handleCreateBatch} disabled={creatingBatch || (!selectedBOM && batchLines.length === 0)} className="gap-2">
+                  {creatingBatch && <Loader2 className="h-4 w-4 animate-spin" />}
+                  <CheckCircle className="h-4 w-4" />
+                  Create Batch{batchLines.length > 0 ? ` (${batchLines.reduce((sum, l) => sum + (parseInt(l.number_of_batches) || 1), 0) + (formData.finished_good_id && parseFloat(formData.planned_batch_size) > 0 ? (parseInt(formData.number_of_batches) || 1) : 0)} sheets)` : ''}
                 </Button>
               )}
             </DialogFooter>
           </DialogContent>
           </Dialog>
+
+          {/* Best-Before (expiry) sticker — 30 x 30 mm */}
+          <Dialog open={!!stickerDialogBatch} onOpenChange={(o) => { if (!o) setStickerDialogBatch(null); }}>
+            <DialogContent className="sm:max-w-md">
+              <DialogHeader>
+                <DialogTitle>Best-Before Sticker (30 x 30 mm)</DialogTitle>
+                <DialogDescription>
+                  Download or print a best-before label for this finished batch. These stickers are printed separately and stuck on the finished goods.
+                </DialogDescription>
+              </DialogHeader>
+
+              {stickerDialogBatch && (
+                <div className="space-y-4">
+                  <div className="rounded-lg border border-border bg-muted/30 p-3 text-sm">
+                    <p className="font-semibold">{stickerDialogBatch.batch_number}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {getStockCodeById(stickerDialogBatch.finished_good_id)?.description || 'Finished good'}
+                    </p>
+                  </div>
+
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="space-y-2">
+                      <Label htmlFor="sticker-manuf">Manufactured Date</Label>
+                      <Input id="sticker-manuf" type="date" value={stickerManufDate} onChange={(e) => setStickerManufDate(e.target.value)} />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="sticker-bb">Best Before *</Label>
+                      <Input id="sticker-bb" type="date" value={stickerBestBefore} onChange={(e) => setStickerBestBefore(e.target.value)} required />
+                    </div>
+                  </div>
+
+                  {/* Live preview */}
+                  <div className="flex justify-center rounded-lg border border-border bg-white p-4">
+                    {(stickerManufDate || stickerBestBefore) ? (() => {
+                      const preview = renderExpirySticker(
+                        stickerDialogBatch.batch_number,
+                        fmtStickerDate(stickerManufDate),
+                        fmtStickerDate(stickerBestBefore)
+                      );
+                      return preview ? (
+                        <img
+                          src={preview.toDataURL('image/png')}
+                          alt="Best-before sticker preview (30 x 30 mm)"
+                          className="h-40 w-40 rounded border border-gray-300 object-contain"
+                        />
+                      ) : (
+                        <p className="py-10 text-center text-sm text-muted-foreground">Could not render preview</p>
+                      );
+                    })() : (
+                      <p className="py-10 text-center text-sm text-muted-foreground">Enter dates above to preview the sticker</p>
+                    )}
+                  </div>
+
+                  {/* Print copies */}
+                  <div className="space-y-2">
+                    <Label htmlFor="sticker-copies">Print copies</Label>
+                    <Input
+                      id="sticker-copies"
+                      type="number"
+                      min={1}
+                      max={50}
+                      value={stickerCopies}
+                      onChange={(e) => setStickerCopies(Math.max(1, parseInt(e.target.value) || 1))}
+                    />
+                  </div>
+                </div>
+              )}
+
+              <DialogFooter className="flex-col gap-2 sm:flex-row">
+                <Button variant="outline" onClick={() => setStickerDialogBatch(null)}>Close</Button>
+                <Button variant="outline" onClick={handlePrintSticker} disabled={!stickerBestBefore} className="gap-2">
+                  <Printer className="h-4 w-4" /> Print ({stickerCopies})
+                </Button>
+                <Button onClick={handleDownloadSticker} disabled={!stickerBestBefore} className="gap-2">
+                  <Download className="h-4 w-4" /> Download Sticker
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+
         </div>
+
       </div>
 
       {/* Filters */}
-      <div className="flex flex-col gap-4 rounded-xl border border-border bg-card p-3 sm:p-4 sm:flex-row sm:items-center">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            placeholder="Search batch number..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="pl-9"
-          />
+      <div className="space-y-3 rounded-xl border border-border bg-card p-3 sm:p-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+          <div className="relative flex-1">
+            <Label className="mb-1 block text-xs text-muted-foreground">Search</Label>
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                placeholder="Search batch number..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="pl-9"
+              />
+            </div>
+          </div>
+          <div>
+            <Label className="mb-1 block text-xs text-muted-foreground">Status</Label>
+            <Select value={statusFilter} onValueChange={(value) => setStatusFilter(value as BatchStatus | 'all')}>
+              <SelectTrigger className="w-full sm:w-[160px]">
+                <SelectValue placeholder="Status" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Status</SelectItem>
+                <SelectItem value="draft">Draft</SelectItem>
+                <SelectItem value="pre_weighing">Pre-Weighing</SelectItem>
+                <SelectItem value="manufacturing">Manufacturing</SelectItem>
+                <SelectItem value="closed">Closed</SelectItem>
+                <SelectItem value="cancelled">Cancelled</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div>
+            <Label className="mb-1 block text-xs text-muted-foreground">Drafted From</Label>
+            <Input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="w-full sm:w-[160px]" />
+          </div>
+          <div>
+            <Label className="mb-1 block text-xs text-muted-foreground">Drafted To</Label>
+            <Input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="w-full sm:w-[160px]" />
+          </div>
         </div>
-        <Select value={statusFilter} onValueChange={(value) => setStatusFilter(value as BatchStatus | 'all')}>
-          <SelectTrigger className="w-full sm:w-[160px]">
-            <SelectValue placeholder="Status" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Status</SelectItem>
-            <SelectItem value="draft">Draft</SelectItem>
-            <SelectItem value="pre_weighing">Pre-Weighing</SelectItem>
-            <SelectItem value="manufacturing">Manufacturing</SelectItem>
-            <SelectItem value="closed">Closed</SelectItem>
-            <SelectItem value="cancelled">Cancelled</SelectItem>
-          </SelectContent>
-        </Select>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+          <div className="w-full sm:w-[260px]">
+            <Label className="mb-1 block text-xs text-muted-foreground">Raw Material</Label>
+            <SearchableSelect
+              options={[{ value: 'all', label: 'All Raw Materials' }, ...materialOptions]}
+              value={materialFilter}
+              onValueChange={setMaterialFilter}
+              placeholder="All raw materials"
+            />
+          </div>
+          <div className="w-full sm:w-[260px]">
+            <Label className="mb-1 block text-xs text-muted-foreground">Finished Product</Label>
+            <SearchableSelect
+              options={[{ value: 'all', label: 'All Finished Products' }, ...finishedProductFilterOptions]}
+              value={productFilter}
+              onValueChange={setProductFilter}
+              placeholder="All finished products"
+            />
+          </div>
+        </div>
+        {/* Summary */}
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-2 border-t border-border pt-3 text-sm">
+          <span className="text-muted-foreground">
+            Batch sheets: <span className="font-semibold text-foreground">{filteredBatches.length}</span>
+          </span>
+          {selectedFilterMaterial && (
+            <span className="text-muted-foreground">
+              {selectedFilterMaterial.stock_code}
+              {selectedFilterMaterial.description ? ` (${selectedFilterMaterial.description})` : ''} used:{' '}
+              <span className="font-semibold text-foreground">{filteredMaterialTotal.toFixed(2)} kg</span>
+            </span>
+          )}
+          {(dateFrom || dateTo || materialFilter !== 'all' || productFilter !== 'all' || statusFilter !== 'all' || searchQuery) && (
+            <Button variant="ghost" size="sm" onClick={clearFilters} className="ml-auto gap-1">
+              <XCircle className="h-4 w-4" />
+              Clear filters
+            </Button>
+          )}
+        </div>
       </div>
 
       {/* Batch Cards */}
@@ -1264,6 +1736,9 @@ const handleUpdateOrganolepticCheck = async (
                 <Button variant="outline" size="sm" onClick={() => handleCopyQRCode(batch)} title="Copy QR to clipboard" className="hidden sm:inline-flex">
                   <Copy className="h-4 w-4" />
                 </Button>
+                <Button variant="outline" size="sm" onClick={() => handleOpenExpirySticker(batch)} title="Expiry Sticker" className="hidden sm:inline-flex">
+                  <Tag className="h-4 w-4" />
+                </Button>
                 <Button variant="outline" size="sm" onClick={() => handleExportBatchToExcel(batch)} title="Export to Excel" className="hidden sm:inline-flex">
                   <Table className="h-4 w-4" />
                 </Button>
@@ -1307,7 +1782,20 @@ const handleUpdateOrganolepticCheck = async (
           <DialogHeader>
             <DialogTitle>Batch Sheet: {selectedBatch?.batch_number}</DialogTitle>
           </DialogHeader>
-          {selectedBatch && (
+          {selectedBatch && isPickleBatch(selectedBatch, getStockCodeById) && selectedBatch.status !== 'draft' && (
+            <PickleBatchWorkflow
+              batch={selectedBatch}
+              stockCodes={stockCodes}
+              boms={boms}
+              receivingRecords={receivingRecords}
+              onChanged={async () => { await refreshData(); }}
+            />
+          )}
+          {/* Pickle batches (after Start): the pickle stage workflow replaces the
+              normal batch management view, so there is only one workflow. Draft
+              pickle batches keep the normal view and the stages stay hidden.
+              Non-pickle batches always render BatchManagement, unchanged. */}
+          {selectedBatch && (!isPickleBatch(selectedBatch, getStockCodeById) || selectedBatch.status === 'draft') && (
             <BatchManagement 
               batch={selectedBatch}
               getStockCodeById={getStockCodeById}
@@ -1336,6 +1824,15 @@ const handleUpdateOrganolepticCheck = async (
         </DialogContent>
       </Dialog>
     </div>
+      </TabsContent>
+
+      <TabsContent value="suggested">
+        <SuggestedBatchSheets
+          stockCodes={stockCodes}
+          productionBatches={productionBatches}
+        />
+      </TabsContent>
+    </Tabs>
   );
 };
 

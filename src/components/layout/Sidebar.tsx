@@ -18,10 +18,11 @@ import {
   Menu,
   X,
   KeyRound,
-  BarChart3, ArrowLeft, LogOut
+  BarChart3, ArrowLeft, LogOut, Box
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet';
+
 
 interface NavItem {
   title: string;

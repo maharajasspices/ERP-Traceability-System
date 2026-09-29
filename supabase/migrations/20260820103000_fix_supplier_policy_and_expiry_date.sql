@@ -1,6 +1,5 @@
--- Make fms_receiving.expiry_date nullable (it's optional for receiving entries)
-ALTER TABLE public.fms_receiving
-  ALTER COLUMN expiry_date DROP NOT NULL;
+-- fms_receiving.expiry_date stays NOT NULL: expiry date is required for
+-- traceability. The receiving workflow now always supplies a real expiry date.
 
 -- Expand supplier management policy:
 -- All FMS users can add/update suppliers (validation is enforced via the fms-validate edge function)

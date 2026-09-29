@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
 import { HRSidebar, MobileHRSidebar } from './HRSidebar';
+import { WarningMeetingsBell } from '@/components/WarningMeetings';
+import { NotificationsDropdown } from './NotificationsDropdown';
 import { cn } from '@/lib/utils';
 
 const pageTitles: Record<string, string> = {
@@ -31,6 +33,12 @@ export const HRLayout: React.FC = () => {
             <h1 className="text-lg font-semibold text-foreground md:text-xl">
               {pageTitle}
             </h1>
+          </div>
+          <div className="flex items-center gap-2">
+            {/* Notification bell (contract signed, etc.) */}
+            <NotificationsDropdown />
+            {/* Warning meeting reminders (HR only) */}
+            <WarningMeetingsBell />
           </div>
         </header>
         <main className="flex-1 p-4 md:p-6">

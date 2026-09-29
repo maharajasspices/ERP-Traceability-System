@@ -14,8 +14,8 @@ CREATE TABLE IF NOT EXISTS public.fms_stock_orders (
   invoice_file_path TEXT,          -- path inside the 'order-documents' storage bucket
   order_date DATE NOT NULL DEFAULT CURRENT_DATE,
   notes TEXT,
-  status TEXT NOT NULL DEFAULT 'awaiting_receipt'
-    CHECK (status IN ('awaiting_receipt', 'partial', 'received')),
+  status TEXT NOT NULL DEFAULT 'PENDING_RECEIPT'
+    CHECK (status IN ('PENDING_RECEIPT', 'partial', 'received')),
   created_by UUID,
   created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
   updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now()

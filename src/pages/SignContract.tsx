@@ -7,11 +7,11 @@ import {
   PenLine,
   Eraser,
   CheckCircle2,
-  FileText,
   ShieldAlert,
   Clock,
   ExternalLink,
 } from "lucide-react";
+
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 
@@ -51,6 +51,11 @@ const SignaturePad = React.forwardRef<SigningPadHandle>((_, ref) => {
   const resize = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
+    // Preserve any existing ink across resizes (mobile browsers fire resize
+    // when the address bar shows/hides, which would otherwise wipe it).
+    const prevInk = hasInkRef.current
+      ? canvas.toDataURL("image/png")
+      : null;
     const rect = canvas.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
     canvas.width = Math.round(rect.width * dpr);
@@ -62,6 +67,14 @@ const SignaturePad = React.forwardRef<SigningPadHandle>((_, ref) => {
       ctx.lineCap = "round";
       ctx.lineJoin = "round";
       ctx.strokeStyle = "#111827";
+      if (prevInk) {
+        const img = new Image();
+        img.onload = () => {
+          // Draw back at CSS-pixel size (ctx is already dpr-scaled).
+          ctx.drawImage(img, 0, 0, rect.width, rect.height);
+        };
+        img.src = prevInk;
+      }
     }
   }, []);
 
@@ -115,9 +128,56 @@ const SignaturePad = React.forwardRef<SigningPadHandle>((_, ref) => {
   const getDataUrl = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return "";
-    // Trim to the bounding box of the drawn ink for a clean image.
+    // Trim to the bounding box of the drawn ink for a clean, transparent
+    // PNG that embeds neatly into the signed PDF (no large empty margins).
     try {
-      return canvas.toDataURL("image/png");
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return "";
+      const { width, height } = canvas;
+      const imageData = ctx.getImageData(0, 0, width, height);
+      const data = imageData.data;
+
+      // Find the bounding box of the drawn ink (non-transparent pixels).
+      let minX = width;
+      let minY = height;
+      let maxX = -1;
+      let maxY = -1;
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+          if (data[(y * width + x) * 4 + 3] > 8) {
+            if (x < minX) minX = x;
+            if (x > maxX) maxX = x;
+            if (y < minY) minY = y;
+            if (y > maxY) maxY = y;
+          }
+        }
+      }
+      if (maxX < 0) return ""; // No ink captured
+
+      const pad = 6;
+      minX = Math.max(0, minX - pad);
+      minY = Math.max(0, minY - pad);
+      maxX = Math.min(width - 1, maxX + pad);
+      maxY = Math.min(height - 1, maxY + pad);
+      const cropW = maxX - minX + 1;
+      const cropH = maxY - minY + 1;
+
+      // Copy the cropped ink onto a clean transparent canvas.
+      const out = document.createElement("canvas");
+      out.width = cropW;
+      out.height = cropH;
+      const outCtx = out.getContext("2d");
+      if (!outCtx) return "";
+      const outImage = outCtx.createImageData(cropW, cropH);
+      for (let y = 0; y < cropH; y++) {
+        const srcStart = ((minY + y) * width + minX) * 4;
+        outImage.data.set(
+          data.subarray(srcStart, srcStart + cropW * 4),
+          y * cropW * 4
+        );
+      }
+      outCtx.putImageData(outImage, 0, 0);
+      return out.toDataURL("image/png");
     } catch {
       return "";
     }
@@ -139,16 +199,19 @@ const SignaturePad = React.forwardRef<SigningPadHandle>((_, ref) => {
     />
   );
 });
+
+
+
 SignaturePad.displayName = "SignaturePad";
+
 const SignContract: React.FC = () => {
   const [searchParams] = useSearchParams();
   const token = searchParams.get("token")?.trim() || "";
-
   const [page, setPage] = useState<PageState>({ kind: "loading" });
   const [signerName, setSignerName] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const padRef = useRef<SigningPadHandle>(null);
-
+  
   // Pre-fill the name from the known employee when available.
   useEffect(() => {
     if (page.kind === "ready" && page.data.employee) {
@@ -213,54 +276,128 @@ const SignContract: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadRequest]);
 
-  const handleSubmit = async () => {
-    if (!token || page.kind !== "ready") return;
 
-    const pad = padRef.current;
-    if (!pad || !pad.hasSignature()) {
-      toast.error("Please draw your signature before submitting.");
-      return;
-    }
+const handleSubmit = async () => {
+if (!token || page.kind !== "ready") return;
 
-    const signatureData = pad.getDataUrl();
-    if (!signatureData) {
-      toast.error("Could not capture your signature. Please try again.");
-      return;
-    }
+const pad = padRef.current;
 
-    setSubmitting(true);
+if (!pad || !pad.hasSignature()) {
+  toast.error("Please draw your signature before submitting.");
+  return;
+}
+
+const signatureData = pad.getDataUrl();
+
+if (!signatureData) {
+  toast.error("Could not capture your signature. Please try again.");
+  return;
+}
+
+setSubmitting(true);
+
+try {
+const { data, error } = await supabase.functions.invoke(
+"sign-contract",
+{
+body: {
+operation: "complete",
+token,
+signature_method: "draw",
+signature_data: signatureData,
+signer_name: signerName.trim() || undefined,
+},
+}
+);
+
+// ------------------------------------------------------------
+// HANDLE EDGE FUNCTION ERRORS
+// ------------------------------------------------------------
+if (error || data?.error) {
+  console.error("sign-contract (complete) error:", {
+    error,
+    data,
+    message: error?.message,
+    context: error?.context,
+  });
+
+  let errorMessage =
+    data?.error ||
+    error?.message ||
+    "Failed to sign the contract.";
+
+  // Supabase FunctionsHttpError may contain the actual
+  // JSON response returned by the Edge Function.
+  if (error?.context) {
     try {
-      const { data, error } = await supabase.functions.invoke("sign-contract", {
-        body: {
-          operation: "complete",
-          token,
-          signature_data: signatureData,
-          signer_name: signerName.trim() || undefined,
-        },
-      });
+      const responseBody = await error.context.json();
 
-      if (error || data?.error) {
-        console.error("sign-contract (complete) error:", error || data);
-        if (String(data?.error || error?.message).includes("expired")) {
-          setPage({ kind: "expired" });
-        }
-        toast.error(data?.error || error?.message || "Failed to sign the contract.");
-        return;
-      }
+      console.error(
+        "sign-contract response body:",
+        responseBody
+      );
 
-      if (data?.success) {
-        setPage({ kind: "signed", signed_at: data.signed_at });
-        toast.success("Contract signed successfully");
-      } else {
-        toast.error("The contract could not be signed.");
+      if (responseBody?.error) {
+        errorMessage = responseBody.error;
       }
-    } catch (err) {
-      console.error("sign-contract (complete) unexpected error:", err);
-      toast.error("Something went wrong while signing. Please try again.");
-    } finally {
-      setSubmitting(false);
+    } catch (responseError) {
+      console.error(
+        "Could not read sign-contract error response:",
+        responseError
+      );
     }
-  };
+  }
+
+  // If the backend tells us the link has expired,
+  // show the expired page.
+  if (
+    String(errorMessage)
+      .toLowerCase()
+      .includes("expired")
+  ) {
+    setPage({ kind: "expired" });
+  }
+
+  toast.error(errorMessage);
+  return;
+}
+
+// ------------------------------------------------------------
+// SUCCESS
+// ------------------------------------------------------------
+if (data?.success) {
+  setPage({
+    kind: "signed",
+    signed_at: data.signed_at,
+  });
+
+  toast.success("Contract signed successfully");
+} else {
+  console.error(
+    "sign-contract returned an unexpected response:",
+    data
+  );
+
+  toast.error("The contract could not be signed.");
+}
+
+
+} catch (err) {
+console.error(
+"sign-contract (complete) unexpected error:",
+err
+);
+
+toast.error(
+  "Something went wrong while signing. Please try again."
+);
+
+
+} finally {
+setSubmitting(false);
+}
+};
+
 
   const formatExpiry = (iso: string) =>
     new Date(iso).toLocaleDateString("en-ZA", { year: "numeric", month: "long", day: "numeric" });
@@ -419,9 +556,10 @@ const SignContract: React.FC = () => {
                 </div>
 
                 {/* Signature pad */}
-                <div>
+                <div className="space-y-4">
                   <div className="mb-2 flex items-center justify-between">
                     <p className="text-sm font-medium">Draw your signature</p>
+
                     <Button
                       type="button"
                       variant="outline"
@@ -432,7 +570,9 @@ const SignContract: React.FC = () => {
                       Clear
                     </Button>
                   </div>
+
                   <SignaturePad ref={padRef} />
+
                   <p className="mt-1.5 text-xs text-muted-foreground">
                     Use your mouse or finger to sign within the box above.
                   </p>

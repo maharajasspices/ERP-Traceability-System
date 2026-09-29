@@ -61,7 +61,7 @@ CREATE TABLE IF NOT EXISTS public.fms_hr_leave (
   end_date DATE NOT NULL,
   days_requested INTEGER NOT NULL,
   reason TEXT,
-  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected', 'cancelled')),
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'declined', 'cancelled')),
   reviewed_by UUID,
   reviewed_at TIMESTAMP WITH TIME ZONE,
   review_notes TEXT,

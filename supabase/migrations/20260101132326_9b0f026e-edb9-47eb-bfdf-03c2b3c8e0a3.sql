@@ -11,7 +11,7 @@ SELECT
     count(*) AS review_count
 FROM product_reviews
 GROUP BY product_id;
-
+  
 -- Fix 2: Add search_path to fms_generate_lot_number function to prevent schema injection
 CREATE OR REPLACE FUNCTION public.fms_generate_lot_number()
 RETURNS text

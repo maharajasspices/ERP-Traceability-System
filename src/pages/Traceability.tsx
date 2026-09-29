@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useFMSData } from '@/hooks/useFMSData';
 import { useActivityLog } from '@/hooks/useActivityLog';
 import { Button } from '@/components/ui/button';
@@ -8,16 +8,43 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { toast } from 'sonner';
-import { Search, ArrowRight, ArrowLeft, FileText, Download, AlertTriangle, Package, Truck, Factory, Send, Loader2, Camera, Users } from 'lucide-react';
+import { Search, ArrowRight, ArrowLeft, FileText, Download, AlertTriangle, Package, Truck, Factory, Send, Loader2, Camera, Users, BarChart3 } from 'lucide-react';
 import { exportToPDF, exportToExcel } from '@/lib/exportUtils';
+import { MonthlyUsageReport } from '@/components/traceability/MonthlyUsageReport';
 import { QRScanner } from '@/components/QRScanner';
 import { extractBestScanIdentifier } from '@/lib/scanParser';
+import { supabase } from '@/integrations/supabase/client';
 const formatDate = (date: string | Date): string => {
   return new Date(date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
 };
 
 const formatDateTime = (date: string | Date): string => {
   return new Date(date).toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+};
+
+/** Normalise a possibly-null identifier for safe, case-insensitive comparison. */
+const norm = (value?: string | null): string => (value ?? '').trim().toLowerCase();
+
+/**
+ * True when `candidate` matches `query`.
+ * Prefers an exact match, then a prefix match, and only then falls back to a
+ * substring match. A bare substring match is too loose for traceability: a
+ * query like "LOT-2" would otherwise drag in LOT-2025-0007, LOT-2026-0011 etc.
+ */
+const matchesIdentifier = (candidate: string | null | undefined, query: string): boolean => {
+  const c = norm(candidate);
+  if (!c) return false;
+  const q = norm(query);
+  if (!q) return false;
+  if (c === q) return true;
+  if (c.startsWith(q)) return true;
+  return c.includes(q);
+};
+
+/** Same as matchesIdentifier but true only on an exact (case-insensitive) match. */
+const isExactIdentifier = (candidate: string | null | undefined, query: string): boolean => {
+  const c = norm(candidate);
+  return !!c && c === norm(query);
 };
 
 interface ExportField {
@@ -27,9 +54,10 @@ interface ExportField {
 }
 
 const Traceability: React.FC = () => {
-  const { stockCodes, suppliers, receivingRecords, productionBatches, dispatchRecords, loading } = useFMSData();
+  const { stockCodes, suppliers, receivingRecords, productionBatches, dispatchRecords, stockMovements, loading } = useFMSData();
   const { logActivity } = useActivityLog();
 
+  const [activeTab, setActiveTab] = useState<'trace' | 'usage'>('trace');
   const [searchType, setSearchType] = useState<'forward' | 'backward'>('backward');
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<any>(null);
@@ -57,35 +85,83 @@ const Traceability: React.FC = () => {
   const getStockCode = (id: string) => stockCodes.find(sc => sc.id === id);
   const getSupplier = (id: string) => suppliers.find(s => s.id === id);
 
+  // ------------------------------------------------------------
+  // Authoritative lot -> batch links.
+  // pre_weigh_materials is what an operator TYPED before weighing. The
+  // fms_materials_used rows are what was ACTUALLY consumed, and they carry a
+  // real receiving_record_id. A recall must trust the latter, so load it once
+  // and use it to corroborate the pre-weigh data.
+  // ------------------------------------------------------------
+  const [materialsUsed, setMaterialsUsed] = useState<
+    { batch_id: string; receiving_record_id: string | null; quantity_used: number }[]
+  >([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data, error } = await (supabase.from('fms_materials_used' as any) as any).select(
+          'batch_id, receiving_record_id, quantity_used'
+        );
+        if (error) {
+          console.error('[Traceability] failed to load materials used:', error);
+          return;
+        }
+        if (!cancelled) setMaterialsUsed((data as any[]) || []);
+      } catch (err) {
+        console.error('[Traceability] materials used error:', err);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  /** Batch ids that actually consumed a given receiving (lot) record. */
+  const batchIdsUsingLot = (receivingId: string) =>
+    materialsUsed
+      .filter((m) => m.receiving_record_id === receivingId)
+      .map((m) => m.batch_id)
+      .filter(Boolean);
+
   // Backward trace: From batch number, find raw materials and if this batch was used as RM in other batches
   const handleBackwardTrace = (query: string) => {
-    // First, check if it's a batch number
-    const batch = productionBatches.find(b => b.batch_number.toLowerCase().includes(query.toLowerCase()));
+    // Prefer an exact batch-number match, then a looser one.
+    const batch =
+      productionBatches.find(b => isExactIdentifier(b.batch_number, query)) ||
+      productionBatches.find(b => matchesIdentifier(b.batch_number, query));
 
     if (batch) {
       const finishedGood = getStockCode(batch.finished_good_id);
       const batchData = batch as any;
       
       // Get raw materials from pre-weigh materials
-      const preWeighMaterials = batchData.pre_weigh_materials || [];
+      const preWeighMaterials: any[] = batchData.pre_weigh_materials || [];
       
       // Find if this batch was used as raw material in other batches
       const usedInBatches = productionBatches.filter(b => {
         if (b.id === batch.id) return false;
-        const materials = (b as any).pre_weigh_materials || [];
+        const materials: any[] = (b as any).pre_weigh_materials || [];
         return materials.some((m: any) => 
-          m.raw_material_batch_number?.toLowerCase().includes(batch.batch_number.toLowerCase())
+          matchesIdentifier(m.raw_material_batch_number, batch.batch_number) ||
+          matchesIdentifier(m.internal_lot_number, batch.batch_number)
         );
       });
 
-      // Get receiving records that might be linked
-      const linkedReceiving = receivingRecords.filter(r => {
-        return preWeighMaterials.some((m: any) => 
-          m.raw_material_batch_number && 
-          (r.internal_lot_number.toLowerCase().includes(m.raw_material_batch_number.toLowerCase()) ||
-           r.supplier_batch_number.toLowerCase().includes(m.raw_material_batch_number.toLowerCase()))
-        );
-      });
+      // Get receiving records that might be linked.
+      // A pre-weigh row records the supplier's external batch number, so match it
+      // against BOTH identifiers on the receiving record, and guard against the
+      // nullable columns (in-house pickle lots have no supplier batch number).
+      const linkedReceiving = receivingRecords.filter(r => 
+        preWeighMaterials.some((m: any) => {
+          const ref = m.raw_material_batch_number || m.internal_lot_number;
+          if (!ref) return false;
+          return (
+            matchesIdentifier(r.internal_lot_number, ref) ||
+            matchesIdentifier(r.supplier_batch_number, ref)
+          );
+        })
+      );
 
       setSearchResults({
         type: 'backward',
@@ -107,9 +183,10 @@ const Traceability: React.FC = () => {
 
     // Check if it's a raw material batch number used in production batches
     const batchesUsingRM = productionBatches.filter(b => {
-      const materials = (b as any).pre_weigh_materials || [];
-      return materials.some((m: any) => 
-        m.raw_material_batch_number?.toLowerCase().includes(query.toLowerCase())
+      const materials: any[] = (b as any).pre_weigh_materials || [];
+      return materials.some((m: any) =>
+        matchesIdentifier(m.raw_material_batch_number, query) ||
+        matchesIdentifier(m.internal_lot_number, query)
       );
     });
 
@@ -131,27 +208,52 @@ const Traceability: React.FC = () => {
 
   // Forward trace: From lot/batch number, find all batches that used it and their dispatch destinations
   const handleForwardTrace = (query: string) => {
-    // Check receiving records
-    const receiving = receivingRecords.find(r =>
-      r.internal_lot_number.toLowerCase().includes(query.toLowerCase()) ||
-      r.supplier_batch_number.toLowerCase().includes(query.toLowerCase())
-    );
+    // Check receiving records. supplier_batch_number is nullable (in-house pickle
+    // lots have none), so it must never be dereferenced directly.
+    // Prefer an exact identifier match so a partial query cannot silently resolve
+    // to the wrong lot.
+    const receiving =
+      receivingRecords.find(r =>
+        isExactIdentifier(r.internal_lot_number, query) ||
+        isExactIdentifier(r.supplier_batch_number, query)
+      ) ||
+      receivingRecords.find(r =>
+        matchesIdentifier(r.internal_lot_number, query) ||
+        matchesIdentifier(r.supplier_batch_number, query)
+      );
 
     // Also check if searching for a batch number
-    const batch = productionBatches.find(b => b.batch_number.toLowerCase().includes(query.toLowerCase()));
+    const batch =
+      productionBatches.find(b => isExactIdentifier(b.batch_number, query)) ||
+      productionBatches.find(b => matchesIdentifier(b.batch_number, query));
 
     if (receiving) {
       const stockCode = getStockCode(receiving.stock_code_id);
       const supplier = getSupplier(receiving.supplier_id);
       
-      // Find batches that used this lot number in their pre-weigh materials
-      const affectedBatches = productionBatches.filter(b => {
-        const materials = (b as any).pre_weigh_materials || [];
-        return materials.some((m: any) => 
-          m.raw_material_batch_number?.toLowerCase().includes(receiving.internal_lot_number.toLowerCase()) ||
-          m.raw_material_batch_number?.toLowerCase().includes(receiving.supplier_batch_number.toLowerCase())
-        );
-      });
+      // Find batches that used this lot. Two independent sources are unioned:
+      //  1. fms_materials_used  - the authoritative record of what was consumed
+      //  2. pre_weigh_materials - what the operator recorded at pre-weigh
+      // Union (not intersection) is deliberate: for a recall, a batch that
+      // touched this lot in EITHER system must appear.
+      const actualBatchIds = new Set(batchIdsUsingLot(receiving.id));
+      const preWeighBatchIds = productionBatches
+        .filter(b => {
+          const materials: any[] = (b as any).pre_weigh_materials || [];
+          return materials.some((m: any) => {
+            const ref = m.raw_material_batch_number || m.internal_lot_number;
+            if (!ref) return false;
+            return (
+              matchesIdentifier(receiving.internal_lot_number, ref) ||
+              matchesIdentifier(receiving.supplier_batch_number, ref)
+            );
+          });
+        })
+        .map(b => b.id);
+
+      const matchedBatchIds = new Set([...actualBatchIds, ...preWeighBatchIds]);
+      const affectedBatches = productionBatches.filter(b => matchedBatchIds.has(b.id));
+      const confirmedByUsage = productionBatches.filter(b => actualBatchIds.has(b.id));
       // Find dispatches that contain these batches
       const affectedBatchIds = affectedBatches.map(b => b.id);
       const affectedDispatches = dispatchRecords.filter(d => 
@@ -161,10 +263,13 @@ const Traceability: React.FC = () => {
       setSearchResults({
         type: 'forward',
         receiving: { ...receiving, stockCode, supplier },
-        affectedBatches: affectedBatches.map(b => ({ 
+        affectedBatches: affectedBatches.map((b) => ({ 
           ...b, 
-          finishedGood: getStockCode(b.finished_good_id) 
+          finishedGood: getStockCode(b.finished_good_id),
+          // True when fms_materials_used confirms real consumption of this lot.
+          confirmedUsage: actualBatchIds.has(b.id),
         })),
+        confirmedCount: confirmedByUsage.length,
         affectedDispatches: affectedDispatches.map(d => ({
           ...d,
           batchNumbers: d.items?.map((item: any) => {
@@ -239,8 +344,22 @@ const Traceability: React.FC = () => {
         if (selectedKeys.includes('status')) row['Status'] = rm.status;
         return row;
       });
+    } else if (searchResults.type === 'backward_rm') {
+      // Raw-material search results are a list of BATCHES, so reuse the
+      // forward-style field set. Without this the export silently returned
+      // nothing for this result type.
+      const rmSelected = forwardFields.filter(f => f.checked).map(f => f.key);
+      return searchResults.affectedBatches.map((b: any) => {
+        const row: Record<string, any> = {};
+        if (rmSelected.includes('batch_number')) row['Batch Number'] = b.batch_number;
+        if (rmSelected.includes('product')) row['Product'] = b.finishedGood?.description || '';
+        if (rmSelected.includes('quantity')) row['Quantity'] = b.planned_batch_size;
+        if (rmSelected.includes('production_date')) row['Production Date'] = formatDate(b.planned_production_date);
+        if (rmSelected.includes('status')) row['Status'] = b.status;
+        return row;
+      });
     } else if (searchResults.type === 'forward' || searchResults.type === 'forward_batch') {
-      const batches = searchResults.affectedBatches || [searchResults.batch];
+      const batches = searchResults.affectedBatches || (searchResults.batch ? [searchResults.batch] : []);
       return batches.map((b: any) => {
         const row: Record<string, any> = {};
         if (selectedKeys.includes('batch_number')) row['Batch Number'] = b.batch_number;
@@ -248,7 +367,13 @@ const Traceability: React.FC = () => {
         if (selectedKeys.includes('quantity')) row['Quantity'] = b.planned_batch_size;
         if (selectedKeys.includes('production_date')) row['Production Date'] = formatDate(b.planned_production_date);
         if (selectedKeys.includes('customer')) {
-          const dispatches = searchResults.affectedDispatches || [];
+          // Only the customers that actually received THIS batch, not every
+          // customer in the whole result set.
+          const batchId = b.id;
+          const dispatches = (searchResults.affectedDispatches || []).filter((d: any) =>
+            d.items?.some((item: any) => item.batch_id === batchId) ||
+            (searchResults.type === 'forward_batch' && batchId === searchResults.batch?.id)
+          );
           const customers = dispatches.map((d: any) => d.customer_name).join(', ');
           row['Customer'] = customers || 'Not Dispatched';
         }
@@ -283,6 +408,28 @@ const Traceability: React.FC = () => {
 
   return (
     <div className="space-y-4 sm:space-y-6 animate-fade-in px-2 sm:px-0">
+      {/* Page-level tabs: traceability search vs monthly usage report */}
+      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as 'trace' | 'usage')}>
+        <TabsList className="grid w-full max-w-md grid-cols-2">
+          <TabsTrigger value="trace" className="gap-2 text-xs sm:text-sm">
+            <Search className="h-4 w-4" />
+            Trace
+          </TabsTrigger>
+          <TabsTrigger value="usage" className="gap-2 text-xs sm:text-sm">
+            <BarChart3 className="h-4 w-4" />
+            Usage Report
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="usage" className="mt-4">
+          <MonthlyUsageReport
+            stockCodes={stockCodes}
+            productionBatches={productionBatches}
+            stockMovements={stockMovements}
+          />
+        </TabsContent>
+
+        <TabsContent value="trace" className="mt-4 space-y-4 sm:space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <p className="text-muted-foreground text-sm sm:text-base">Trace products forward or backward through the supply chain</p>
         <div className="flex flex-wrap gap-2">
@@ -511,6 +658,12 @@ const Traceability: React.FC = () => {
               {searchResults.affectedBatches?.length > 0 && (
                 <div className="mt-6">
                   <Label className="text-base font-semibold mb-3 block">Affected Batches ({searchResults.affectedBatches.length})</Label>
+                  {typeof searchResults.confirmedCount === 'number' && (
+                    <p className="mb-3 text-sm text-muted-foreground">
+                      {searchResults.confirmedCount} confirmed via recorded consumption; the rest
+                      appear via pre-weigh records only.
+                    </p>
+                  )}
                   <div className="rounded-lg border border-border overflow-x-auto">
                     <table className="w-full text-sm">
                       <thead className="bg-muted/50">
@@ -519,6 +672,7 @@ const Traceability: React.FC = () => {
                           <th className="px-4 py-2 text-left font-medium">Product</th>
                           <th className="px-4 py-2 text-left font-medium">Date</th>
                           <th className="px-4 py-2 text-left font-medium">Status</th>
+                          <th className="px-4 py-2 text-left font-medium">Evidence</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -528,6 +682,17 @@ const Traceability: React.FC = () => {
                             <td className="px-4 py-2">{b.finishedGood?.description}</td>
                             <td className="px-4 py-2">{formatDate(b.planned_production_date)}</td>
                             <td className="px-4 py-2"><Badge variant="outline">{b.status}</Badge></td>
+                            <td className="px-4 py-2">
+                              {b.confirmedUsage ? (
+                                <Badge className="border-success/40 bg-success/10 text-success">
+                                  Confirmed usage
+                                </Badge>
+                              ) : (
+                                <Badge variant="outline" className="text-muted-foreground">
+                                  Pre-weigh only
+                                </Badge>
+                              )}
+                            </td>
                           </tr>
                         ))}
                       </tbody>
@@ -628,7 +793,9 @@ const Traceability: React.FC = () => {
             </div>
           )}
         </div>
-      )}
+        )}
+        </TabsContent>
+      </Tabs>
     </div>
   );
 };

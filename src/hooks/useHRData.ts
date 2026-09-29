@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useFMSAuth } from '@/context/FMSAuthContext';
 import { toast } from 'sonner';
+import { string } from 'zod';
 
 // HR data types
 export interface HREmployee {
@@ -33,6 +34,7 @@ export interface HREmployee {
   // Contract
   contract_signed: boolean;
   contract_signed_date?: string;
+  signed_contract_url?: string;
 
   // Emergency contact
   emergency_contact_name?: string;
@@ -45,6 +47,7 @@ export interface HREmployee {
   // Leaving employment
   termination_date?: string;
   termination_reason?: string;
+  termination_notes?: string
 
   created_at: string;
   updated_at: string;
@@ -65,16 +68,21 @@ export interface HRAttendance {
 export interface HRLeave {
   id: string;
   employee_id: string;
+  employee_number?: string;
+  employee_name?: string;
+  employee_email?: string;
   leave_type: 'annual' | 'sick' | 'family_responsibility' | 'study' | 'unpaid' | 'maternity' | 'paternity';
   start_date: string;
   end_date: string;
-  days_requested: number;
+  total_days: number;
+  days_requested?: number; // legacy alias
   reason?: string;
-  status: 'pending' | 'approved' | 'rejected' | 'cancelled';
+  status: 'pending' | 'approved' | 'declined' | 'cancelled';
   reviewed_by?: string;
   reviewed_at?: string;
-  review_notes?: string;
-  created_by: string;
+  hr_comment?: string;
+  review_notes?: string; // legacy alias
+  created_by?: string;
   created_at: string;
   updated_at: string;
 }
@@ -102,6 +110,10 @@ export interface HRWarning {
   signature: string;
   status: 'issued' | 'acknowledged' | 'disputed' | 'resolved';
   acknowledged_at?: string;
+  meeting_date?: string | null;
+  meeting_status: 'none' | 'pending' | 'confirmed';
+  meeting_postponed_to?: string | null;
+  meeting_resolved_at?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -137,6 +149,7 @@ const hrCache: HRDataCache = {
   leaveRequests: null,
   documents: null,
   warnings: null,
+  contractSignatures: null,
   fetchedAt: null,
   userId: null,
 };
@@ -144,12 +157,13 @@ const hrCache: HRDataCache = {
 const HR_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 
+
 // The HR tables were added in migrations but the generated types.ts
 // hasn't been regenerated yet. Use this helper for HR table queries.
 const hr = {
   employees: () => (supabase as any).from('fms_hr_employees'),
   attendance: () => (supabase as any).from('fms_hr_attendance'),
-  leave: () => (supabase as any).from('fms_hr_leave'),
+  leave: () => (supabase as any).from('fms_leave_requests'),
   documents: () => (supabase as any).from('fms_hr_documents'),
   warnings: () => (supabase as any).from('fms_hr_warnings'),
   contractSignatures: () => (supabase as any).from('fms_contract_signatures'),
@@ -219,16 +233,26 @@ export function useHRData() {
         setAttendance(attData);
         hrCache.attendance = attData;
       } else {
-        console.error('Error fetching attendance:', attendanceRes.status === 'rejected' ? attendanceRes.reason : attendanceRes.value.error);
+                console.error('Error fetching attendance:', attendanceRes.status === 'rejected' ? attendanceRes.reason : attendanceRes.value.error);
       }
 
       // Leave - non-critical
+     // Leave - non-critical
       if (leaveRes.status === 'fulfilled' && !leaveRes.value.error) {
         const leaveData = (leaveRes.value.data || []) as HRLeave[];
+
+        console.log('✅ HR LEAVE DATA LOADED:', leaveData);
+        console.log('✅ HR PENDING LEAVE:', leaveData.filter(l => l.status === 'pending'));
+
         setLeaveRequests(leaveData);
         hrCache.leaveRequests = leaveData;
       } else {
-        console.error('Error fetching leave:', leaveRes.status === 'rejected' ? leaveRes.reason : leaveRes.value.error);
+        console.error(
+          '❌ HR LEAVE FETCH FAILED:',
+                    leaveRes.status === 'rejected'
+            ? leaveRes.reason
+            : leaveRes.value.error
+        );
       }
 
       // Documents - non-critical
@@ -520,7 +544,8 @@ export function useHRData() {
     details?: string,
     signature?: string,
     sendEmail = false,
-    sendWhatsApp = false
+    sendWhatsApp = false,
+    meetingDate?: string
   ) => {
     if (!user) {
       toast.error('You must be signed in to issue warnings.');
@@ -538,15 +563,24 @@ export function useHRData() {
 
     try {
       // Insert warning record directly
+      const insertPayload: Record<string, unknown> = {
+        employee_id: employeeId,
+        warning_type: warningType,
+        reason: reason.trim(),
+        details: details?.trim() || null,
+        issued_by: user.id,
+        signature: signatureValue,
+      };
+
+      // Optional disciplinary meeting scheduled at issue time — HR must
+      // confirm or postpone it (surfaced on the dashboard & header bell).
+      if (meetingDate) {
+        insertPayload.meeting_date = new Date(meetingDate).toISOString();
+        insertPayload.meeting_status = 'pending';
+      }
+
       const { data, error } = await hr.warnings()
-        .insert({
-          employee_id: employeeId,
-          warning_type: warningType,
-          reason: reason.trim(),
-          details: details?.trim() || null,
-          issued_by: user.id,
-          signature: signatureValue,
-        })
+        .insert(insertPayload)
         .select()
         .single();
 
@@ -613,6 +647,58 @@ export function useHRData() {
     setWarnings(prev => prev.filter(w => w.id !== id));
     hrCache.fetchedAt = null;
     toast.success('Warning deleted');
+    return true;
+  };
+
+  // Confirm a scheduled warning meeting (removes it from the pending list)
+  const confirmWarningMeeting = async (warningId: string) => {
+    const resolvedAt = new Date().toISOString();
+    const { error } = await hr.warnings()
+      .update({ meeting_status: 'confirmed', meeting_resolved_at: resolvedAt })
+      .eq('id', warningId);
+
+    if (error) {
+      console.error('Confirm warning meeting error:', error);
+      toast.error('Failed to confirm the meeting.');
+      return false;
+    }
+
+    setWarnings(prev => prev.map(w =>
+      w.id === warningId
+        ? { ...w, meeting_status: 'confirmed', meeting_resolved_at: resolvedAt }
+        : w
+    ));
+    hrCache.fetchedAt = null;
+    toast.success('Meeting confirmed');
+    return true;
+  };
+
+  // Postpone a scheduled warning meeting to a new date/time (stays pending
+  // in the dashboard & header until it is confirmed)
+  const postponeWarningMeeting = async (warningId: string, newDate: string) => {
+    if (!newDate) {
+      toast.error('Pick a new date and time for the meeting.');
+      return false;
+    }
+
+    const iso = new Date(newDate).toISOString();
+    const { error } = await hr.warnings()
+      .update({ meeting_status: 'pending', meeting_date: iso, meeting_postponed_to: iso })
+      .eq('id', warningId);
+
+    if (error) {
+      console.error('Postpone warning meeting error:', error);
+      toast.error('Failed to postpone the meeting.');
+      return false;
+    }
+
+    setWarnings(prev => prev.map(w =>
+      w.id === warningId
+        ? { ...w, meeting_status: 'pending', meeting_date: iso, meeting_postponed_to: iso }
+        : w
+    ));
+    hrCache.fetchedAt = null;
+    toast.success('Meeting postponed');
     return true;
   };
 
@@ -716,6 +802,48 @@ export function useHRData() {
     }
   };
 
+  const sendContractViaWhatsApp = async (
+  employeeId: string,
+  documentId: string
+) => {
+  if (!user) {
+    toast.error('You must be signed in to send a contract via WhatsApp.');
+    return false;
+  }
+
+  try {
+    const { data: fnData, error: fnError } = await supabase.functions.invoke(
+      'send-contract-whatsapp',
+      {
+        body: {
+          employee_id: employeeId,
+          document_id: documentId,
+        },
+      }
+    );
+
+    if (fnError || !fnData?.success) {
+      console.error(
+        'send-contract-whatsapp error:',
+        fnError || fnData
+      );
+      toast.error(
+        fnError?.message ||
+          fnData?.error ||
+          'Failed to send contract via WhatsApp.'
+      );
+      return false;
+    }
+
+    toast.success('Contract sent via WhatsApp');
+    return true;
+  } catch (err) {
+    console.error('WhatsApp Edge Function error:', err);
+    toast.error('Failed to send contract via WhatsApp.');
+    return false;
+  }
+};
+
   // Send a notification (email/WhatsApp) for an EXISTING warning
   const sendWarningNotification = async (
     warningId: string,
@@ -804,10 +932,15 @@ export function useHRData() {
     return data as HRAttendance;
   };
 
-  // Leave operations
+  // Leave operations (backed by fms_leave_requests)
   const addLeaveRequest = async (leave: Omit<HRLeave, 'id' | 'created_at' | 'updated_at'>) => {
+    const insertPayload: any = {
+      ...leave,
+      total_days: leave.total_days ?? leave.days_requested,
+    };
+
     const { data, error } = await hr.leave()
-      .insert(leave)
+      .insert(insertPayload)
       .select()
       .single();
 
@@ -829,7 +962,7 @@ export function useHRData() {
         status,
         reviewed_by: currentUser?.id,
         reviewed_at: new Date().toISOString(),
-        review_notes,
+        hr_comment: review_notes,
       })
       .eq('id', id)
       .select()
@@ -872,8 +1005,11 @@ export function useHRData() {
     deleteDocument,
     issueWarning,
     deleteWarning,
+    confirmWarningMeeting,
+    postponeWarningMeeting,
     sendWarningNotification,
     sendEmployeeEmail,
     sendContractForSignature,
+    sendContractViaWhatsApp,
   };
 }

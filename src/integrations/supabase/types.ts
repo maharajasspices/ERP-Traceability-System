@@ -196,6 +196,7 @@ export type Database = {
           id: string
           obsolete_reason: string | null
           organoleptic_parameters: Json | null
+          parent_finished_good_id: string | null
           processing_steps: Json | null
           status: string
           updated_at: string | null
@@ -209,6 +210,7 @@ export type Database = {
           id?: string
           obsolete_reason?: string | null
           organoleptic_parameters?: Json | null
+          parent_finished_good_id?: string | null
           processing_steps?: Json | null
           status?: string
           updated_at?: string | null
@@ -222,6 +224,7 @@ export type Database = {
           id?: string
           obsolete_reason?: string | null
           organoleptic_parameters?: Json | null
+          parent_finished_good_id?: string | null
           processing_steps?: Json | null
           status?: string
           updated_at?: string | null
@@ -230,6 +233,46 @@ export type Database = {
         Relationships: [
           {
             foreignKeyName: "fms_bom_finished_good_id_fkey"
+            columns: ["finished_good_id"]
+            isOneToOne: false
+            referencedRelation: "fms_stock_codes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fms_bom_parent_finished_good_id_fkey"
+            columns: ["parent_finished_good_id"]
+            isOneToOne: false
+            referencedRelation: "fms_stock_codes"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      fms_bom_finished_goods: {
+        Row: {
+          bom_id: string
+          created_at: string | null
+          finished_good_id: string
+        }
+        Insert: {
+          bom_id: string
+          created_at?: string | null
+          finished_good_id: string
+        }
+        Update: {
+          bom_id?: string
+          created_at?: string | null
+          finished_good_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fms_bom_finished_goods_bom_id_fkey"
+            columns: ["bom_id"]
+            isOneToOne: false
+            referencedRelation: "fms_bom"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fms_bom_finished_goods_finished_good_id_fkey"
             columns: ["finished_good_id"]
             isOneToOne: false
             referencedRelation: "fms_stock_codes"
@@ -554,6 +597,41 @@ export type Database = {
         }
         Relationships: []
       }
+      fms_print_queue: {
+        Row: {
+          batch_id: string | null
+          created_at: string
+          document_type: string
+          id: string
+          printed_at: string | null
+          status: string
+        }
+        Insert: {
+          batch_id?: string | null
+          created_at?: string
+          document_type: string
+          id?: string
+          printed_at?: string | null
+          status?: string
+        }
+        Update: {
+          batch_id?: string | null
+          created_at?: string
+          document_type?: string
+          id?: string
+          printed_at?: string | null
+          status?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fms_print_queue_batch_id_fkey"
+            columns: ["batch_id"]
+            isOneToOne: false
+            referencedRelation: "fms_production_batches"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       fms_production_batches: {
         Row: {
           actual_quantity_produced: number | null
@@ -768,6 +846,7 @@ export type Database = {
         Row: {
           allergen_types: string[] | null
           approved_supplier_ids: string[] | null
+          bom_uses_percentage: boolean
           created_at: string | null
           custom_allergens: string[] | null
           description: string
@@ -783,6 +862,7 @@ export type Database = {
         Insert: {
           allergen_types?: string[] | null
           approved_supplier_ids?: string[] | null
+          bom_uses_percentage?: boolean
           created_at?: string | null
           custom_allergens?: string[] | null
           description: string
@@ -798,6 +878,7 @@ export type Database = {
         Update: {
           allergen_types?: string[] | null
           approved_supplier_ids?: string[] | null
+          bom_uses_percentage?: boolean
           created_at?: string | null
           custom_allergens?: string[] | null
           description?: string
@@ -1804,6 +1885,8 @@ export type Database = {
           submitted_at?: string | null
           updated_at?: string
         }
+        //update: {
+        a}
         Update: {
           approved_at?: string | null
           approved_by?: string | null

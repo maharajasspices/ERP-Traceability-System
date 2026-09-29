@@ -96,6 +96,7 @@ serve(async (req) => {
     if (!authHeader) {
       return jsonError(corsHeaders, "Unauthorized", 401);
     }
+  
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
@@ -145,6 +146,7 @@ serve(async (req) => {
     if (!employeeId) {
       return jsonError(corsHeaders, "employee_id is required", 400);
     }
+    
     if (!subject || !message) {
       return jsonError(corsHeaders, "subject and message are required", 400);
     }

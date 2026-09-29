@@ -38,6 +38,7 @@ export interface FMSStockCode {
   has_allergens: boolean;
   allergen_types: string[];
   approved_supplier_ids: string[];
+  bom_uses_percentage?: boolean;
   status: 'active' | 'inactive';
   created_at: string;
   updated_at: string;
@@ -55,7 +56,7 @@ export interface FMSReceiving {
   expiry_date?: string | null;
   delivery_note_number?: string;
   quality_checks: Record<string, any>;
-  status: 'accepted' | 'rejected' | 'partial' | 'pending';
+  status: 'accepted' | 'declined' | 'partial' | 'pending';
   rejection_reason?: string;
   received_by: string;
   created_at: string;
@@ -84,7 +85,7 @@ export interface FMSStockOrder {
   invoice_file_path?: string | null;
   order_date: string;
   notes?: string | null;
-  status: 'awaiting_receipt' | 'partial' | 'received';
+  status: 'PENDING_RECEIPT' | 'PARTIALLY_RECEIVED' | 'CHECKED' | 'CANCELLED';
   created_by?: string | null;
   created_at: string;
   updated_at: string;
@@ -94,17 +95,42 @@ export interface FMSStockOrder {
 export interface FMSBOM {
   id: string;
   finished_good_id: string;
+  /** Legacy single finished-product link (kept for backward compatibility). */
+  parent_finished_good_id?: string | null;
+  /** Finished products this BOM version belongs to (from fms_bom_finished_goods). */
+  parent_finished_good_ids?: string[];
   version_number: number;
   effective_date: string;
   status: 'active' | 'obsolete';
   obsolete_reason?: string;
   created_by: string;
   created_at: string;
+  min_soaking_days?: number | null;
+  max_soaking_days?: number | null;
   updated_at: string;
   processing_steps?: { step_order: number; step_name: string; description?: string }[];
   organoleptic_parameters?: { name: string; expected_value: string }[];
   components?: FMSBOMComponent[];
 }
+
+export interface FMSBOMFinishedGoodLink {
+  bom_id: string;
+  finished_good_id: string;
+  created_at?: string;
+}
+
+/** Finished products a BOM version belongs to, derived from join rows. */
+export const bomParentIds = (bom: Pick<FMSBOM, 'parent_finished_good_id' | 'parent_finished_good_ids'>): string[] => {
+  const fromJoin = Array.isArray(bom.parent_finished_good_ids) ? bom.parent_finished_good_ids : [];
+  if (fromJoin.length > 0) return Array.from(new Set(fromJoin.filter(Boolean)));
+  return bom.parent_finished_good_id ? [bom.parent_finished_good_id] : [];
+};
+
+/** True when the BOM version is explicitly linked to the given finished good. */
+export const bomBelongsTo = (
+  bom: Pick<FMSBOM, 'parent_finished_good_id' | 'parent_finished_good_ids'>,
+  finishedGoodId: string
+): boolean => bomParentIds(bom).includes(finishedGoodId);
 
 export interface FMSBOMComponent {
   id: string;
@@ -174,6 +200,20 @@ export interface FMSStockLevel {
   updated_at: string;
 }
 
+// Record of a stock order emailed to a supplier (for Pending Delivery view)
+export interface FMSSupplierOrderEmail {
+  id: string;
+  supplier_id: string;
+  stock_code_id: string;
+  quantity: number;
+  notes?: string | null;
+  status: 'pending' | 'received' | 'cancelled';
+  emailed_at: string;
+  emailed_by?: string | null;
+  received_at?: string | null;
+  created_at: string;
+}
+
 export interface FMSStockMovement {
   id: string;
   stock_code_id: string;
@@ -222,6 +262,7 @@ interface FMSDataCache {
   stockLevels: FMSStockLevel[] | null;
   stockMovements: FMSStockMovement[] | null;
   stockReservations: FMSStockReservation[] | null;
+  supplierOrderEmails: FMSSupplierOrderEmail[] | null;
   stockOrders: FMSStockOrder[] | null;
   fetchedAt: number | null;
   userId: string | null;
@@ -238,6 +279,7 @@ const dataCache: FMSDataCache = {
   stockLevels: null,
   stockMovements: null,
   stockReservations: null,
+  supplierOrderEmails: null,
   fetchedAt: null,
   userId: null,
 };
@@ -265,7 +307,10 @@ export function useFMSData() {
   const [stockLevels, setStockLevels] = useState<FMSStockLevel[]>([]);
   const [stockMovements, setStockMovements] = useState<FMSStockMovement[]>([]);
   const [stockReservations, setStockReservations] = useState<FMSStockReservation[]>([]);
+  const [supplierOrderEmails, setSupplierOrderEmails] = useState<FMSSupplierOrderEmail[]>([]);
   const [loading, setLoading] = useState(true);
+
+
 
   // Rate limiting state
   const requestTimestamps = useRef<number[]>([]);
@@ -345,10 +390,18 @@ export function useFMSData() {
       return await fallbackDirect();
     }
   }, [checkRateLimit]);
+  
 
   // Fetch all data
   const fetchData = useCallback(async (force = false) => {
-    if (!user) return;
+    // No authenticated user means there is nothing to fetch. We MUST still
+    // clear `loading` here: it initialises to true, so returning early without
+    // it left every page gated on `loading` spinning forever (most visibly
+    // after sign-out, and on first render before the session resolves).
+    if (!user) {
+      setLoading(false);
+      return;
+    }
 
     // Check if we have a valid cache for this user
     const cacheValid = dataCache.fetchedAt !== null &&
@@ -368,7 +421,27 @@ export function useFMSData() {
       if (dataCache.stockLevels) setStockLevels(dataCache.stockLevels);
       if (dataCache.stockMovements) setStockMovements(dataCache.stockMovements);
       if (dataCache.stockReservations) setStockReservations(dataCache.stockReservations);
+      if (dataCache.supplierOrderEmails) setSupplierOrderEmails(dataCache.supplierOrderEmails);
       setLoading(false);
+
+      // Always fetch supplier order emails fresh from Supabase (never from
+      // cache) so the Pending Delivery tab stays up to date after emails are
+      // sent. Guarded: this runs outside the main try/finally below, so a
+      // network throw here would otherwise reject out of fetchData.
+      try {
+        const { data: emailsData, error: emailsError } = await supabase
+          .from('fms_supplier_order_emails')
+          .select('*')
+          .order('emailed_at', { ascending: false });
+        if (emailsError) {
+          console.error('[FMS] supplier_order_emails fetch error:', emailsError);
+        } else if (emailsData) {
+          setSupplierOrderEmails(emailsData as FMSSupplierOrderEmail[]);
+        }
+      } catch (emailsErr) {
+        console.error('[FMS] supplier_order_emails fetch failed:', emailsErr);
+      }
+
       return;
     }
 
@@ -395,7 +468,6 @@ export function useFMSData() {
       return all;
     };
 
-    setLoading(true);
 
     // Helper: try a DB query, fall back to local store when the DB is unavailable
     const dbOrLocal = async <T,>(
@@ -404,8 +476,11 @@ export function useFMSData() {
     ): Promise<T[]> => {
       try {
         const { data, error } = await query();
+
         if (error) throw error;
+
         if (data) return data as T[];
+
         return local();
       } catch (err) {
         console.warn('[FMS] DB unavailable, using local fallback:', err);
@@ -413,7 +488,45 @@ export function useFMSData() {
       }
     };
 
+    setLoading(true);
+
     try {
+      // BOM <-> finished-good links (join table, one BOM version -> many FGs).
+      // Loaded tolerantly: before migration
+      // 20260921000000_bom_parent_finished_good.sql is applied the table does
+      // not exist, in which case we fall back to the legacy single column.
+      // NOTE: inside the try so that the `finally` below always clears
+      // `loading` — a throw here used to leave the page spinning forever.
+      const linksRes = await dbOrLocal<FMSBOMFinishedGoodLink>(
+        () =>
+          supabase
+            .from('fms_bom')
+            .select('id, finished_good_id')
+            .then((res: any) => ({
+              data: (res.data || []).map((row: any) => ({
+                bom_id: row.id,
+                finished_good_id: row.finished_good_id,
+              })),
+              error: res.error,
+            })),
+        () => []
+      );
+      const linksByBom = new Map<string, string[]>();
+      for (const link of linksRes || []) {
+        if (!link?.bom_id || !link?.finished_good_id) continue;
+        const list = linksByBom.get(link.bom_id) || [];
+        if (!list.includes(link.finished_good_id)) list.push(link.finished_good_id);
+        linksByBom.set(link.bom_id, list);
+      }
+      const withJoinLinks = (bom: any): FMSBOM => {
+        const ids = linksByBom.get(bom.id);
+        return {
+          ...bom,
+          parent_finished_good_ids: ids && ids.length > 0 ? ids : undefined,
+          components: bom.fms_bom_components || bom.components || [],
+        } as FMSBOM;
+      };
+
       // Stock codes
       const stockCodesData = await dbOrLocal<FMSStockCode>(
         () => fetchAllStockCodes().then((data) => ({ data, error: null })),
@@ -421,7 +534,8 @@ export function useFMSData() {
       );
       setStockCodes(stockCodesData);
 
-      const [suppliersRes, receivingRes, bomsRes, batchesRes, dispatchRes, stockLevelsRes, stockMovementsRes, stockReservationsRes, stockOrdersRes] = await Promise.all([
+      const [suppliersRes, receivingRes, bomsRes, batchesRes, dispatchRes, stockLevelsRes, stockMovementsRes, stockReservationsRes, supplierOrderEmailsRes, stockOrdersRes] = await Promise.all([
+
         dbOrLocal<FMSSupplier>(
           () => supabase.from('fms_suppliers').select('*').order('name').then((res: any) => ({ data: res.data, error: res.error })),
           () => []
@@ -434,10 +548,38 @@ export function useFMSData() {
           () => supabase.from('fms_bom').select('*, fms_bom_components(*)').order('created_at', { ascending: false }).then((res: any) => ({ data: res.data, error: res.error })),
           () => []
         ),
+
         dbOrLocal<FMSProductionBatch>(
-          () => supabase.from('fms_production_batches').select('*').order('created_at', { ascending: false }).then((res: any) => ({ data: res.data, error: res.error })),
+          async () => {
+            const pageSize = 1000;
+            let from = 0;
+            const all: FMSProductionBatch[] = [];
+
+            while (true) {
+              const { data, error } = await supabase
+                .from('fms_production_batches')
+                .select('*')
+                .order('created_at', { ascending: false })
+                .range(from, from + pageSize - 1);
+
+              if (error) throw error;
+
+              const page = (data || []) as FMSProductionBatch[];
+              all.push(...page);
+
+              if (page.length < pageSize) break;
+
+              from += pageSize;
+            }
+
+            return {
+              data: all,
+              error: null,
+            };
+          },
           () => []
         ),
+
         dbOrLocal<any>(
           () => supabase.from('fms_dispatch').select('*, fms_dispatch_items(*)').order('dispatch_date', { ascending: false }).then((res: any) => ({ data: res.data, error: res.error })),
           () => []
@@ -454,6 +596,12 @@ export function useFMSData() {
           () => (supabase.from('fms_stock_reservations' as any) as any).select('*').order('created_at', { ascending: false }).then((res: any) => ({ data: res.data, error: res.error })),
           () => []
         ),
+      
+        dbOrLocal<FMSSupplierOrderEmail>(
+          () => (supabase.from('fms_supplier_order_emails' as any) as any).select('*').order('emailed_at', { ascending: false }).then((res: any) => ({ data: res.data, error: res.error })),
+          () => []
+        ),
+        
         dbOrLocal<FMSStockOrder>(
           () => (supabase.from('fms_stock_orders' as any) as any)
             .select('*, fms_stock_order_items(*)')
@@ -463,17 +611,26 @@ export function useFMSData() {
         ),
       ]);
 
-      setSuppliers(suppliersRes);
-      if (receivingRes) setReceivingRecords(receivingRes);
-      if (bomsRes) {
-        const bomsWithComponents = bomsRes.map((bom: any) => ({
-          ...bom,
-          components: bom.fms_bom_components || [],
-        }));
-        setBoms(bomsWithComponents as FMSBOM[]);
-      }
-      if (batchesRes) setProductionBatches(batchesRes);
-      if (dispatchRes) {
+   
+       setSuppliers(suppliersRes);
+          if (receivingRes) setReceivingRecords(receivingRes);
+
+          if (bomsRes) {
+            setBoms(bomsRes.map((bom: any) => withJoinLinks(bom)));
+          }
+
+          setProductionBatches(batchesRes);
+
+          console.log('[FMS] Production batches received:', batchesRes.length);
+          console.log(
+            '[FMS] Production batch statuses:',
+            batchesRes.reduce((counts: Record<string, number>, batch: FMSProductionBatch) => {
+              counts[batch.status] = (counts[batch.status] || 0) + 1;
+              return counts;
+            }, {})
+          );
+
+          if (dispatchRes) {
         const dispatchWithItems = dispatchRes.map((dispatch: any) => ({
           ...dispatch,
           items: dispatch.fms_dispatch_items || [],
@@ -483,6 +640,7 @@ export function useFMSData() {
       if (stockLevelsRes) setStockLevels(stockLevelsRes);
       if (stockMovementsRes) setStockMovements(stockMovementsRes);
       if (stockReservationsRes) setStockReservations(stockReservationsRes);
+      if (supplierOrderEmailsRes) setSupplierOrderEmails(supplierOrderEmailsRes);
       if (stockOrdersRes) {
         setStockOrders(stockOrdersRes.map((o: any) => ({
           ...o,
@@ -494,10 +652,9 @@ export function useFMSData() {
       dataCache.suppliers = suppliersRes;
       dataCache.stockCodes = stockCodesData;
       dataCache.receivingRecords = receivingRes;
-      dataCache.boms = bomsRes.map((bom: any) => ({
-        ...bom,
-        components: bom.fms_bom_components || [],
-      }));
+      if (bomsRes) {
+        dataCache.boms = bomsRes.map((bom: any) => withJoinLinks(bom));
+      }
       dataCache.productionBatches = batchesRes;
       dataCache.dispatchRecords = dispatchRes.map((dispatch: any) => ({
         ...dispatch,
@@ -506,6 +663,7 @@ export function useFMSData() {
       dataCache.stockLevels = stockLevelsRes;
       dataCache.stockMovements = stockMovementsRes;
       dataCache.stockReservations = stockReservationsRes;
+      dataCache.supplierOrderEmails = supplierOrderEmailsRes ?? [];
       dataCache.stockOrders = stockOrdersRes?.map((o: any) => ({
         ...o,
         items: o.fms_stock_order_items || [],
@@ -664,6 +822,45 @@ export function useFMSData() {
       toast.success('Receipt recorded successfully');
     }
     return data;
+  };
+
+  // BOM <-> finished-good links (join table fms_bom_finished_goods).
+  // Replaces the whole link set for one BOM version, then keeps the legacy
+  // single column in sync (first link, or NULL when unlinked) so older code
+  // paths keep working. No new BOM version is created.
+  const setBomFinishedGoods = async (bomId: string, finishedGoodIds: string[]): Promise<boolean> => {
+    const unique = Array.from(new Set((finishedGoodIds || []).filter(Boolean)));
+    try {
+      const del = await (supabase.from('fms_bom_finished_goods' as any) as any)
+        .delete()
+        .eq('bom_id', bomId);
+      if (del?.error) throw del.error;
+      if (unique.length > 0) {
+        const ins = await (supabase.from('fms_bom_finished_goods' as any) as any)
+          .insert(unique.map((fgId) => ({ bom_id: bomId, finished_good_id: fgId })));
+        if (ins?.error) throw ins.error;
+      }
+      const legacy = unique.length > 0 ? unique[0] : null;
+      const upd = await (supabase.from('fms_bom') as any)
+        .update({ parent_finished_good_id: legacy })
+        .eq('id', bomId);
+      if (upd?.error) throw upd.error;
+      setBoms((prev) => prev.map((b) =>
+        b.id === bomId
+          ? { ...b, parent_finished_good_id: legacy, parent_finished_good_ids: unique }
+          : b
+      ));
+      return true;
+    } catch (err: any) {
+      const msg = err?.message || 'Unknown database error';
+      const code = err?.code ? ` (code ${err.code})` : '';
+      const hint = /relation.*does not exist|table.*does not exist|PGRST205|42P01/i.test(msg)
+        ? ' — the fms_bom_finished_goods table is missing. Apply supabase/migrations/20260921000000_bom_parent_finished_good.sql first.'
+        : '';
+      console.error('[FMS] setBomFinishedGoods error:', err);
+      toast.error(`Failed to save finished-product links: ${msg}${code}${hint}`);
+      return false;
+    }
   };
 
   // BOM operations - validated through Edge Function
@@ -1089,7 +1286,6 @@ export function useFMSData() {
         toast.error(`Stock consumption failed: ${error.message}`);
         return results;
       }
-
       for (const row of (data || [])) {
         results.push({
           stock_code_id: row.stock_code_id,
@@ -1115,44 +1311,110 @@ export function useFMSData() {
   const getReservationsForBatch = (batchId: string): FMSStockReservation[] =>
     stockReservations.filter(r => r.batch_id === batchId).sort((a, b) => (a.created_at < b.created_at ? -1 : 1));
 
-  // Create a stock order (uploaded invoice/order) with its line items
-  const createStockOrder = async (
-    order: {
-      po_number: string;
-      supplier_id: string;
-      invoice_number?: string;
-      invoice_file_path?: string | null;
-      order_date: string;
-      notes?: string;
-    },
-    items: { stock_code_id: string; quantity_ordered: number; uom: string }[]
-  ): Promise<boolean> => {
+  // Record stock order emails sent to suppliers (Pending Delivery tracking)
+  const addSupplierOrderEmails = async (
+    entries: { supplier_id: string; stock_code_id: string; quantity: number; notes?: string | null }[]
+  ) => {
+    if (entries.length === 0) return [];
     try {
-      const { data: header, error: headerError } = await (supabase
-        .from('fms_stock_orders' as any) as any)
-        .insert({ ...order, created_by: user?.id || null })
-        .select('id')
-        .single();
-      if (headerError) throw headerError;
+      const { data, error } = await (supabase.from('fms_supplier_order_emails' as any) as any)
+        .insert(entries.map(e => ({
+          supplier_id: e.supplier_id,
+          stock_code_id: e.stock_code_id,
+          quantity: e.quantity,
+          notes: e.notes || null,
+          status: 'pending',
+          emailed_by: user?.id || null,
+        })))
+        .select();
 
-      const { error: itemsError } = await (supabase
-        .from('fms_stock_order_items' as any) as any)
-        .insert(items.map(it => ({ ...it, order_id: header.id })));
-      if (itemsError) {
-        // Roll back orphan header
-        await (supabase.from('fms_stock_orders' as any) as any).delete().eq('id', header.id);
-        throw itemsError;
+      if (error) {
+        console.error('[FMS] Record supplier order email error:', error);
+        return [];
       }
 
-      toast.success(`Order ${order.po_number} created — awaiting receipt`);
-      await fetchData(true);
-      return true;
-    } catch (err: any) {
-      console.error('[FMS] createStockOrder error:', err);
-      toast.error(mapDatabaseError(err) || 'Failed to create order');
-      return false;
+      const rows = (data || []) as FMSSupplierOrderEmail[];
+      if (rows.length > 0) {
+        setSupplierOrderEmails(prev => [...rows, ...prev]);
+      }
+      return rows;
+    } catch (err) {
+      console.error('[FMS] Record supplier order email unexpected error:', err);
+      return [];
     }
   };
+
+  const updateSupplierOrderEmailStatus = async (
+    id: string,
+    status: 'received' | 'cancelled'
+  ) => {
+    const patch: any = { status };
+    if (status === 'received') patch.received_at = new Date().toISOString();
+
+    const { data, error } = await (supabase.from('fms_supplier_order_emails' as any) as any)
+      .update(patch)
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (error) {
+      console.error('[FMS] Update supplier order email error:', error);
+      toast.error(error.message || 'Failed to update');
+      return null;
+    }
+
+    if (data) {
+      setSupplierOrderEmails(prev => prev.map(e => (e.id === id ? data : e)));
+    }
+    return data as FMSSupplierOrderEmail;
+  };
+
+  // Create a stock order (uploaded invoice/order) with its line items
+ const createStockOrder = async (
+  order: {
+    po_number: string;
+    supplier_id: string;
+    invoice_number?: string;
+    invoice_file_path?: string | null;
+    order_date: string;
+    notes?: string;
+  },
+  items: { stock_code_id: string; quantity_ordered: number; uom: string }[]
+): Promise<boolean> => {
+  try {
+    const { data: header, error: headerError } = await (supabase
+      .from('fms_stock_orders' as any) as any)
+      .insert({
+        ...order,
+        created_by: user?.id || null,
+        status: 'PENDING_RECEIPT',
+      })
+      .select('id')
+      .single();
+
+    if (headerError) throw headerError;
+
+    const { error: itemsError } = await (supabase
+      .from('fms_stock_order_items' as any) as any)
+      .insert(items.map(it => ({ ...it, order_id: header.id })));
+
+    if (itemsError) {
+      // Roll back orphan header
+      await (supabase.from('fms_stock_orders' as any) as any)
+        .delete()
+        .eq('id', header.id);
+      throw itemsError;
+    }
+
+    toast.success(`Order ${order.po_number} created — awaiting receipt`);
+    await fetchData(true);
+    return true;
+  } catch (err: any) {
+    console.error('[FMS] createStockOrder error:', err);
+    toast.error(mapDatabaseError(err) || 'Failed to create order');
+    return false;
+  }
+};
 
   return {
     // Data
@@ -1165,6 +1427,7 @@ export function useFMSData() {
     stockLevels,
     stockMovements,
     stockReservations,
+    supplierOrderEmails,
     stockOrders,
     loading,
     
@@ -1179,6 +1442,7 @@ export function useFMSData() {
     addReceivingRecord,
     addBOM,
     updateBOM,
+    setBomFinishedGoods,
     addProductionBatch,
     updateProductionBatch,
     addDispatchRecord,
@@ -1190,6 +1454,8 @@ export function useFMSData() {
     releaseBatchReservations,
     consumeBatchReservations,
     getReservationsForBatch,
+    addSupplierOrderEmails,
+    updateSupplierOrderEmailStatus,
 
     // Stock orders (purchase orders awaiting receipt)
     createStockOrder,

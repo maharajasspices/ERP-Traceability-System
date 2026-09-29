@@ -118,7 +118,7 @@ CREATE TABLE public.fms_receiving (
   expiry_date DATE NOT NULL,
   delivery_note_number TEXT,
   quality_checks JSONB NOT NULL DEFAULT '{}',
-  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('accepted', 'rejected', 'partial', 'pending')),
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('accepted', 'declined', 'partial', 'pending')),
   rejection_reason TEXT,
   received_by UUID NOT NULL,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT now()
