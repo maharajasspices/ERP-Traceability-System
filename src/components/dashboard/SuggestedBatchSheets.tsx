@@ -12,7 +12,14 @@ import { FMSProductionBatch, FMSStockCode } from '@/hooks/useFMSData';
 /** How far back we look for any production history. */
 const RECENT_WINDOW_DAYS = 120;
 
-/** How many past occurrences of tomorrow's weekday we prefer to average. */
+/**
+ * A product must have been produced on more than this many of tomorrow's
+ * weekday within the recent window to be treated as a regular weekday run.
+ * Two or fewer is treated as incidental, not a pattern.
+ */
+const MIN_WEEKDAY_OCCURRENCES = 2;
+
+/** How many past occurrences of tomorrow's weekday we use to average. */
 const MAX_WEEKDAY_OCCURRENCES = 5;
 
 /** When there is no same-weekday history, average the last N production days. */
@@ -69,9 +76,12 @@ const prettyDate = (dateKey: string) => format(parseISO(dateKey), 'd MMM yyyy');
  * Build tomorrow's suggestions from existing production history.
  *
  * Deliberately lenient so the list stays useful:
- *  - any active finished good with production history in the recent window qualifies
+ *  - any active finished good, WIP or raw material with production history in the
+ *    recent window qualifies
  *  - cancelled batches are never treated as production history
- *  - same-weekday history is preferred, but general recent history is a valid fallback
+ *  - a product produced on MORE THAN MIN_WEEKDAY_OCCURRENCES of the recent
+ *    occurrences of tomorrow's weekday is treated as a regular run and averaged
+ *    from that weekday; general recent history is the fallback
  *  - planned_batch_size is the historical quantity
  *  - a product already planned for tomorrow is skipped
  */
@@ -83,21 +93,40 @@ const buildSuggestions = (
   const tomorrowKey = localDateKey(tomorrow);
   const weekdayName = WEEKDAYS[tomorrow.getDay()];
 
+  // Mirror the products the "Create Batch" dialog allows: finished goods, WIP
+  // and raw materials. Restricting this to finished goods alone hid every WIP
+  // and raw-material run from the suggestions, even though batch sheets are
+  // created for them all day.
   const activeFinishedGoods = stockCodes.filter(
-    (sc) => sc.item_type === 'finished_good' && sc.status === 'active'
+    (sc) =>
+      (sc.item_type === 'finished_good' ||
+        sc.item_type === 'work_in_progress' ||
+        sc.item_type === 'raw_material') &&
+      sc.status === 'active'
   );
   
   const historyStart = new Date(tomorrow);
   historyStart.setDate(historyStart.getDate() - RECENT_WINDOW_DAYS);
   const historyStartKey = localDateKey(historyStart);
 
-  // Past occurrence dates of tomorrow's weekday, closest first.
+  // Every past occurrence of tomorrow's weekday inside the recent window,
+  // closest first. Used to detect a regular weekday run, not just the most
+  // recent few.
   const occurrenceDates: string[] = [];
-  for (let i = 1; i <= MAX_WEEKDAY_OCCURRENCES; i += 1) {
-    const d = new Date(tomorrow);
-    d.setDate(d.getDate() - i * 7);
-    occurrenceDates.push(localDateKey(d));
+  {
+    const d = new Date(historyStart);
+    d.setDate(d.getDate() + 1);
+    while (localDateKey(d) < tomorrowKey) {
+      if (d.getDay() === tomorrow.getDay()) {
+        occurrenceDates.push(localDateKey(d));
+      }
+      d.setDate(d.getDate() + 1);
+    }
+    occurrenceDates.reverse();
   }
+
+  // The most recent N of those, used for the quantity average.
+  const recentOccurrenceDates = occurrenceDates.slice(0, MAX_WEEKDAY_OCCURRENCES);
 
   // Products that already have a batch planned for tomorrow.
   const alreadyPlanned = new Set(
@@ -133,17 +162,21 @@ const buildSuggestions = (
     const productionDates = [...byDate.keys()].sort();
     const lastDate = productionDates[productionDates.length - 1];
 
-    // Prefer same-weekday history, fall back to the last few production days.
-    const weekdayTotals = occurrenceDates
-      .map((d) => byDate.get(d))
-      .filter((v): v is number => v !== undefined);
+    // A regular weekday run means this product was produced on MORE THAN
+    // MIN_WEEKDAY_OCCURRENCES of the recent occurrences of this weekday. That
+    // is the signal the supervisor actually uses: a product made on 3+ of the
+    // last Wednesdays is a routine run and belongs in tomorrow's list.
+    const weekdayDates = occurrenceDates.filter((d) => byDate.has(d));
+    const weekdayTotals = weekdayDates.map((d) => byDate.get(d) as number);
 
     let basis: Suggestion['basis'] = 'recent';
     let sourceDays: string[] = [];
 
-    if (weekdayTotals.length > 0) {
+    if (weekdayTotals.length > MIN_WEEKDAY_OCCURRENCES) {
       basis = 'weekday';
-      sourceDays = occurrenceDates.filter((d) => byDate.has(d));
+      // Average the most recent N weekday runs, not every one in the window.
+      const recentDates = recentOccurrenceDates.filter((d) => byDate.has(d));
+      sourceDays = recentDates.length > 0 ? recentDates : weekdayDates;
     } else {
       sourceDays = productionDates.slice(-FALLBACK_PRODUCTION_DAYS);
     }
@@ -156,11 +189,15 @@ const buildSuggestions = (
     const evidence: string[] = [];
     if (basis === 'weekday') {
       evidence.push(
-        `Produced on ${weekdayTotals.length} of the last ${MAX_WEEKDAY_OCCURRENCES} ${weekdayName}s`
+        `Produced on ${weekdayTotals.length} of the last ${occurrenceDates.length} ${weekdayName}s`
       );
       evidence.push(`Average ${weekdayName} production: ${suggestedQuantity} batches`);
     } else {
-      evidence.push(`No recent ${weekdayName} production`);
+      evidence.push(
+        weekdayTotals.length > 0
+          ? `Only ${weekdayTotals.length} recent ${weekdayName} run${weekdayTotals.length === 1 ? '' : 's'} (needs more than ${MIN_WEEKDAY_OCCURRENCES})`
+          : `No recent ${weekdayName} production`
+      );
       evidence.push(
         `Based on last ${sourceDays.length} production days: ${suggestedQuantity} batches`
       );
@@ -192,6 +229,9 @@ const buildSuggestions = (
       b.suggestedQuantity - a.suggestedQuantity
   );
 };
+
+/** Exported for tests: the suggestion-building logic without the UI. */
+export const buildSuggestionsForTest = buildSuggestions;
 
 export const SuggestedBatchSheets: React.FC<SuggestedBatchSheetsProps> = ({
   stockCodes,
@@ -266,8 +306,11 @@ export const SuggestedBatchSheets: React.FC<SuggestedBatchSheetsProps> = ({
         </CardHeader>
         <CardContent className="space-y-3">
           <p className="text-sm text-muted-foreground">
-            {weekdayCount} of {suggestions.length} use {WEEKDAYS[tomorrow.getDay()]} history; the
-            rest fall back to their most recent production days. Approving does not create a batch.
+            {weekdayCount} of {suggestions.length} follow a regular{' '}
+            {WEEKDAYS[tomorrow.getDay()]} run (produced on more than{' '}
+            {MIN_WEEKDAY_OCCURRENCES} of the recent {WEEKDAYS[tomorrow.getDay()]}{' '}
+            dates); the rest fall back to their most recent production days.
+            Approving does not create a batch.
           </p>
           {suggestions.length > 0 && (
             <Input

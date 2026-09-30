@@ -149,16 +149,52 @@ const dispatchSchema = z.object({
   customer_name: z.string().max(200).trim().optional().default(''),
   customer_id: z.string().uuid().optional().nullable(),
   dispatched_by: z.string().uuid(),
+  // Lifecycle. A dispatch only becomes 'dispatched' through an explicit
+  // confirmation, never as a side effect of a scan.
+  status: z.enum(['draft', 'picking', 'ready', 'dispatched']).optional().default('draft'),
+  confirmed_at: z.string().optional().nullable(),
+  confirmed_by: z.string().uuid().optional().nullable(),
 });
 
 const dispatchItemSchema = z.object({
   dispatch_id: z.string().uuid().optional(),
   batch_id: z.string().uuid(),
   quantity: z.number().int().positive().max(1000000),
+  quantity_required: z.number().int().min(0).optional().default(0),
+  quantity_scanned: z.number().int().min(0).optional().default(0),
+});
+
+const dispatchRequirementSchema = z.object({
+  dispatch_id: z.string().uuid().optional(),
+  stock_code_id: z.string().uuid(),
+  stock_code: z.string().min(1).max(100),
+  description: z.string().max(500).optional().nullable(),
+  uom: z.string().max(20).optional().nullable(),
+  invoice_number: z.string().max(50).optional().nullable(),
+  quantity_required: z.number().int().positive(),
+  quantity_scanned: z.number().int().min(0).optional().default(0),
+});
+
+const dispatchInvoiceSchema = z.object({
+  dispatch_id: z.string().uuid().optional(),
+  invoice_number: z.string().min(1).max(50),
+  customer_name: z.string().max(200).optional().nullable(),
+  file_path: z.string().max(500).optional().nullable(),
+  file_name: z.string().max(255).optional().nullable(),
 });
 
 // Table names type
-type TableName = 'fms_suppliers' | 'fms_stock_codes' | 'fms_receiving' | 'fms_bom' | 'fms_bom_components' | 'fms_production_batches' | 'fms_dispatch' | 'fms_dispatch_items';
+type TableName =
+  | 'fms_suppliers'
+  | 'fms_stock_codes'
+  | 'fms_receiving'
+  | 'fms_bom'
+  | 'fms_bom_components'
+  | 'fms_production_batches'
+  | 'fms_dispatch'
+  | 'fms_dispatch_items'
+  | 'fms_dispatch_invoices'
+  | 'fms_dispatch_requirements';
 
 // Schema registry for operations
 const schemas: Record<TableName, z.ZodObject<z.ZodRawShape>> = {
@@ -170,6 +206,8 @@ const schemas: Record<TableName, z.ZodObject<z.ZodRawShape>> = {
   'fms_production_batches': productionBatchSchema,
   'fms_dispatch': dispatchSchema,
   'fms_dispatch_items': dispatchItemSchema,
+  'fms_dispatch_invoices': dispatchInvoiceSchema,
+  'fms_dispatch_requirements': dispatchRequirementSchema,
 };
 
 // Valid table names for type checking

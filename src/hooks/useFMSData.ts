@@ -172,22 +172,68 @@ export interface FMSProductionBatch {
   closed_at?: string;
 }
 
+export type FMSDispatchStatus = 'draft' | 'picking' | 'ready' | 'dispatched';
+
 export interface FMSDispatch {
   id: string;
+  /** Primary invoice label. Kept populated for single-invoice dispatches. */
   invoice_number: string;
   dispatch_date: string;
   customer_name: string;
   customer_id?: string;
   dispatched_by: string;
+  status: FMSDispatchStatus;
+  confirmed_at?: string | null;
+  confirmed_by?: string | null;
   created_at: string;
   items?: FMSDispatchItem[];
+  /** Every invoice grouped into this dispatch (one delivery). */
+  invoices?: FMSDispatchInvoice[];
+  /** What the customer invoiced, per product line. */
+  requirements?: FMSDispatchRequirement[];
 }
 
 export interface FMSDispatchItem {
   id: string;
   dispatch_id: string;
   batch_id: string;
+  /** Quantity actually shipped; written when the dispatch is confirmed. */
   quantity: number;
+  quantity_required: number;
+  quantity_scanned: number;
+  scanned_by?: string | null;
+  scanned_at?: string | null;
+  created_at: string;
+}
+
+/** An invoice document uploaded against a dispatch. */
+export interface FMSDispatchInvoice {
+  id: string;
+  dispatch_id: string;
+  invoice_number: string;
+  customer_name?: string | null;
+  file_path?: string | null;
+  file_name?: string | null;
+  created_at: string;
+}
+
+/**
+ * One product line read off an uploaded invoice. This is the item a packer's
+ * scan is verified against: `quantity_scanned` may never exceed
+ * `quantity_required`.
+ */
+export interface FMSDispatchRequirement {
+  id: string;
+  dispatch_id: string;
+  stock_code_id: string;
+  stock_code: string;
+  description?: string | null;
+  uom?: string | null;
+  invoice_number?: string | null;
+  quantity_required: number;
+  quantity_scanned: number;
+  scanned_by?: string | null;
+  scanned_at?: string | null;
   created_at: string;
 }
 
@@ -581,7 +627,7 @@ export function useFMSData() {
         ),
 
         dbOrLocal<any>(
-          () => supabase.from('fms_dispatch').select('*, fms_dispatch_items(*)').order('dispatch_date', { ascending: false }).then((res: any) => ({ data: res.data, error: res.error })),
+          () => supabase.from('fms_dispatch').select('*, fms_dispatch_items(*), fms_dispatch_invoices(*), fms_dispatch_requirements(*)').order('dispatch_date', { ascending: false }).then((res: any) => ({ data: res.data, error: res.error })),
           () => []
         ),
         dbOrLocal<FMSStockLevel>(
@@ -631,10 +677,7 @@ export function useFMSData() {
           );
 
           if (dispatchRes) {
-        const dispatchWithItems = dispatchRes.map((dispatch: any) => ({
-          ...dispatch,
-          items: dispatch.fms_dispatch_items || [],
-        }));
+        const dispatchWithItems = dispatchRes.map(withDispatchRelations);
         setDispatchRecords(dispatchWithItems as FMSDispatch[]);
       }
       if (stockLevelsRes) setStockLevels(stockLevelsRes);
@@ -656,10 +699,7 @@ export function useFMSData() {
         dataCache.boms = bomsRes.map((bom: any) => withJoinLinks(bom));
       }
       dataCache.productionBatches = batchesRes;
-      dataCache.dispatchRecords = dispatchRes.map((dispatch: any) => ({
-        ...dispatch,
-        items: dispatch.fms_dispatch_items || [],
-      }));
+      dataCache.dispatchRecords = dispatchRes.map(withDispatchRelations);
       dataCache.stockLevels = stockLevelsRes;
       dataCache.stockMovements = stockMovementsRes;
       dataCache.stockReservations = stockReservationsRes;
@@ -1000,7 +1040,7 @@ export function useFMSData() {
   };
 
   // Dispatch operations - validated through Edge Function
-  const addDispatchRecord = async (dispatch: Omit<FMSDispatch, 'id' | 'created_at'>, items: Omit<FMSDispatchItem, 'id' | 'dispatch_id' | 'created_at'>[]) => {
+  const addDispatchRecord = async (dispatch: Omit<FMSDispatch, 'id' | 'created_at' | 'items' | 'invoices' | 'requirements'>, items: Omit<FMSDispatchItem, 'id' | 'dispatch_id' | 'created_at'>[]) => {
     // Validate dispatch
     const dispatchValidation = dispatchSchema.safeParse(dispatch);
     if (!dispatchValidation.success) {
@@ -1046,6 +1086,254 @@ export function useFMSData() {
     await fetchData();
     toast.success('Dispatch recorded successfully');
     return dispatchData;
+  };
+
+  /**
+   * Create a dispatch from one or more uploaded customer invoices.
+   *
+   * This is the entry point for the invoice-upload flow: the lady groups the
+   * invoices that belong to one delivery, the parsed invoice lines become the
+   * picking requirements, and the dispatch starts in 'picking' so packers can
+   * scan against it.
+   *
+   * Rolls back cleanly: if the requirement insert fails the dispatch header is
+   * removed again, so a half-created dispatch is never left behind.
+   */
+  const createDispatchFromInvoices = async (params: {
+    invoiceNumbers: string[];
+    customerName: string;
+    /** Uploaded document, stored in the existing 'order-documents' bucket. */
+    file?: File | null;
+    requirements: Array<{
+      stock_code_id: string;
+      stock_code: string;
+      description?: string | null;
+      uom?: string | null;
+      invoice_number?: string | null;
+      quantity_required: number;
+    }>;
+    dispatchedBy: string;
+  }): Promise<FMSDispatch | null> => {
+    const { invoiceNumbers, customerName, file, requirements, dispatchedBy } = params;
+
+    if (invoiceNumbers.length === 0) {
+      toast.error('Add at least one invoice number');
+      return null;
+    }
+    if (requirements.length === 0) {
+      toast.error('The invoice has no product lines that match your stock codes');
+      return null;
+    }
+
+    // Store the invoice document first so a storage failure is reported before
+    // any rows are written.
+    let filePath: string | null = null;
+    if (file) {
+      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+      filePath = `dispatch/${Date.now()}-${safeName}`;
+      const { error: uploadError } = await supabase.storage
+        .from('order-documents')
+        .upload(filePath, file, { contentType: file.type || 'application/octet-stream' });
+      if (uploadError) {
+        console.error('[FMS] Dispatch invoice upload error:', uploadError);
+        toast.warning(`Invoice file could not be uploaded (${uploadError.message}). The dispatch will be created without the file.`);
+        filePath = null;
+      }
+    }
+
+    const { data: dispatchData, error: dispatchError } = await (supabase as any)
+      .from('fms_dispatch')
+      .insert({
+        // The first invoice stays on the header so the existing list column,
+        // search and QR labels keep working unchanged.
+        invoice_number: invoiceNumbers[0],
+        dispatch_date: new Date().toISOString(),
+        customer_name: customerName,
+        dispatched_by: dispatchedBy,
+        status: 'picking',
+      })
+      .select()
+      .single();
+
+    if (dispatchError || !dispatchData) {
+      console.error('[FMS] Create dispatch from invoice error:', dispatchError);
+      toast.error(dispatchError?.message || 'Failed to create dispatch');
+      return null;
+    }
+
+    const dispatchId = dispatchData.id;
+
+    const { error: invoiceError } = await (supabase as any)
+      .from('fms_dispatch_invoices')
+      .insert(
+        invoiceNumbers.map((number) => ({
+          dispatch_id: dispatchId,
+          invoice_number: number,
+          customer_name: customerName || null,
+          file_path: filePath,
+          file_name: file?.name || null,
+        })),
+      );
+    if (invoiceError) {
+      console.error('[FMS] Attach dispatch invoices error:', invoiceError);
+    }
+
+    const { error: reqError } = await (supabase as any)
+      .from('fms_dispatch_requirements')
+      .insert(
+        requirements.map((req) => ({
+          dispatch_id: dispatchId,
+          stock_code_id: req.stock_code_id,
+          stock_code: req.stock_code,
+          description: req.description ?? null,
+          uom: req.uom ?? null,
+          invoice_number: req.invoice_number ?? invoiceNumbers[0],
+          quantity_required: req.quantity_required,
+          quantity_scanned: 0,
+        })),
+      );
+
+    if (reqError) {
+      console.error('[FMS] Create dispatch requirements error:', reqError);
+      toast.error(reqError.message || 'Failed to save the invoice lines');
+      // Roll the half-made dispatch back so it cannot linger without requirements.
+      await (supabase as any).from('fms_dispatch').delete().eq('id', dispatchId);
+      await fetchData();
+      return null;
+    }
+
+    await fetchData();
+    return dispatchData as FMSDispatch;
+  };
+
+  /**
+   * Record one verified packer scan against a requirement line.
+   *
+   * The over-scan guard is applied HERE (so the operator gets a useful message)
+   * and again by the `trg_fms_guard_requirement_scan` trigger in the database
+   * (so two packers scanning simultaneously cannot over-fulfil a line).
+   */
+  const recordDispatchScan = async (
+    requirement: FMSDispatchRequirement,
+    scannedBy: string,
+  ): Promise<{ ok: boolean; quantity_scanned?: number; reason?: string }> => {
+    const required = Number(requirement.quantity_required) || 0;
+    const scanned = Number(requirement.quantity_scanned) || 0;
+
+    if (scanned >= required) {
+      return {
+        ok: false,
+        reason: `All ${required} of ${requirement.stock_code} have already been scanned`,
+      };
+    }
+
+    const next = scanned + 1;
+    const { error } = await (supabase as any)
+      .from('fms_dispatch_requirements')
+      .update({
+        quantity_scanned: next,
+        scanned_by: scannedBy,
+        scanned_at: new Date().toISOString(),
+      })
+      .eq('id', requirement.id)
+      // Compare-and-set: if a concurrent scan already moved the counter, this
+      // update matches zero rows and Supabase reports no error, so we re-read
+      // below and tell the operator to scan again.
+      .eq('quantity_scanned', scanned)
+      .select();
+
+    if (error) {
+      // The trigger raises P0001 when the new value would exceed the requirement.
+      if (error.code === 'P0001') {
+        return { ok: false, reason: error.message };
+      }
+      console.error('[FMS] Record dispatch scan error:', error);
+      return { ok: false, reason: error.message || 'Could not save the scan' };
+    }
+
+    await fetchData();
+    return { ok: true, quantity_scanned: next };
+  };
+
+  /** Undo a single scan (packer picked the wrong item). */
+  const undoDispatchScan = async (requirement: FMSDispatchRequirement): Promise<boolean> => {
+    const current = Number(requirement.quantity_scanned) || 0;
+    if (current <= 0) return false;
+
+    const { error } = await (supabase as any)
+      .from('fms_dispatch_requirements')
+      .update({ quantity_scanned: current - 1 })
+      .eq('id', requirement.id)
+      .eq('quantity_scanned', current);
+
+    if (error) {
+      console.error('[FMS] Undo dispatch scan error:', error);
+      return false;
+    }
+
+    await fetchData();
+    return true;
+  };
+
+  /**
+   * Explicitly confirm a dispatch. This is the ONLY operation that moves a
+   * dispatch to 'dispatched' - scanning never does.
+   *
+   * The shipped quantity written onto each batch pick is the quantity actually
+   * scanned, so Traceability reflects what physically left the building.
+   */
+  const confirmDispatch = async (dispatchId: string, confirmedBy: string): Promise<boolean> => {
+    const { data: reqs, error: reqError } = await (supabase as any)
+      .from('fms_dispatch_requirements')
+      .select('*')
+      .eq('dispatch_id', dispatchId);
+
+    if (reqError) {
+      console.error('[FMS] Load dispatch requirements error:', reqError);
+      return false;
+    }
+
+    const outstanding = (reqs || []).filter(
+      (r: any) => (r.quantity_scanned ?? 0) < (r.quantity_required ?? 0),
+    );
+    if (outstanding.length > 0) {
+      toast.error(
+        `${outstanding.length} line(s) are still short. Scan everything on the invoice before confirming.`,
+      );
+      return false;
+    }
+
+    const { error: updateError } = await (supabase as any)
+      .from('fms_dispatch')
+      .update({
+        status: 'dispatched',
+        confirmed_at: new Date().toISOString(),
+        confirmed_by: confirmedBy,
+      })
+      .eq('id', dispatchId);
+
+    if (updateError) {
+      console.error('[FMS] Confirm dispatch error:', updateError);
+      toast.error(updateError.message || 'Failed to confirm the dispatch');
+      return false;
+    }
+
+    await fetchData();
+    return true;
+  };
+
+  /** Move a dispatch back into picking so corrections can be scanned. */
+  const reopenDispatch = async (dispatchId: string): Promise<boolean> => {
+    const { error } = await (supabase as any)
+      .from('fms_dispatch')
+      .update({ status: 'picking' })
+      .eq('id', dispatchId);
+    if (error) {
+      toast.error(error.message || 'Failed to reopen the dispatch');
+      return false;
+    }
+    await fetchData();
+    return true;
   };
 
     // Helper functions
@@ -1446,6 +1734,11 @@ export function useFMSData() {
     addProductionBatch,
     updateProductionBatch,
     addDispatchRecord,
+    createDispatchFromInvoices,
+    recordDispatchScan,
+    undoDispatchScan,
+    confirmDispatch,
+    reopenDispatch,
     deductStockForBatch,
     addStockForReceipt,
     fifoAllocateLots,
@@ -1468,6 +1761,35 @@ export function useFMSData() {
     generateLotNumber,
   };
 }
+
+/**
+ * Flatten the joined child rows that Supabase returns under their table names
+ * onto the dispatch record, so callers use `record.items` / `record.requirements`
+ * exactly as they did before the join was widened.
+ *
+ * Also back-fills the scanned counters for dispatches created before those
+ * columns existed, so a legacy row can never read as "over-scanned".
+ */
+const withDispatchRelations = (dispatch: any) => {
+  const items: any[] = (dispatch.fms_dispatch_items || []).map((item: any) => ({
+    ...item,
+    quantity_required: item.quantity_required ?? 0,
+    quantity_scanned: item.quantity_scanned ?? 0,
+  }));
+
+  const requirements: any[] = (dispatch.fms_dispatch_requirements || []).map((req: any) => ({
+    ...req,
+    quantity_scanned: req.quantity_scanned ?? 0,
+  }));
+
+  return {
+    ...dispatch,
+    status: (dispatch.status || 'dispatched') as FMSDispatchStatus,
+    items,
+    invoices: dispatch.fms_dispatch_invoices || [],
+    requirements,
+  };
+};
 
 // Utility functions
 export const formatDate = (date: string | Date): string => {

@@ -196,6 +196,14 @@ export const dispatchSchema = z.object({
     .default(''),
   customer_id: z.string().uuid().optional().nullable(),
   dispatched_by: z.string().uuid('Invalid user'),
+  // Lifecycle. A dispatch only becomes 'dispatched' through an explicit
+  // confirmation, never as a side effect of a scan.
+  status: z
+    .enum(['draft', 'picking', 'ready', 'dispatched'])
+    .optional()
+    .default('draft'),
+  confirmed_at: z.string().optional().nullable(),
+  confirmed_by: z.string().uuid().optional().nullable(),
 });
 
 // Dispatch item validation schema
@@ -205,6 +213,30 @@ export const dispatchItemSchema = z.object({
     .int('Quantity must be a whole number')
     .positive('Quantity must be greater than 0')
     .max(1000000, 'Quantity too large'),
+  quantity_required: z.number().int().min(0).optional().default(0),
+  quantity_scanned: z.number().int().min(0).optional().default(0),
+});
+
+// Dispatch requirement validation schema - one product line read off an
+// uploaded customer invoice. quantity_scanned may never exceed quantity_required.
+export const dispatchRequirementSchema = z.object({
+  dispatch_id: z.string().uuid().optional(),
+  stock_code_id: z.string().uuid('Invalid product'),
+  stock_code: z.string().min(1).max(100),
+  description: z.string().max(500).optional().nullable(),
+  uom: z.string().max(20).optional().nullable(),
+  invoice_number: z.string().max(50).optional().nullable(),
+  quantity_required: z.number().int().positive('Invoiced quantity must be greater than 0'),
+  quantity_scanned: z.number().int().min(0).optional().default(0),
+});
+
+// Dispatch invoice validation schema - an uploaded customer invoice document.
+export const dispatchInvoiceSchema = z.object({
+  dispatch_id: z.string().uuid().optional(),
+  invoice_number: z.string().min(1).max(50),
+  customer_name: z.string().max(200).optional().nullable(),
+  file_path: z.string().max(500).optional().nullable(),
+  file_name: z.string().max(255).optional().nullable(),
 });
 
 // Auth validation schemas

@@ -46,6 +46,33 @@ const generateLotNumber = (): string => {
   return `LOT-${year}-${random}`;
 };
 
+/**
+ * A lot number is OPTIONAL on a receipt.
+ *
+ * The factory sometimes supplies one and sometimes does not, so a number the
+ * operator typed is always used exactly as entered, and a blank one is filled
+ * in automatically. Generation goes through the database sequence
+ * (`fms_lot_number_seq`) because that cannot collide; the local
+ * `generateLotNumber()` is only a fallback if the RPC is unavailable.
+ */
+const resolveLotNumber = async (entered: string | null | undefined): Promise<string> => {
+  const typed = (entered ?? '').trim();
+  if (typed) return typed;
+
+  try {
+    const { data, error } = await supabase.rpc('fms_generate_lot_number');
+    if (!error && data) return String(data);
+    console.warn('[FMS] fms_generate_lot_number unavailable, using local generator', error);
+  } catch (e) {
+    console.warn('[FMS] fms_generate_lot_number failed, using local generator', e);
+  }
+
+  return generateLotNumber();
+};
+
+/** Comparison key so a typed lot is checked for duplicates without punctuation getting in the way. */
+const lotKey = (value: string): string => value.toUpperCase().replace(/[^A-Z0-9]/g, '');
+
 const formatDate = (date: string | Date): string => {
   return new Date(date).toLocaleDateString('en-GB', {
     day: '2-digit',
@@ -201,7 +228,7 @@ const [showExportDialog, setShowExportDialog] = useState(false);
   // Emailed order confirmation state - matches receiving log form
   const [confirmingEmailOrder, setConfirmingEmailOrder] = useState<typeof supplierOrderEmails[0] | null>(null);
   const [emailOrderFormData, setEmailOrderFormData] = useState({
-    internal_lot_number: generateLotNumber(),
+    internal_lot_number: '',
     date_received: new Date().toISOString().split('T')[0],
     stock_code_id: '',
     stock_code: '',
@@ -366,7 +393,7 @@ const statusFixAttempted = useRef<Set<string>>(new Set());
   }, [stockOrders]);
 
   const [formData, setFormData] = useState({
-    internal_lot_number: generateLotNumber(),
+    internal_lot_number: '',
     date_received: new Date().toISOString().split('T')[0],
     stock_code_id: '',
     stock_code: '',
@@ -426,7 +453,7 @@ const statusFixAttempted = useRef<Set<string>>(new Set());
 
   const resetForm = () => {
     setFormData({
-      internal_lot_number: generateLotNumber(),
+      internal_lot_number: '',
       date_received: new Date().toISOString().split('T')[0],
       stock_code_id: '',
       stock_code: '',
@@ -480,7 +507,7 @@ const statusFixAttempted = useRef<Set<string>>(new Set());
     }]);
     setFormData(prev => ({
       ...prev,
-      internal_lot_number: generateLotNumber(),
+      internal_lot_number: '',
       stock_code_id: '',
       stock_code: '',
       material_description: '',
@@ -599,7 +626,8 @@ const statusFixAttempted = useRef<Set<string>>(new Set());
       expiry_date: formData.expiry_date,
       cost_price_per_kg: formData.cost_price_per_kg,
     }] : [];
-    const lines = [...receivingLines, ...currentLine];
+    // Reassigned below once each line's optional lot number is resolved.
+    let lines = [...receivingLines, ...currentLine];
 
     if (!formData.supplier_id) {
       toast.error('Please select a Supplier');
@@ -616,10 +644,39 @@ const statusFixAttempted = useRef<Set<string>>(new Set());
       }
       // Expiry date is optional - only validate it if provided
       if (line.expiry_date && new Date(line.expiry_date) < new Date()) {
-        toast.error(`Cannot receive expired materials (lot ${line.internal_lot_number})`);
+        toast.error(`Cannot receive expired materials (lot ${line.internal_lot_number || 'this line'})`);
         return;
       }
     }
+
+    // Resolve the optional lot numbers: a number the operator typed is kept
+    // exactly as entered, a blank one is generated. Every line gets its own
+    // number, so filling a multi-line delivery without typing anything works.
+    //
+    // The keys the operator actually typed are remembered so the confirmation
+    // message can list only the ones the system had to invent.
+    const typedLotKeys = new Set(
+      lines.map((l) => (l.internal_lot_number || '').trim()).filter(Boolean).map(lotKey),
+    );
+    const seenLotKeys = new Set<string>();
+    const resolvedLines = [];
+    for (const line of lines) {
+      const lot = await resolveLotNumber(line.internal_lot_number);
+
+      // internal_lot_number is UNIQUE, so two lines sharing a lot would make
+      // the second insert fail silently. Catch it here with a clear message.
+      const key = lotKey(lot);
+      if (seenLotKeys.has(key)) {
+        toast.error(
+          `Lot number ${lot} is used on more than one line. Each line needs its own lot number.`,
+        );
+        return;
+      }
+      seenLotKeys.add(key);
+
+      resolvedLines.push({ ...line, internal_lot_number: lot });
+    }
+    lines = resolvedLines;
 
     const qualityChecks: Record<string, any> = {
       vehicle_clean: formData.quality_checks.vehicle_clean ? 'pass' : 'fail',
@@ -753,6 +810,17 @@ const statusFixAttempted = useRef<Set<string>>(new Set());
     }
 
     toast.success(`${saved} material${saved > 1 ? 's' : ''} ${hasFailed ? 'declined' : 'received'} successfully`);
+
+    // Show which lot numbers were generated, so the operator can write them on
+    // the physical labels. Only blanks are listed - anything they typed is
+    // already visible on the form they just filled in.
+    const generated = lines
+      .map((l) => l.internal_lot_number)
+      .filter((lot) => lot && !typedLotKeys.has(lotKey(lot)));
+    if (generated.length > 0) {
+      toast.info(`Generated lot number${generated.length > 1 ? 's' : ''}: ${generated.join(', ')}`);
+    }
+
     setDialogOpen(false);
     resetForm();
     await refreshData();
@@ -825,7 +893,8 @@ const statusFixAttempted = useRef<Set<string>>(new Set());
       const balance = Math.max(0, ordered - already);
       state[it.id] = {
         qty: balance > 0 ? String(balance) : '',
-        lot: generateLotNumber(),
+        // Blank: the system generates a lot number when the receipt is saved.
+        lot: '',
         expiry: '',
       };
     });
@@ -855,7 +924,7 @@ const statusFixAttempted = useRef<Set<string>>(new Set());
     );
 
     setEmailOrderFormData({
-      internal_lot_number: generateLotNumber(),
+      internal_lot_number: '',
       date_received: new Date().toISOString().split('T')[0],
       stock_code_id: emailOrder.stock_code_id,
       stock_code: sc?.stock_code || '',
@@ -907,7 +976,7 @@ const handleSelectAllQualityChecks = () => {
   // Reset email order form
   const resetEmailOrderForm = () => {
     setEmailOrderFormData({
-      internal_lot_number: generateLotNumber(),
+      internal_lot_number: '',
       date_received: new Date().toISOString().split('T')[0],
       stock_code_id: '',
       stock_code: '',
@@ -961,9 +1030,11 @@ const handleSelectAllQualityChecks = () => {
       return;
     }
 
-    if (!state?.lot || state.lot.trim().length < 5) {
+    // The LOT number is optional: a typed one is kept, a blank one is generated
+    // on save, so traceability is never left blank.
+    if (state?.lot && state.lot.trim().length > 0 && state.lot.trim().length < 3) {
       toast.error(
-        `Enter a LOT number for ${name} (required for traceability)`
+        `The LOT number for ${name} looks too short — leave it blank to generate one, or enter the full number`
       );
       return;
     }
@@ -1009,10 +1080,23 @@ const handleSelectAllQualityChecks = () => {
 
     const receivedNow = new Map<string, number>();
 
+    // Collect the lot numbers actually used so they can be reported back to the
+    // operator, and so two lines cannot silently share one (UNIQUE column).
+    const generatedLots: string[] = [];
+    const seenLotKeys = new Set<string>();
+
     for (const it of toReceive) {
       const state = confirmState[it.id];
       const qty = parseFloat(state.qty);
-      const lotNumber = state.lot.trim();
+      // Optional lot: generate one when the operator left it blank.
+      const lotNumber = await resolveLotNumber(state.lot);
+
+      if (seenLotKeys.has(lotKey(lotNumber))) {
+        toast.error(`Lot number ${lotNumber} is used on more than one line. Each line needs its own lot number.`);
+        return;
+      }
+      seenLotKeys.add(lotKey(lotNumber));
+      generatedLots.push(lotNumber);
 
       // Save the receiving record
       const result = await addReceivingRecord({
@@ -1161,6 +1245,11 @@ const handleSelectAllQualityChecks = () => {
           : `Stock confirmed — Order is PARTIALLY RECEIVED. ${outstanding} item(s) still outstanding.`
       );
 
+      // Show the lot numbers used so the operator can label the physical stock.
+      if (generatedLots.length > 0) {
+        toast.info(`Lot number${generatedLots.length > 1 ? 's' : ''}: ${generatedLots.join(', ')}`);
+      }
+
       setConfirmOrder(null);
 
       await refreshData();
@@ -1218,9 +1307,12 @@ const handleSelectAllQualityChecks = () => {
 
     setConfirmingEmailReceipt(true);
 
+    // Optional lot: keep what was typed, generate one when blank.
+    const lotNumber = await resolveLotNumber(emailOrderFormData.internal_lot_number);
+
     try {
       const result = await addReceivingRecord({
-        internal_lot_number: emailOrderFormData.internal_lot_number,
+        internal_lot_number: lotNumber,
         received_at: new Date(emailOrderFormData.date_received).toISOString(),
         stock_code_id: emailOrderFormData.stock_code_id,
         quantity_received: actualQty, // Use actual quantity received
@@ -1246,11 +1338,11 @@ const handleSelectAllQualityChecks = () => {
         const newQty = await addStockForReceipt(
           emailOrderFormData.stock_code_id,
           actualQty, // Use actual quantity received
-          emailOrderFormData.internal_lot_number,
-          `Receipt ${emailOrderFormData.internal_lot_number} - ${emailOrderFormData.material_description} (Email Order)`
+          lotNumber,
+          `Receipt ${lotNumber} - ${emailOrderFormData.material_description} (Email Order)`
         );
         if (newQty === null) {
-          console.warn('[FMS] Failed to update stock level for email order receipt', emailOrderFormData.internal_lot_number);
+          console.warn('[FMS] Failed to update stock level for email order receipt', lotNumber);
         }
       }
 
@@ -1287,10 +1379,10 @@ const handleSelectAllQualityChecks = () => {
       logActivity({
         action_type: 'create',
         entity_type: 'receiving',
-        entity_id: emailOrderFormData.internal_lot_number,
+        entity_id: lotNumber,
         entity_name: emailOrderFormData.material_description,
         details: {
-          lot_number: emailOrderFormData.internal_lot_number,
+          lot_number: lotNumber,
           stock_code: emailOrderFormData.stock_code,
           supplier: emailOrderFormData.supplier_name,
           quantity_ordered: `${emailOrderFormData.quantity_received} ${emailOrderFormData.uom}`,
@@ -2142,8 +2234,23 @@ const getExportFilteredRecords = () => {
                   <h3 className="font-semibold mb-4 text-primary">GENERAL INFORMATION</h3>
                   <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-4">
                     <div className="space-y-2">
-                      <Label>Internal Lot Number</Label>
-                      <Input value={formData.internal_lot_number} readOnly disabled className="bg-muted cursor-not-allowed" />
+                      <Label>
+                        Internal Lot Number{' '}
+                        <span className="text-xs font-normal text-muted-foreground">(optional)</span>
+                      </Label>
+                      <Input
+                        value={formData.internal_lot_number}
+                        onChange={(e) =>
+                          setFormData(prev => ({ ...prev, internal_lot_number: e.target.value }))
+                        }
+                        placeholder="Leave blank to generate automatically"
+                        className="font-mono"
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        {formData.internal_lot_number.trim()
+                          ? 'Using the number you entered.'
+                          : 'The system will generate a lot number when you save.'}
+                      </p>
                     </div>
                     <div className="space-y-2">
                       <Label>Date Received</Label>
@@ -2970,7 +3077,10 @@ const getExportFilteredRecords = () => {
         {/* Basic Fields */}
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <div className="space-y-1">
-            <Label className="text-xs">LOT Number *</Label>
+            <Label className="text-xs">
+              LOT Number{' '}
+              <span className="font-normal text-muted-foreground">(optional)</span>
+            </Label>
             <Input
               value={emailOrderFormData.internal_lot_number}
               onChange={(e) =>
@@ -2979,7 +3089,8 @@ const getExportFilteredRecords = () => {
                   internal_lot_number: e.target.value,
                 }))
               }
-              placeholder="LOT-YYYY-XXXX"
+              placeholder="Leave blank to generate automatically"
+              className="font-mono"
             />
           </div>
 
@@ -3373,10 +3484,14 @@ const getExportFilteredRecords = () => {
                         )}
                       </div>
                       <div className="space-y-1">
-                        <Label className="text-xs">LOT Number *</Label>
+                        <Label className="text-xs">
+                          LOT Number{' '}
+                          <span className="font-normal text-muted-foreground">(optional)</span>
+                        </Label>
                         <Input
                           value={state.lot}
-                          placeholder="LOT-YYYY-XXXX"
+                          placeholder="Blank = generated on save"
+                          className="font-mono"
                           onChange={(e) => setConfirmState(prev => ({ ...prev, [it.id]: { ...state, lot: e.target.value } }))}
                         />
                       </div>
