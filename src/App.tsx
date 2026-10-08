@@ -30,6 +30,8 @@ const Traceability = lazy(() => import("./pages/Traceability"));
 const Suppliers = lazy(() => import("./pages/Suppliers"));
 const Settings = lazy(() => import("./pages/Settings"));
 const AdminPasswords = lazy(() => import("./pages/AdminPasswords"));
+// TEMPORARY one-time recon preview (read-only). Delete with ReconPreview.tsx after backfill.
+const ReconPreview = lazy(() => import("./pages/ReconPreview"));
 
 // ============================================================
 // Authentication / public pages
@@ -50,6 +52,7 @@ const HRDashboard = lazy(() => import("./pages/HR/HRDashboard"));
 const HRLogin = lazy(() => import("./pages/HR/HRLogin"));
 const Employees = lazy(() => import("./pages/HR/Employees"));
 const Attendance = lazy(() => import("./pages/HR/Attendance"));
+const Kiosk = lazy(() => import("./pages/Attendance/Kiosk"));
 const Leave = lazy(() => import("./pages/HR/Leave"));
 const Documents = lazy(() => import("./pages/HR/Documents"));
 const Warnings = lazy(() => import("./pages/HR/Warnings"));
@@ -208,6 +211,12 @@ const App = () => (
                   element={<Attendance />}
                 />
 
+                {/* Wall/door terminal. Workers scan; the event is inferred. */}
+                <Route
+                  path="/attendance/kiosk"
+                  element={<Kiosk />}
+                />
+
                 <Route
                   path="/hr/leave"
                   element={<Leave />}
@@ -334,6 +343,12 @@ const App = () => (
                 <Route
                   path="/admin-passwords"
                   element={<AdminPasswords />}
+                />
+
+                {/* TEMPORARY one-time recon preview (read-only, unlinked). Delete after backfill. */}
+                <Route
+                  path="/recon-preview"
+                  element={<ReconPreview />}
                 />
               </Route>
 

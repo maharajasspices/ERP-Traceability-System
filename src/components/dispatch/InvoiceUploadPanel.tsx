@@ -211,7 +211,8 @@ export const InvoiceUploadPanel = ({
         <div className="rounded-lg border border-dashed border-border p-6 text-center">
           <FileText className="mx-auto mb-2 h-8 w-8 text-muted-foreground/50" />
           <p className="text-sm text-muted-foreground">
-            Add each customer invoice that belongs to this delivery, then upload it.
+            Add each customer invoice that belongs to this delivery. Type the products in,
+            or upload the invoice file and let the system read them.
           </p>
         </div>
       )}
@@ -247,6 +248,7 @@ export const InvoiceUploadPanel = ({
               variant="outline"
               size="sm"
               disabled={draft.parsing}
+              title="Optional: upload the invoice to read the product lines automatically"
               onClick={() => fileInputs.current[draft.id]?.click()}
             >
               {draft.parsing ? (
@@ -254,7 +256,7 @@ export const InvoiceUploadPanel = ({
               ) : (
                 <Upload className="mr-1 h-4 w-4" />
               )}
-              {draft.file_name || 'Upload invoice'}
+              {draft.parsing ? 'Reading…' : draft.file_name || 'Upload invoice (optional)'}
             </Button>
             <Button
               type="button"
@@ -314,22 +316,28 @@ export const InvoiceUploadPanel = ({
           )}
 
           {(!draft.parsed || draft.lines.length === 0) && (
-            <div className="flex items-center gap-2">
-              <select
-                value=""
-                onChange={(e) => {
-                  addManualLine(draft, e.target.value);
-                  e.target.value = '';
-                }}
-                className="h-9 flex-1 rounded-md border border-input bg-background px-3 text-sm"
-              >
-                <option value="">+ Add a product by hand…</option>
-                {productOptions.map((s) => (
-                  <option key={s.id} value={s.id}>{s.stock_code} — {s.description}</option>
-                ))}
-              </select>
-            </div>
+            <p className="text-xs text-muted-foreground">
+              Add the products by hand, or upload the invoice to read them automatically:
+            </p>
           )}
+
+          {/* Always available: the invoice can be typed in OR uploaded. The
+              upload is a shortcut, never a requirement. */}
+          <div className="flex items-center gap-2">
+            <select
+              value=""
+              onChange={(e) => {
+                addManualLine(draft, e.target.value);
+                e.target.value = '';
+              }}
+              className="h-9 flex-1 rounded-md border border-input bg-background px-3 text-sm"
+            >
+              <option value="">+ Add a product by hand…</option>
+              {productOptions.map((s) => (
+                <option key={s.id} value={s.id}>{s.stock_code} — {s.description}</option>
+              ))}
+            </select>
+          </div>
 
           {draft.lines.length > 0 && (
             <p className="flex items-center gap-1 text-xs text-green-600">

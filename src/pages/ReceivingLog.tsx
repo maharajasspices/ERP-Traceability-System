@@ -15,7 +15,7 @@ import { Checkbox } from '@/components/ui/checkbox';
 import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Plus, Search, Truck, CheckCircle, XCircle, Eye, FileText, Loader2, QrCode, Trash2, Download, Camera, ClipboardList, PackageCheck, Upload, X, Inbox } from 'lucide-react';
+import { Plus, Search, Truck, CheckCircle, XCircle, Eye, FileText, Loader2, QrCode, Trash2, Download, Camera, ClipboardList, PackageCheck, Upload, X, Inbox, FileSpreadsheet, Pencil } from 'lucide-react';
 import { useActivityLog } from '@/hooks/useActivityLog';
 import { exportToPDF, exportToExcel } from '@/lib/exportUtils';
 import { format, set } from 'date-fns';
@@ -27,6 +27,10 @@ import {
   findReceivingRecordForToviScan,
 } from '@/lib/toviParser';
 import { parseInvoiceFile } from '@/lib/invoiceParser';
+import { BulkStockImportDialog, type ImportedReceivingLine } from '@/components/receiving/BulkStockImportDialog';
+import { buildDocumentHistoryRows, readDocuments } from '@/lib/receivingDocuments';
+import { extractPdfText, openReceivingDocument, uploadReceivingDocument } from '@/lib/receivingDocumentsUpload';
+import { exportToCSV } from '@/lib/exportUtils';
 import { useSupplierPrices, formatZAR } from '@/hooks/useSupplierPrices';
 
 const receivingQualityChecksList = [
@@ -181,6 +185,18 @@ const ReceivingLog: React.FC = () => {
   const [savingCoa, setSavingCoa] = useState(false);
   const [savingCost, setSavingCost] = useState(false);
 
+  // Editing an ALREADY FILED receipt: the stock code it was booked against and
+  // the quantity received (in that stock code's UOM). Saving has to correct
+  // inventory too, not just the row - see handleSaveReceivingEdit.
+  const [editStockCodeId, setEditStockCodeId] = useState('');
+  const [editQuantity, setEditQuantity] = useState('');
+  const [savingEdit, setSavingEdit] = useState(false);
+
+  // A COA PDF attached to an ALREADY recorded receipt. It is saved by the same
+  // "Save COA/COC" button as the text, so attaching a late COA is one action.
+  const [coaEditFile, setCoaEditFile] = useState<File | null>(null);
+  const [coaEditParsing, setCoaEditParsing] = useState(false);
+
 const [exportFilters, setExportFilters] = useState({
   dateFrom: '',
   dateTo: '',
@@ -191,7 +207,8 @@ const [exportFilters, setExportFilters] = useState({
 });
 
 const [showExportDialog, setShowExportDialog] = useState(false);
-
+const [receivedDateFrom, setReceivedDateFrom] = useState('');
+const [receivedDateTo, setReceivedDateTo] = useState('');
   
   const [stockCodeSearch, setStockCodeSearch] = useState('');
   const [showStockCodeDropdown, setShowStockCodeDropdown] = useState(false);
@@ -439,6 +456,39 @@ const statusFixAttempted = useRef<Set<string>>(new Set());
   // Optional invoice attachment for additional information
   const [receivingInvoiceFile, setReceivingInvoiceFile] = useState<File | null>(null);
 
+  // COA / Certificate of Analysis PDF. Uploaded alongside the invoice and
+  // stored in quality_checks, so no extra table is needed.
+  const [coaFile, setCoaFile] = useState<File | null>(null);
+  const [coaParsing, setCoaParsing] = useState(false);
+
+  /**
+   * Every receipt's COA / invoice details, newest first. This is the same data
+   * the "COAs & Invoices" tab shows and the CSV export writes.
+   */
+  const documentRows = useMemo(
+    () =>
+      buildDocumentHistoryRows(
+        receivingRecords as any[],
+        {
+          stockCode: (id) => getStockCodeById(id ?? ''),
+          // `suppliers` is used directly rather than the local getSupplier()
+          // helper, which is declared further down and would not be initialised
+          // yet at this point in the render.
+          supplier: (id) => suppliers.find((s) => s.id === id),
+        },
+      ),
+    [receivingRecords, getStockCodeById, suppliers],
+  );
+
+  /** Only the receipts that actually have a document attached. */
+  const documentsWithFiles = useMemo(
+    () => documentRows.filter((r) => r.coa_file || r.invoice_file),
+    [documentRows],
+  );
+
+  // Bulk stock import (Excel / Google Sheets / CSV) - queues many lines at once
+  const [bulkImportOpen, setBulkImportOpen] = useState(false);
+
   const stockCodeResults = useMemo(() => {
     if (stockCodeSearch.length === 0) return [];
     return stockCodes.filter(sc => 
@@ -523,6 +573,31 @@ const statusFixAttempted = useRef<Set<string>>(new Set());
 
   const handleRemoveLine = (idx: number) => {
     setReceivingLines(prev => prev.filter((_, i) => i !== idx));
+  };
+
+  /**
+   * Lines read from a spreadsheet become queued line items on this delivery.
+   *
+   * They deliberately go through the SAME queue as manually added lines, so
+   * the normal "Record Receiving" path handles stock, lot numbers, quality
+   * checks and activity logging. An imported delivery is reviewed before it
+   * is saved, exactly like a hand-typed one.
+   */
+  const handleBulkImported = (lines: ImportedReceivingLine[]) => {
+    setReceivingLines(lines);
+    // Clear the single-entry form so the imported list is not double counted.
+    setFormData(prev => ({
+      ...prev,
+      stock_code_id: '',
+      stock_code: '',
+      material_description: '',
+      quantity_received: '',
+      internal_lot_number: '',
+      supplier_batch_number: '',
+      expiry_date: '',
+      cost_price_per_kg: '',
+    }));
+    setStockCodeSearch('');
   };
 
   const handleStockCodeSelect = (item: typeof stockCodes[0]) => {
@@ -612,6 +687,39 @@ const statusFixAttempted = useRef<Set<string>>(new Set());
     }));
   };
  
+  /**
+   * Choose a COA PDF.
+   *
+   * Two things happen: its text is read out of the PDF and dropped into the
+   * COA content field so the operator does not have to retype it. A scanned or
+   * photographed COA has no text layer - that is not an error, the file is
+   * still attached.
+   */
+  const handleCoaFileChosen = async (file: File | null) => {
+    if (!file) return;
+    setCoaFile(file);
+    setCoaParsing(true);
+    try {
+      const extracted = await extractPdfText(file);
+      if (extracted) {
+        setFormData(prev => ({
+          ...prev,
+          coa_content: prev.coa_content?.trim()
+            ? `${prev.coa_content}\n\n${extracted}`
+            : extracted,
+        }));
+        toast.success('COA text extracted into the COA content field');
+      } else {
+        toast.info('No text could be read from that PDF (it may be a scan). The file is still attached.');
+      }
+    } catch (err) {
+      console.error('COA text extraction error:', err);
+      toast.warning('Could not read text from the PDF, but the file can still be attached.');
+    } finally {
+      setCoaParsing(false);
+    }
+  };
+
   const handleSubmit = async () => {
     // Lines queued via "Add Another Item" plus the current form entry
     const currentLine = formData.stock_code_id && parseFloat(formData.quantity_received) > 0 ? [{
@@ -713,6 +821,25 @@ const statusFixAttempted = useRef<Set<string>>(new Set());
 
     if (invoiceFilePath) {
       qualityChecks.invoice_file_path = invoiceFilePath;
+      qualityChecks.invoice_file_name = receivingInvoiceFile?.name || null;
+      qualityChecks.invoice_uploaded_at = new Date().toISOString();
+    }
+
+    // COA / Certificate of Analysis. Uploaded next to the invoice and recorded
+    // in the same quality_checks JSONB, so no extra table is needed. A failed
+    // upload warns but never blocks the receipt.
+    if (coaFile) {
+      const coaResult = await uploadReceivingDocument({
+        file: coaFile,
+        kind: 'COA',
+        lotNumber: lines[0]?.internal_lot_number || null,
+      });
+      if (coaResult.ok) {
+        Object.assign(qualityChecks, coaResult.meta);
+      } else {
+        console.error('[FMS] COA upload error:', coaResult.error);
+        toast.warning(`COA could not be uploaded (${coaResult.error}). The receipt is recorded without it.`);
+      }
     }
 
     let saved = 0;
@@ -1408,22 +1535,95 @@ const handleSelectAllQualityChecks = () => {
   };
 
 const filteredRecords = receivingRecords.filter(rec => {
-  const stockCode = getStockCode(rec.stock_code_id);
-
-  return (
+  const matchesSearch =
+    !searchQuery ||
     (rec.internal_lot_number ?? '').toLowerCase().includes(searchQuery.toLowerCase()) ||
     (rec.supplier_batch_number ?? '').toLowerCase().includes(searchQuery.toLowerCase()) ||
-    (stockCode?.description ?? '').toLowerCase().includes(searchQuery.toLowerCase())
-  );
+    (getStockCode(rec.stock_code_id)?.description ?? '')
+      .toLowerCase()
+      .includes(searchQuery.toLowerCase());
+const rawDate = rec.received_at || rec.created_at || '';
+
+const recordDate = rawDate
+  ? new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Africa/Johannesburg',
+    }).format(new Date(rawDate))
+  : '';
+
+const matchesDateFrom =
+  !receivedDateFrom || recordDate >= receivedDateFrom;
+
+const matchesDateTo =
+  !receivedDateTo || recordDate <= receivedDateTo;
+
+  return matchesSearch && matchesDateFrom && matchesDateTo;
 });
+console.log('RECEIVING COUNT:', receivingRecords.length);
+
+console.log(
+  'SAMPLE RECEIVING:',
+  receivingRecords.slice(0, 5).map((rec) => ({
+    lot: rec.internal_lot_number,
+    received_at: rec.received_at,
+    created_at: rec.created_at,
+  }))
+);
+
+console.log(
+  'DATE DEBUG:',
+  receivingRecords
+    .filter((rec) => {
+      const displayDate = formatDate(rec.received_at || rec.created_at || '');
+      return displayDate.includes('02 Oct');
+    })
+    .slice(0, 20)
+    .map((rec) => ({
+      lot: rec.internal_lot_number,
+      rawDate: rec.received_at || rec.created_at || '',
+      filterDate: (rec.received_at || rec.created_at || '').slice(0, 10),
+      displayDate: formatDate(rec.received_at || rec.created_at || ''),
+    }))
+);
 
   const handleViewRecord = (record: typeof receivingRecords[0]) => {
     setSelectedRecord(record);
     const qc = (record.quality_checks || {}) as any;
     setEditCoaContent(qc.coa_content || '');
+    setCoaEditFile(null);
     const cp = (record as any).cost_price_per_kg;
     setEditCostPrice(cp != null ? String(cp) : '');
+    // Seed the receipt-detail edit fields so the operator always starts from
+    // what is actually stored rather than a blank/previous value.
+    setEditStockCodeId(record.stock_code_id);
+    setEditQuantity(String(record.quantity_received));
     setViewDialogOpen(true);
+  };
+
+  /**
+   * Choose a COA PDF for an already-recorded receipt.
+   *
+   * The text is read into the editable COA content field so the operator can
+   * check and correct it. A scanned COA has no text layer - that is fine, the
+   * file is still attached.
+   */
+  const handleCoaEditFileChosen = async (file: File | null) => {
+    if (!file) return;
+    setCoaEditFile(file);
+    setCoaEditParsing(true);
+    try {
+      const extracted = await extractPdfText(file);
+      if (extracted) {
+        setEditCoaContent((prev) => (prev.trim() ? `${prev}\n\n${extracted}` : extracted));
+        toast.success('COA text extracted — review it below, then save');
+      } else {
+        toast.info('No text could be read from that PDF (it may be a scan). The file will still be attached.');
+      }
+    } catch (err) {
+      console.error('COA text extraction error:', err);
+      toast.warning('Could not read text from the PDF, but the file can still be attached.');
+    } finally {
+      setCoaEditParsing(false);
+    }
   };
 
   const handleSaveCostPrice = async () => {
@@ -1478,15 +1678,220 @@ const filteredRecords = receivingRecords.filter(rec => {
     setSelectedRecord({ ...selectedRecord, cost_price_per_kg: costNum } as any);
   };
 
+  /**
+   * Save an edit to an already-filed receipt: the stock code it was booked
+   * against and/or the quantity received (in that stock code's UOM).
+   *
+   * `fms_receiving.quantity_received` is the source of truth for how much of a
+   * lot physically exists — `fms_fifo_allocate_lots` reads it live — but
+   * `fms_stock_levels.quantity_on_hand` is what availability and reservations
+   * are checked against. Updating one without the other silently desynchronises
+   * them, so both are corrected here:
+   *
+   *   same stock code -> apply the difference as an 'adjustment' movement
+   *   changed code    -> remove the full quantity from the old code, book the
+   *                      full quantity onto the new one
+   *
+   * Refused outright when the edit would corrupt history: a lot already used by
+   * production cannot be re-coded (its fms_materials_used rows would move with
+   * it), a lot cannot drop below what production already took (FIFO would
+   * report a negative balance), and a stock code cannot be pushed below what is
+   * already reserved for batches.
+   */
+  const handleSaveReceivingEdit = async () => {
+    if (!selectedRecord) return;
+
+    const newQty = parseFloat(editQuantity);
+    if (isNaN(newQty) || newQty <= 0) {
+      toast.error('Quantity must be greater than 0');
+      return;
+    }
+
+    const newStockCodeId = editStockCodeId || selectedRecord.stock_code_id;
+    const oldStockCodeId = selectedRecord.stock_code_id;
+    const oldQty = Number(selectedRecord.quantity_received) || 0;
+    const codeChanged = newStockCodeId !== oldStockCodeId;
+    const qtyChanged = newQty !== oldQty;
+
+    if (!codeChanged && !qtyChanged) {
+      toast.info('No changes to save');
+      return;
+    }
+
+    setSavingEdit(true);
+    try {
+      // 1. How much of this lot has production already taken?
+      const { data: usedRows, error: usedErr } = await supabase
+        .from('fms_materials_used')
+        .select('quantity_used')
+        .eq('receiving_record_id', selectedRecord.id);
+
+      if (usedErr) {
+        console.error('[FMS] Edit receipt: usage lookup failed', usedErr);
+        toast.error('Could not check how much of this lot has been used — nothing was changed');
+        return;
+      }
+
+      const totalUsed = (usedRows || []).reduce(
+        (sum: number, r: { quantity_used: number | string | null }) =>
+          sum + Number(r.quantity_used || 0),
+        0,
+      );
+
+      // Checked first: re-coding is blocked whenever the lot has been used,
+      // regardless of the quantity being entered.
+      if (codeChanged && totalUsed > 0) {
+        toast.error('Cannot change the stock code — this lot has already been used in production');
+        return;
+      }
+
+      if (newQty < totalUsed) {
+        toast.error(`Cannot set ${newQty} — ${totalUsed} has already been used in production from this lot`);
+        return;
+      }
+
+      // 2. Work out the inventory correction for every affected stock code and
+      //    verify nothing goes negative BEFORE writing anything.
+      const deltaFor = (stockCodeId: string): number => {
+        if (codeChanged) return stockCodeId === oldStockCodeId ? -oldQty : newQty;
+        return newQty - oldQty;
+      };
+      const affectedIds = codeChanged ? [oldStockCodeId, newStockCodeId] : [oldStockCodeId];
+
+      const { data: levels, error: levelsErr } = await supabase
+        .from('fms_stock_levels')
+        .select('stock_code_id, quantity_on_hand, reserved_quantity')
+        .in('stock_code_id', affectedIds);
+
+      if (levelsErr) {
+        console.error('[FMS] Edit receipt: stock level lookup failed', levelsErr);
+        toast.error('Could not read current stock — nothing was changed');
+        return;
+      }
+
+      const pending = affectedIds.map((id) => {
+        const lvl = (levels || []).find(
+          (l: { stock_code_id: string }) => l.stock_code_id === id,
+        );
+        const delta = deltaFor(id);
+        return {
+          id,
+          delta,
+          onHand: Number(lvl?.quantity_on_hand ?? 0) + delta,
+          reserved: Number(lvl?.reserved_quantity ?? 0),
+        };
+      });
+
+      const negative = pending.find((p) => p.onHand < 0);
+      if (negative) {
+        const sc = getStockCode(negative.id);
+        toast.error(
+          `This would leave ${sc?.stock_code || 'stock'} at ${negative.onHand}. Reduce by less.`,
+        );
+        return;
+      }
+
+      const underReserved = pending.find((p) => p.onHand < p.reserved);
+      if (underReserved) {
+        const sc = getStockCode(underReserved.id);
+        toast.error(
+          `This would leave ${sc?.stock_code || 'stock'} below the ${underReserved.reserved} already reserved for batches. Release or start those batches first.`,
+        );
+        return;
+      }
+
+      // 3. Persist the receiving row itself.
+      const { error: updErr } = await supabase
+        .from('fms_receiving')
+        .update({ stock_code_id: newStockCodeId, quantity_received: newQty })
+        .eq('id', selectedRecord.id);
+
+      if (updErr) {
+        console.error('[FMS] Edit receipt: update failed', updErr);
+        toast.error(`Failed to update receipt: ${updErr.message}`);
+        return;
+      }
+
+      // 4. Correct inventory for each affected stock code.
+      for (const p of pending) {
+        if (p.delta === 0) continue;
+        const { error: mvErr } = await (supabase.rpc as any)('fms_apply_stock_movement', {
+          p_stock_code_id: p.id,
+          p_movement_type: 'adjustment',
+          p_quantity_change: p.delta,
+          p_reference_id: selectedRecord.internal_lot_number,
+          p_notes: `Receipt ${selectedRecord.internal_lot_number} corrected from ${oldQty} to ${newQty}`,
+          p_created_by: user?.id || null,
+        });
+        if (mvErr) {
+          console.error('[FMS] Edit receipt: stock correction failed', mvErr);
+          toast.error(
+            `Receipt saved, but stock was NOT corrected (${mvErr.message}). Please check Stock Levels.`,
+          );
+          await refreshData();
+          return;
+        }
+      }
+
+      logActivity({
+        action_type: 'update',
+        entity_type: 'receiving',
+        entity_id: selectedRecord.internal_lot_number,
+        entity_name: codeChanged ? 'Receipt stock code' : 'Receipt quantity',
+        details: {
+          lot_number: selectedRecord.internal_lot_number,
+          old_stock_code_id: oldStockCodeId,
+          new_stock_code_id: newStockCodeId,
+          old_quantity: oldQty,
+          new_quantity: newQty,
+        },
+      });
+
+      toast.success(codeChanged ? 'Receipt re-coded and stock moved' : 'Receipt quantity updated');
+      await refreshData();
+      setSelectedRecord({
+        ...selectedRecord,
+        stock_code_id: newStockCodeId,
+        quantity_received: newQty,
+      });
+    } catch (err) {
+      console.error('[FMS] Edit receipt unexpected error:', err);
+      toast.error('Failed to update receipt — an unexpected error occurred.');
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
   const handleSaveCoa = async () => {
     if (!selectedRecord) return;
     setSavingCoa(true);
     const existing = (selectedRecord.quality_checks || {}) as any;
-    const updated = {
-      ...existing,
+
+    // Attach the late COA file first. If the upload fails we still save the
+    // text the operator edited, and say so - a failed upload must not lose it.
+    let updated: Record<string, unknown> = { ...existing };
+    let fileAttached = false;
+    if (coaEditFile) {
+      const result = await uploadReceivingDocument({
+        file: coaEditFile,
+        kind: 'COA',
+        lotNumber: selectedRecord.internal_lot_number,
+      });
+      if (result.ok) {
+        updated = { ...updated, ...result.meta };
+        fileAttached = true;
+      } else {
+        console.error('[FMS] Late COA upload error:', result.error);
+        toast.warning(`COA file could not be uploaded (${result.error}). The COA text was still saved.`);
+      }
+    }
+
+    updated = {
+      ...updated,
       coa_content: editCoaContent,
       coa_received: editCoaContent.trim().length > 0 ? 'pass' : (existing.coa_received || 'fail'),
     };
+
     const { error } = await supabase
       .from('fms_receiving')
       .update({ quality_checks: updated })
@@ -1496,7 +1901,8 @@ const filteredRecords = receivingRecords.filter(rec => {
       toast.error('Failed to update COA/COC');
       return;
     }
-    toast.success('COA/COC updated');
+    setCoaEditFile(null);
+    toast.success(fileAttached ? 'COA attached and saved' : 'COA/COC updated');
     logActivity({
       action_type: 'update',
       entity_type: 'receiving',
@@ -2425,6 +2831,42 @@ const getExportFilteredRecords = () => {
                   )}
                 </div>
 
+                {/* COA / Certificate of Analysis attachment - Optional */}
+                <div className="border rounded-lg p-4 bg-muted/30">
+                  <h3 className="font-semibold mb-2 text-primary">COA / CERTIFICATE OF ANALYSIS (Optional)</h3>
+                  <p className="text-sm text-muted-foreground mb-3">
+                    Attach the supplier&apos;s Certificate of Analysis. The PDF is stored with this
+                    receiving record, and its text is read into the COA content field below so you
+                    do not have to retype it.
+                  </p>
+                  <input
+                    type="file"
+                    accept=".pdf,image/*"
+                    className="text-sm file:mr-3 file:rounded-md file:border-0 file:bg-primary file:px-3 file:py-2 file:text-sm file:text-primary-foreground hover:file:bg-primary/90"
+                    onChange={(e) => handleCoaFileChosen(e.target.files?.[0] || null)}
+                  />
+                  {coaFile && (
+                    <div className="mt-2 flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2">
+                      <FileText className="h-4 w-4 text-primary shrink-0" />
+                      <span className="text-sm truncate flex-1">{coaFile.name}</span>
+                      <span className="text-xs text-muted-foreground shrink-0">
+                        {(coaFile.size / 1024).toFixed(0)} KB
+                      </span>
+                      {coaParsing && <Loader2 className="h-4 w-4 shrink-0 animate-spin" />}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          setCoaFile(null);
+                        }}
+                      >
+                        <X className="h-4 w-4 text-destructive" />
+                      </Button>
+                    </div>
+                  )}
+                </div>
+
                 {/* COA Content Section - Optional */}
                 <div className="border rounded-lg p-4 bg-muted/30">
                   <h3 className="font-semibold mb-2 text-primary">COA/COC CONTENT (Optional)</h3>
@@ -2482,8 +2924,39 @@ const getExportFilteredRecords = () => {
                     <p className="mt-2 text-xs text-muted-foreground">
                       Fill in the next material above and click &quot;Add Another Item&quot; to queue it, or &quot;Record Receiving&quot; to save all line items.
                     </p>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="mt-2"
+                      onClick={() => setBulkImportOpen(true)}
+                    >
+                      <FileSpreadsheet className="mr-1 h-4 w-4" />
+                      Import from spreadsheet
+                    </Button>
                   </div>
                 )}
+
+              {/* Bulk import works with or without a delivery already in progress,
+                  so the entry point also sits in the empty state below. */}
+              {receivingLines.length === 0 && (
+                <div className="rounded-lg border border-dashed border-border p-4 text-center">
+                  <FileSpreadsheet className="mx-auto mb-2 h-6 w-6 text-muted-foreground/50" />
+                  <p className="text-sm text-muted-foreground">
+                    Got the whole delivery on a sheet? Import it in one go.
+                  </p>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="mt-2"
+                    onClick={() => setBulkImportOpen(true)}
+                  >
+                    <FileSpreadsheet className="mr-1 h-4 w-4" />
+                    Import stock from spreadsheet
+                  </Button>
+                </div>
+              )}
 
               <DialogFooter className="flex-col sm:flex-row gap-2">
                 <Button variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>
@@ -2492,6 +2965,14 @@ const getExportFilteredRecords = () => {
               </DialogFooter>
             </DialogContent>
           </Dialog>
+
+          <BulkStockImportDialog
+            open={bulkImportOpen}
+            onOpenChange={setBulkImportOpen}
+            stockCodes={stockCodes}
+            onImported={handleBulkImported}
+            existingLineCount={receivingLines.length}
+          />
         </div>
       </div>
 
@@ -2518,6 +2999,16 @@ const getExportFilteredRecords = () => {
       <ClipboardList className="h-4 w-4" />
       Invoice Orders History
     </TabsTrigger>
+
+    <TabsTrigger value="documents" className="gap-2">
+      <FileText className="h-4 w-4" />
+      COAs &amp; Invoices
+      {documentsWithFiles.length > 0 && (
+        <span className="ml-1 rounded-full bg-primary/20 px-2 py-0.5 text-xs font-semibold text-primary">
+          {documentsWithFiles.length}
+        </span>
+      )}
+    </TabsTrigger>
   </TabsList>
 
 
@@ -2525,176 +3016,51 @@ const getExportFilteredRecords = () => {
             RECEIVING LOG
         ===================================================== */}
         <TabsContent value="receiving" className="mt-4 space-y-4">
-      <div className="flex gap-4 rounded-xl border border-border bg-card p-3 sm:p-4">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input placeholder="Search by lot number, batch, or description..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-9" />
-        </div>
-      </div>
+      <div className="flex flex-col gap-3 rounded-xl border border-border bg-card p-3 sm:p-4 md:flex-row md:items-end">
+  <div className="relative flex-1">
+    <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+    <Input
+      placeholder="Search by lot number, batch, or description..."
+      value={searchQuery}
+      onChange={(e) => setSearchQuery(e.target.value)}
+      className="pl-9"
+    />
+  </div>
 
-      <div className='mt-4 rounded-xl border border-border bg-card p-3 sm:p-4'>
-        <div className='mb-2 flex items-start justify-between gap-2'>
-          <div>
-            <h3 className='text-sm font-semibold'>Scan Internal Lot</h3>
-            <p className='text-xs text-muted-foreground'> Scan the lot QR code using the TOVI Scanner, then press Enter</p>
-          </div>
-          {toviLotResult && (
-            <Button variant="ghost" size="icon" onClick={clearToviResult} title="Clear scan">
-              <X className="h-4 w-4" />
-            </Button>
-          )}
-        </div>
-     <Input
-  placeholder="Scan lot with TOVI..."
-  value={toviLotNumber}
-  onChange={(e) => {
-    setToviLotNumber(e.target.value);
-  }}
-  onKeyDown={(e) => {
-    if (e.key === 'Enter') {
-      handleToviLotScan(toviLotNumber);
-    }
-  }}
-  className="pl-9"
-/>
+  <div className="w-full md:w-auto">
+    <label className="mb-1 block text-sm font-medium">
+      Received From
+    </label>
+    <Input
+      type="date"
+      value={receivedDateFrom}
+      onChange={(e) => setReceivedDateFrom(e.target.value)}
+    />
+  </div>
 
-        {/* Details of the scanned lot */}
-        {toviLotResult && (() => {
-          const stockCode = getStockCode(toviLotResult.stock_code_id);
-          const supplier = getSupplier(toviLotResult.supplier_id);
-          const qualityChecks = (toviLotResult.quality_checks || {}) as Record<string, any>;
-          const receivedDate = toviLotResult.received_at || toviLotResult.created_at;
+  <div className="w-full md:w-auto">
+    <label className="mb-1 block text-sm font-medium">
+      Received To
+    </label>
+    <Input
+      type="date"
+      value={receivedDateTo}
+      onChange={(e) => setReceivedDateTo(e.target.value)}
+    />
+  </div>
 
-          return (
-            <div className="mt-3 rounded-lg border border-border bg-muted/30 p-3 sm:p-4 animate-fade-in">
-              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <PackageCheck className="h-4 w-4 text-muted-foreground" />
-                  <span className="font-semibold">Receiving Record</span>
-                  <span className="font-mono text-sm">{toviLotResult.internal_lot_number}</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  {toviLotResult.status === 'accepted' ? (
-                    <Badge variant="outline" className="gap-1 border-green-600 text-green-700">
-                      <CheckCircle className="h-3 w-3" /> Accepted
-                    </Badge>
-                  ) : (
-                    <Badge variant="outline" className="gap-1 border-destructive text-destructive">
-                      <XCircle className="h-3 w-3" /> {toviLotResult.status || 'declined'}
-                    </Badge>
-                  )}
-                  <Button variant="outline" size="sm" className="gap-2" onClick={viewToviRecord}>
-                    <Eye className="h-4 w-4" /> Full details
-                  </Button>
-                </div>
-              </div>
+  <Button
+    variant="outline"
+    onClick={() => {
+      setReceivedDateFrom('');
+      setReceivedDateTo('');
+    }}
+  >
+    Clear
+  </Button>
+</div>
 
-              {toviMatchedOn === 'supplier_batch_number' && (
-                <p className="mb-3 rounded-md bg-warning/20 px-2 py-1 text-xs text-warning">
-                  Matched on the supplier batch number. Showing the Maharaja internal lot.
-                </p>
-              )}
-
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-                <div>
-                  <p className="text-xs text-muted-foreground">Date Received</p>
-                  <p className="text-sm font-medium">{receivedDate ? formatDate(receivedDate) : '—'}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-muted-foreground">Stock Code</p>
-                  <p className="text-sm font-medium">{stockCode?.stock_code || '—'}</p>
-                </div>
-                <div className="col-span-2 sm:col-span-1">
-                  <p className="text-xs text-muted-foreground">Description</p>
-                  <p className="text-sm font-medium">{stockCode?.description || '—'}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-muted-foreground">Quantity</p>
-                  <p className="text-sm font-medium">
-                    {toviLotResult.quantity_received} {stockCode?.unit_of_measure || ''}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-xs text-muted-foreground">Supplier</p>
-                  <p className="text-sm font-medium">{supplier?.name || '—'}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-muted-foreground">Supplier Batch</p>
-                  <p className="text-sm font-medium">{toviLotResult.supplier_batch_number || '—'}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-muted-foreground">Expiry Date</p>
-                  <p className="text-sm font-medium">
-                    {toviLotResult.expiry_date ? formatDate(toviLotResult.expiry_date) : '—'}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-xs text-muted-foreground">Manufactured</p>
-                  <p className="text-sm font-medium">
-                    {toviLotResult.manufacturing_date ? formatDate(toviLotResult.manufacturing_date) : '—'}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-xs text-muted-foreground">Received By</p>
-                  <p className="text-sm font-medium">{toviLotResult.received_by || '—'}</p>
-                </div>
-                {toviLotResult.delivery_note_number && (
-                  <div>
-                    <p className="text-xs text-muted-foreground">Delivery Note</p>
-                    <p className="text-sm font-medium">{toviLotResult.delivery_note_number}</p>
-                  </div>
-                )}
-                <div>
-                  <p className="text-xs text-muted-foreground">Cost Price / kg</p>
-                  <p className="text-sm font-medium">
-                    {toviLotResult.cost_price_per_kg != null ? formatZAR(toviLotResult.cost_price_per_kg) : '—'}
-                  </p>
-                </div>
-              </div>
-
-              {toviLotResult.rejection_reason && (
-                <div className="mt-3 rounded-md bg-destructive/10 px-2 py-1 text-xs text-destructive">
-                  Rejection reason: {toviLotResult.rejection_reason}
-                </div>
-              )}
-
-              {qualityChecks.coa_content && (
-                <div className="mt-3">
-                  <p className="text-xs text-muted-foreground">COA / COC</p>
-                  <pre className="mt-1 max-h-32 overflow-y-auto whitespace-pre-wrap rounded-md bg-card p-2 font-mono text-xs">
-                    {qualityChecks.coa_content}
-                  </pre>
-                </div>
-              )}
-
-              <div className="mt-3">
-                <p className="mb-1 text-xs text-muted-foreground">Quality Checks</p>
-                <div className="flex flex-wrap gap-2">
-                  {receivingQualityChecksList.map((check) => (
-                    <Badge
-                      key={check.key}
-                      variant="outline"
-                      className={
-                        qualityChecks[check.key] === 'pass'
-                          ? 'gap-1 border-green-600 text-green-700'
-                          : 'gap-1'
-                      }
-                    >
-                      {qualityChecks[check.key] === 'pass' ? (
-                        <CheckCircle className="h-3 w-3" />
-                      ) : (
-                        <XCircle className="h-3 w-3" />
-                      )}
-                      {check.label}
-                    </Badge>
-                  ))}
-                </div>
-              </div>
-            </div>
-          );
-        })()}
-      </div>
-  
+      
       
 
       <div className="text-sm text-muted-foreground">
@@ -2739,6 +3105,7 @@ const getExportFilteredRecords = () => {
                     </td>
                     <td className="flex gap-1">
                       <Button variant="ghost" size="icon" onClick={() => handleViewRecord(rec)} title="View details"><Eye className="h-4 w-4" /></Button>
+                      <Button variant="ghost" size="icon" onClick={() => handleViewRecord(rec)} title="Edit stock code / quantity"><Pencil className="h-4 w-4" /></Button>
                       <Button variant="ghost" size="icon" onClick={() => handlePrintQRCode(rec)} title="Print QR labels" className="hidden sm:inline-flex"><QrCode className="h-4 w-4" /></Button>
                       <Button variant="ghost" size="icon" onClick={() => handleDownloadQRCode(rec)} title="Download QR" className="hidden sm:inline-flex"><Download className="h-4 w-4" /></Button>
                       {canDelete && (
@@ -2827,6 +3194,110 @@ const getExportFilteredRecords = () => {
                 </div>
               );
             })}
+          </div>
+        </TabsContent>
+
+        {/* =====================================================
+            COAs & INVOICES - document history
+        ===================================================== */}
+        <TabsContent value="documents" className="mt-4">
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="text-sm font-semibold">
+                  Certificates of Analysis &amp; supplier invoices
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {documentsWithFiles.length} receipt(s) with an attached document. Click a
+                  document to open it.
+                </p>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-2"
+                disabled={documentRows.length === 0}
+                onClick={() => {
+                  exportToCSV(documentRows, 'Receiving_COA_Invoice_History');
+                  toast.success('Document history exported to CSV');
+                }}
+              >
+                <Download className="h-4 w-4" />
+                Export CSV
+              </Button>
+            </div>
+
+            {documentsWithFiles.length === 0 ? (
+              <div className="rounded-xl border border-border bg-card p-8 text-center text-muted-foreground">
+                <FileText className="mx-auto mb-2 h-8 w-8 opacity-50" />
+                <p>No COAs or invoices attached yet</p>
+                <p className="mt-1 text-xs">Attach them when recording a receiving entry.</p>
+              </div>
+            ) : (
+              <div className="rounded-xl border border-border bg-card overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>Lot Number</th>
+                        <th>Received</th>
+                        <th>Supplier</th>
+                        <th>Material</th>
+                        <th>Documents</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {documentsWithFiles.map((row) => {
+                        const rec = receivingRecords.find(
+                          (r) => r.internal_lot_number === row.lot_number,
+                        );
+                        const docs = readDocuments(rec?.quality_checks);
+                        return (
+                          <tr key={row.lot_number}>
+                            <td className="font-mono text-xs">{row.lot_number}</td>
+                            <td className="text-xs">{row.received_date}</td>
+                            <td className="text-xs">{row.supplier}</td>
+                            <td className="text-xs">
+                              {row.stock_code}
+                              {row.material ? ` · ${row.material}` : ''}
+                            </td>
+                            <td>
+                              <div className="flex flex-wrap gap-1">
+                                {docs.map((doc) => (
+                                  <Button
+                                    key={`${doc.kind}-${doc.path}`}
+                                    variant="outline"
+                                    size="sm"
+                                    className="h-7 gap-1 text-xs"
+                                    title={`Open ${doc.file_name}`}
+                                    onClick={() =>
+                                      openReceivingDocument(doc).catch((err) =>
+                                        toast.error(
+                                          err instanceof Error
+                                            ? err.message
+                                            : 'Could not open document',
+                                        ),
+                                      )
+                                    }
+                                  >
+                                    {doc.kind === 'COA' ? (
+                                      <FileText className="h-3 w-3" />
+                                    ) : (
+                                      <Inbox className="h-3 w-3" />
+                                    )}
+                                    {doc.kind}
+                                  </Button>
+                                ))}
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
           </div>
         </TabsContent>
 
@@ -3697,20 +4168,148 @@ const getExportFilteredRecords = () => {
 
 
                 
+                {/* Editable receipt details - stock code + quantity (in that code's UOM).
+                    Saving corrects fms_receiving AND the affected stock levels. */}
+                <div className="border rounded-lg p-4 bg-muted/30">
+                  <Label className="text-muted-foreground font-semibold">Stock Code &amp; Quantity</Label>
+                  <p className="text-xs text-muted-foreground mb-2">
+                    Currently booked as{' '}
+                    <span className="font-medium">
+                      {stockCode?.stock_code} · {selectedRecord.quantity_received} {stockCode?.unit_of_measure}
+                    </span>
+                    . Changing either corrects inventory to match.
+                  </p>
+                  <div className="grid grid-cols-2 gap-3 items-end">
+                    <div>
+                      <Label className="text-xs">Stock Code</Label>
+                      <Select value={editStockCodeId} onValueChange={setEditStockCodeId}>
+                        <SelectTrigger className="w-full">
+                          <SelectValue placeholder="Select stock code" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {stockCodes.map((sc) => (
+                            <SelectItem key={sc.id} value={sc.id}>
+                              {sc.stock_code} — {sc.description}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div>
+                      <Label className="text-xs">
+                        Quantity ({getStockCode(editStockCodeId)?.unit_of_measure || 'UOM'})
+                      </Label>
+                      <Input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={editQuantity}
+                        onChange={(e) => setEditQuantity(e.target.value)}
+                        placeholder="0.00"
+                      />
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Leaving the code unchanged keeps this lot on {stockCode?.stock_code}.
+                      </p>
+                    </div>
+                  </div>
+                  <Button
+                    size="sm"
+                    className="mt-3"
+                    onClick={handleSaveReceivingEdit}
+                    disabled={
+                      savingEdit ||
+                      (editStockCodeId === selectedRecord.stock_code_id &&
+                        editQuantity === String(selectedRecord.quantity_received))
+                    }
+                  >
+                    {savingEdit ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Saving...</> : 'Save Receipt Details'}
+                  </Button>
+                </div>
+
                 {/* Editable COA/COC Content (optional, add or update anytime) */}
                 <div className="border rounded-lg p-4 bg-muted/30">
-                  <Label className="text-muted-foreground font-semibold">COA/COC Content (Optional)</Label>
+                  <Label className="text-muted-foreground font-semibold">COA/COC (Optional)</Label>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    This receipt has already been filed. You can attach the supplier&apos;s
+                    Certificate of Analysis now, and its text is read in below for you to check.
+                  </p>
+
+                  {/* Already attached? */}
+                  {(() => {
+                    const attached = readDocuments(
+                      (selectedRecord.quality_checks || {}) as Record<string, unknown>,
+                    ).filter((d) => d.kind === 'COA');
+                    if (attached.length === 0) return null;
+                    return (
+                      <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg border border-border bg-background px-3 py-2 text-xs">
+                        <FileText className="h-4 w-4 shrink-0 text-primary" />
+                        <span className="truncate font-medium">
+                          {attached[0].file_name}
+                        </span>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="h-7 gap-1 text-xs"
+                          onClick={() =>
+                            openReceivingDocument(attached[0]).catch((err) =>
+                              toast.error(
+                                err instanceof Error ? err.message : 'Could not open document',
+                              ),
+                            )
+                          }
+                        >
+                          Open
+                        </Button>
+                      </div>
+                    );
+                  })()}
+
+                  {/* Attach a new / replacement COA */}
+                  <div className="mt-3">
+                    <input
+                      type="file"
+                      accept=".pdf,image/*"
+                      className="text-sm file:mr-3 file:rounded-md file:border-0 file:bg-primary file:px-3 file:py-2 file:text-sm file:text-primary-foreground hover:file:bg-primary/90"
+                      onChange={(e) => handleCoaEditFileChosen(e.target.files?.[0] || null)}
+                    />
+                    {coaEditFile && (
+                      <div className="mt-2 flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2">
+                        <FileText className="h-4 w-4 shrink-0 text-primary" />
+                        <span className="flex-1 truncate text-sm">{coaEditFile.name}</span>
+                        <span className="shrink-0 text-xs text-muted-foreground">
+                          {(coaEditFile.size / 1024).toFixed(0)} KB
+                        </span>
+                        {coaEditParsing && (
+                          <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+                        )}
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            setCoaEditFile(null);
+                          }}
+                        >
+                          <X className="h-4 w-4 text-destructive" />
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+
                   <Textarea
                     value={editCoaContent}
                     onChange={(e) => setEditCoaContent(e.target.value)}
                     placeholder="Paste or edit COA/COC content here..."
-                    className="mt-2 min-h-[140px] font-mono text-sm"
+                    className="mt-3 min-h-[140px] font-mono text-sm"
                   />
                   <div className="flex justify-end mt-2">
                     <Button
                       size="sm"
                       onClick={handleSaveCoa}
-                      disabled={savingCoa || editCoaContent === (qualityChecks?.coa_content || '')}
+                      disabled={
+                        savingCoa ||
+                        (!coaEditFile && editCoaContent === (qualityChecks?.coa_content || ''))
+                      }
                     >
                       {savingCoa ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Saving...</> : 'Save COA/COC'}
                     </Button>

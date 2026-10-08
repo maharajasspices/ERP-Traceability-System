@@ -15,13 +15,15 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Switch } from '@/components/ui/switch';
 import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
-import { Plus, Search, Factory, Printer, Eye, Play, CheckCircle, XCircle, Clock, FileText, Loader2, QrCode, Trash2, Download, Edit2, Camera, Table, Copy, Tag, Sparkles, CalendarDays } from 'lucide-react';
+import { Plus, Search, Factory, Printer, Eye, Play, CheckCircle, XCircle, Clock, FileText, Loader2, QrCode, Trash2, Download, Edit2, Camera, Table, Copy, Tag, Sparkles, CalendarDays, BarChart3, ArrowRight } from 'lucide-react';
 import { generateQRCodePair, printQRCodes, downloadQRCodeWithLabel, generateQRCodeImage, copyQRCodeWithLabel, renderExpirySticker, downloadExpirySticker, printExpiryStickers } from '@/lib/qrCodeUtils';
 import { QRScanner } from '@/components/QRScanner';
 import { PickleBatchWorkflow, ensurePickleRunForBatch, isPickleBatch, computeBatchMaterialRequirements, fetchFreshBomsForPlan } from '@/components/pickle/PickleBatchWorkflow';
 import { exportToExcel } from '@/lib/exportUtils';
 import { format } from 'date-fns';
 import { extractBestScanIdentifier } from '@/lib/scanParser';
+import { DEFAULT_STICKER_COPIES, queueBestBeforeSticker } from '@/lib/printQueue';
+import { aggregateRawMaterialUsage, summariseUsageByUom } from '@/lib/rawMaterialUsage';
 import { SuggestedBatchSheets } from '@/components/dashboard/SuggestedBatchSheets';
 import { PlannedProductionQueue } from '@/components/dashboard/PlannedProductionQueue';
 type BatchStatus = 'draft' | 'pre_weighing' | 'manufacturing' | 'in_progress' | 'closed' | 'cancelled';
@@ -91,6 +93,7 @@ const Production: React.FC = () => {
   const [dateTo, setDateTo] = useState('');
   const [materialFilter, setMaterialFilter] = useState<string>('all');
   const [productFilter, setProductFilter] = useState<string>('all');
+  const [showRawMaterialUsage, setShowRawMaterialUsage] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [viewDialogOpen, setViewDialogOpen] = useState(false);
   const [selectedBatch, setSelectedBatch] = useState<typeof productionBatches[0] | null>(null);
@@ -317,6 +320,11 @@ const Production: React.FC = () => {
     let createdCount = 0;
     const lowStockWarnings: string[] = [];
 
+    // Net stock already promised to batches created earlier in this same
+    // multi-sheet run. `stockLevels` is a snapshot taken before the loop, so
+    // without this each sheet would see the same net stock and over-reserve.
+    const reservedSoFar = new Map<string, number>();
+
     // Low-stock check: warn but DO NOT block. A batch sheet may still be created
     // even when there is no/insufficient stock — the shortage is surfaced here
     // (and again as LOW STOCK warnings after creation) so the manager can decide.
@@ -453,36 +461,116 @@ const Production: React.FC = () => {
       } as any);
 
       if (result) {
-        // Reserve the required stock for this batch. Physical stock is NOT
-        // reduced - it is only set aside and linked to the batch/lots.
-        const reservations = lotUsages.length > 0
-          ? lotUsages.map(lot => ({
+        // Reserve the EXACT quantity the BOM requires for every ingredient,
+        // expressed in that ingredient's own stock-code UOM
+        // (fms_stock_codes.unit_of_measure). Every quantity in this chain is
+        // already denominated in the ingredient's UOM: `quantity_per_batch`
+        // is authored per material, and stock levels/movements are keyed by
+        // stock code, so on-hand is in the same unit. No conversion happens
+        // and none is needed.
+        //
+        // Built from requirementList (not lotUsages) so that EVERY ingredient
+        // is reserved. Previously this branched on `lotUsages.length > 0`:
+        // as soon as any one ingredient had a FIFO lot, the reservation list
+        // was built from lotUsages alone and every ingredient WITHOUT a lot
+        // was silently dropped from the reservation.
+        //
+        // FIFO lot detail is still carried through where it exists, so
+        // reservations stay lot-traceable for consumption.
+        const lotQuantitiesByStock = new Map<string, number>();
+        for (const lot of lotUsages) {
+          lotQuantitiesByStock.set(
+            lot.stock_code_id,
+            (lotQuantitiesByStock.get(lot.stock_code_id) ?? 0) + Number(lot.quantity_used),
+          );
+        }
+
+        const reservations: {
+          stock_code_id: string;
+          receiving_record_id: string | null;
+          internal_lot_number: string | null;
+          quantity: number;
+        }[] = [];
+
+        for (const req of requirementList) {
+          const requiredQty = Number(req.quantity) || 0;
+          if (requiredQty <= 0) continue;
+
+          const material = getStockCodeById(req.stock_code_id);
+          const uom = material?.unit_of_measure || '';
+
+          // Cap at what is actually free, so the all-or-nothing RPC
+          // (fms_reserve_batch_stock raises if ANY ingredient is short)
+          // cannot void the reservations of every other ingredient. The
+          // shortfall is reported in the low-stock warning instead.
+          const stockLevel = stockLevels.find(sl => sl.stock_code_id === req.stock_code_id);
+          const physical = stockLevel?.quantity_on_hand ?? 0;
+          const alreadyReserved = stockLevel?.reserved_quantity ?? 0;
+          const netAvailable =
+            physical - alreadyReserved - (reservedSoFar.get(req.stock_code_id) ?? 0);
+          const toReserve = Math.min(requiredQty, Math.max(0, netAvailable));
+
+          if (toReserve <= 0) {
+            lowStockWarnings.push(
+              `${result.batch_number}: ${material?.stock_code || req.stock_code_id} needs ${requiredQty.toFixed(2)}${uom ? ' ' + uom : ''} but none is available.`,
+            );
+            continue;
+          }
+
+          reservedSoFar.set(req.stock_code_id, (reservedSoFar.get(req.stock_code_id) ?? 0) + toReserve);
+
+          // Attach lot detail where FIFO managed to allocate it, so the
+          // reservation (and its later consumption) stays lot-traceable.
+          // Lots are drawn down against a running remainder so their SUM can
+          // never exceed toReserve — capping each lot individually would let
+          // several lots each claim the full amount and trip the RPC's
+          // net-stock check, voiding the whole batch's reservation.
+          const lotQty = lotQuantitiesByStock.get(req.stock_code_id) ?? 0;
+          let remainder = toReserve;
+          for (const lot of lotUsages) {
+            if (lot.stock_code_id !== req.stock_code_id) continue;
+            if (remainder <= 0) break;
+            const take = Math.min(Number(lot.quantity_used) || 0, remainder);
+            if (take <= 0) continue;
+            reservations.push({
               stock_code_id: lot.stock_code_id,
               receiving_record_id: lot.receiving_record_id,
               internal_lot_number: lot.internal_lot_number,
-              quantity: lot.quantity_used,
-            }))
-          // No specific lot allocated (e.g. direct stock): reserve at stock-code
-          // level so the reservation is still tracked against the batch.
-          : requirementList.map(req => ({
+              quantity: take,
+            });
+            remainder -= take;
+          }
+
+          // Any quantity not covered by a specific lot is still reserved at
+          // stock-code level so the hold is never lost.
+          if (remainder > 0) {
+            reservations.push({
               stock_code_id: req.stock_code_id,
               receiving_record_id: null,
               internal_lot_number: null,
-              quantity: req.quantity,
-            }));
+              quantity: remainder,
+            });
+          }
 
-        const reserveResults = await reserveStockForBatch(result.id, result.batch_number, reservations);
-
-        if (reserveResults === null) {
-          // Reservation could not be placed (e.g. insufficient net stock or
-          // no stock at all). Keep the batch sheet — it was explicitly allowed
-          // to be created with low/no stock — and only skip the reservation.
-          // Stock can be reserved once material is received.
-          lowStockWarnings.push(`${result.batch_number}: stock could not be reserved (insufficient net stock) — batch created without reservation.`);
-          createdCount++;
-        } else {
-          createdCount++;
+          if (toReserve < requiredQty) {
+            lowStockWarnings.push(
+              `${result.batch_number}: ${material?.stock_code || req.stock_code_id} - reserved ${toReserve.toFixed(2)}${uom ? ' ' + uom : ''} of ${requiredQty.toFixed(2)}${uom ? ' ' + uom : ''} required (short ${(requiredQty - toReserve).toFixed(2)}).`,
+            );
+          }
         }
+
+        let reserveResults: Awaited<ReturnType<typeof reserveStockForBatch>> = null;
+        if (reservations.length > 0) {
+          reserveResults = await reserveStockForBatch(result.id, result.batch_number, reservations);
+        }
+
+        if (reserveResults === null && reservations.length > 0) {
+          // Reservation could not be placed. Keep the batch sheet — it was
+          // explicitly allowed to be created with low/no stock — and only
+          // skip the reservation. Stock can be reserved once received.
+          lowStockWarnings.push(`${result.batch_number}: stock could not be reserved (insufficient net stock) — batch created without reservation.`);
+        }
+        createdCount++;
       }
     }
 
@@ -512,6 +600,29 @@ const Production: React.FC = () => {
       status: 'pre_weighing',
       production_start: new Date().toISOString(),
     });
+
+    // Starting production converts the Batch Sheet's reserved set-aside into
+    // actual consumption. This is what the reservation was for: the material
+    // was already set aside at CREATION time, so by the time the line starts,
+    // the stock is committed and leaves physical stock.
+    //
+    // Idempotent: fms_consume_batch_reservations only touches rows still in
+    // 'reserved', so a batch that was never reserved (or already consumed) is
+    // a no-op here rather than a double deduction.
+    const consumptionResults = await consumeBatchReservations(
+      batchId,
+      batch?.batch_number || '',
+    );
+
+    const startLowStockWarnings: string[] = [];
+    for (const cr of consumptionResults) {
+      if (cr.is_low) {
+        const sc = getStockCodeById(cr.stock_code_id);
+        startLowStockWarnings.push(
+          `${sc?.stock_code || cr.stock_code_id} (${cr.new_quantity_on_hand.toFixed(2)} remaining)`,
+        );
+      }
+    }
     // Pickle finished products: generate the pickle stage workflow from the
     // product's BOM dependencies (idempotent). Non-pickle batches are unaffected.
     // ensurePickleRunForBatch plans against freshly fetched BOMs internally, so
@@ -542,20 +653,85 @@ const Production: React.FC = () => {
       return;
     }
     toast.success('Production started');
+    if (startLowStockWarnings.length > 0) {
+      toast.warning(`⚠️ LOW STOCK: ${startLowStockWarnings.join(', ')}`, { duration: 8000 });
+    }
     await refreshData();
+  };
+
+  /**
+   * Return stock that a STARTED batch had already consumed.
+   *
+   * Once production starts, the reservation becomes real consumption and the
+   * physical stock is gone. If the batch is then cancelled or deleted, it has
+   * to be given back.
+   *
+   * Driven by the actual reservation rows rather than by BOM maths, so it is
+   * also correct for percentage BOMs - there `quantity_per_batch` is a fraction,
+   * so BOM x batch-size would restore the wrong amount. Also clears the
+   * lot-usage rows so FIFO can re-allocate those lots.
+   */
+  const restoreConsumedStock = async (batchId: string, batchNumber: string) => {
+    const consumed = getReservationsForBatch(batchId).filter((r) => r.status === 'consumed');
+    if (consumed.length === 0) return 0;
+
+    const byStockCode = new Map<string, number>();
+    for (const r of consumed) {
+      byStockCode.set(
+        r.stock_code_id,
+        (byStockCode.get(r.stock_code_id) ?? 0) + Number(r.quantity_reserved ?? 0),
+      );
+    }
+
+    let restored = 0;
+    for (const [stockCodeId, quantity] of byStockCode) {
+      if (quantity <= 0) continue;
+      await (supabase.rpc as any)('fms_apply_stock_movement', {
+        p_stock_code_id: stockCodeId,
+        p_movement_type: 'adjustment',
+        p_quantity_change: quantity,
+        p_batch_id: batchId,
+        p_batch_number: batchNumber,
+        p_reference_id: batchNumber,
+        p_notes: `Batch ${batchNumber} stopped after start - consumed stock returned`,
+        p_created_by: user?.id || null,
+      });
+      restored += quantity;
+    }
+
+    // Mark the consumed holds as released so nothing is left consuming.
+    await (supabase.from('fms_stock_reservations') as any)
+      .update({
+        status: 'released',
+        released_by: user?.id || null,
+        released_at: new Date().toISOString(),
+      })
+      .eq('batch_id', batchId)
+      .eq('status', 'consumed');
+
+    // Drop the lot-usage rows so FIFO can re-allocate those lots.
+    await (supabase.from('fms_materials_used') as any)
+      .delete()
+      .eq('batch_id', batchId);
+
+    return restored;
   };
 
   const handleCancelBatch = async (batchId: string) => {
     const batch = productionBatches.find(b => b.id === batchId);
     if (!batch) return;
 
-    // Restore stock and lot usage for this cancelled batch
-    // If this batch has active reservations (new-style), release them - the
-    // reserved stock was never deducted from physical stock, so freeing the
-    // reservation restores the available Net Stock.
-    const activeReservations = getReservationsForBatch(batchId).filter(r => r.status === 'reserved');
+    // How this batch's stock was handled depends on how far it got:
+    //   pending  -> reserved at creation, never deducted  -> just release
+    //   consumed -> production STARTED, stock already deducted -> put it back
+    //   neither  -> legacy batch that deducted at creation -> old restore path
+    const reservations = getReservationsForBatch(batchId);
+    const pendingReservations = reservations.filter(r => r.status === 'reserved');
+    const consumedReservations = reservations.filter(r => r.status === 'consumed');
 
-    if (activeReservations.length > 0) {
+    if (pendingReservations.length > 0) {
+      // Never started: the set-aside was never deducted, so freeing the
+      // reservation restores the available Net Stock.
       try {
         const released = await releaseBatchReservations(batchId, batch.batch_number);
         if (!released) {
@@ -563,6 +739,15 @@ const Production: React.FC = () => {
         }
       } catch (err) {
         console.error('[FMS] Failed to release reservations on cancel:', err);
+      }
+    } else if (consumedReservations.length > 0) {
+      // Production had started, so the reservation was already turned into
+      // real consumption and physical stock was deducted. Cancelling has to
+      // give that stock back.
+      try {
+        await restoreConsumedStock(batchId, batch.batch_number);
+      } catch (err) {
+        console.error('[FMS] Failed to restore consumed stock on cancel:', err);
       }
     } else {
       // Legacy fallback: older batches deducted stock at creation, so restore it.
@@ -607,7 +792,11 @@ const Production: React.FC = () => {
       status: 'cancelled',
       production_end: new Date().toISOString(),
     } as any);
-    toast.success('Batch cancelled - reserved stock released');
+    toast.success(
+      consumedReservations.length > 0
+        ? 'Batch cancelled - consumed stock returned'
+        : 'Batch cancelled - reserved stock released',
+    );
     await refreshData();
   };
 
@@ -740,9 +929,12 @@ const handleUpdateOrganolepticCheck = async (
       supervisor_id: user?.id,
     });
     toast.success('Batch closed successfully');
-    // Production is complete - the reserved set-aside now becomes actual stock
-    // consumption. This records lot-level fms_materials_used traceability and
-    // deducts the physical stock (reserved -> consumed).
+    // Consumption normally already happened at START (see handleStartProduction).
+    // This call is kept as an idempotent safety net: it only touches reservation
+    // rows still in 'reserved', so for a batch started after that change it is a
+    // no-op, and for a legacy batch that was started before it, it still
+    // converts the set-aside into real usage exactly once. Either way no
+    // reservation is left behind when the batch closes.
     const batch = productionBatches.find(b => b.id === batchId);
     const consumptionResults = await consumeBatchReservations(batchId, batch?.batch_number || '');
 
@@ -755,7 +947,7 @@ const handleUpdateOrganolepticCheck = async (
       }
     }
 
-            toast.success('Batch closed successfully - reserved stock consumed');
+    toast.success('Batch closed successfully');
     if (closeLowStockWarnings.length > 0) {
       const uniqueWarnings = [...new Set(closeLowStockWarnings)];
       toast.warning(`⚠️ LOW STOCK: ${uniqueWarnings.join(', ')}`, {
@@ -971,13 +1163,16 @@ const handleUpdateOrganolepticCheck = async (
   const [stickerDialogBatch, setStickerDialogBatch] = useState<typeof productionBatches[0] | null>(null);
   const [stickerManufDate, setStickerManufDate] = useState('');
   const [stickerBestBefore, setStickerBestBefore] = useState('');
-  const [stickerCopies, setStickerCopies] = useState(4);
+  const [stickerCopies, setStickerCopies] = useState(DEFAULT_STICKER_COPIES);
+  const [stickerSaving, setStickerSaving] = useState(false);
 
   const handleOpenExpirySticker = (batch: typeof productionBatches[0]) => {
     setStickerDialogBatch(batch);
     setStickerManufDate(String(batch.planned_production_date || '').slice(0, 10));
-    setStickerBestBefore('');
-    setStickerCopies(4);
+    // Pre-fill from the batch so a date set previously is visible and can be
+    // corrected, rather than silently forgotten.
+    setStickerBestBefore(String(batch.best_before_date || '').slice(0, 10));
+    setStickerCopies(batch.sticker_copies || DEFAULT_STICKER_COPIES);
   };
 
   const fmtStickerDate = (raw: string) => {
@@ -1009,17 +1204,85 @@ const handleUpdateOrganolepticCheck = async (
     );
   };
 
+  /**
+   * Save the Best Before date and sticker count onto the batch, then queue the
+   * stickers for the midnight print run.
+   *
+   * The date belongs to THIS batch. Many batches may carry the exact same date;
+   * it is never treated as an identifier and never groups anything. If a sticker
+   * job is already pending for this batch it is updated rather than duplicated.
+   */
+  const handleSaveAndQueueSticker = async () => {
+    if (!stickerDialogBatch) return;
+    if (!stickerBestBefore) {
+      toast.error('Please enter a Best Before date before queuing');
+      return;
+    }
+    const batchId = stickerDialogBatch.id;
+    const copies = Math.max(1, stickerCopies);
+    setStickerSaving(true);
+
+    try {
+      // 1. Persist the date and copy count on the batch.
+      const { error: saveError } = await supabase
+        .from('fms_production_batches')
+        .update({ best_before_date: stickerBestBefore, sticker_copies: copies })
+        .eq('id', batchId);
+
+      if (saveError) {
+        // The new columns are not there yet if the migration has not run.
+        if (/PGRST204|42P01|column .* does not exist|schema cache/i.test(saveError.message)) {
+          toast.error(
+            'The print queue columns are not set up yet. Apply the print queue migration, then try again.',
+            { duration: 10000 },
+          );
+        } else {
+          toast.error(saveError.message || 'Could not save the Best Before date');
+        }
+        return;
+      }
+
+      // 2. Queue the sticker job for the midnight run.
+      const result = await queueBestBeforeSticker({ batchId, copies });
+
+      if (!result.ok) {
+        toast.error(
+          result.schemaMissing
+            ? 'The print queue is not set up yet. Apply the print queue migration, then try again.'
+            : result.reason,
+          { duration: 10000 },
+        );
+        return;
+      }
+
+      toast.success(
+        result.updated
+          ? `Updated the queued stickers for ${stickerDialogBatch.batch_number} (${copies})`
+          : `${copies} sticker(s) queued for ${stickerDialogBatch.batch_number}`,
+        { description: 'They will print automatically at midnight.' },
+      );
+
+      setStickerDialogBatch(null);
+      await refreshData();
+    } finally {
+      setStickerSaving(false);
+    }
+  };
+
 //Dekete Batch Function
   const handleDeleteBatch = async (batchId: string) => {
     const batch = productionBatches.find(b => b.id === batchId);
     if (!batch) return;
 
-    // Restore stock and lot usage for this batch before deletion
-    // Release any active reservations for this batch before deletion. For
-    // legacy batches that deducted stock at creation, restore it instead.
-    const activeReservations = getReservationsForBatch(batchId).filter(r => r.status === 'reserved');
+    // Restore stock and lot usage for this batch before deletion.
+    //  pending  -> reserved, never deducted          -> release
+    //  consumed -> production started, stock gone     -> give it back
+    //  neither  -> legacy batch that deducted early  -> old restore path
+    const reservations = getReservationsForBatch(batchId);
+    const pendingReservations = reservations.filter(r => r.status === 'reserved');
+    const consumedReservations = reservations.filter(r => r.status === 'consumed');
 
-    if (activeReservations.length > 0) {
+    if (pendingReservations.length > 0) {
       const released = await releaseBatchReservations(batchId, batch.batch_number);
 
       if (!released) {
@@ -1027,6 +1290,12 @@ const handleUpdateOrganolepticCheck = async (
         return;
       }
 
+    } else if (consumedReservations.length > 0) {
+      try {
+        await restoreConsumedStock(batchId, batch.batch_number);
+      } catch (err) {
+        console.error('[FMS] Failed to restore consumed stock on delete:', err);
+      }
     } else {
       // Legacy fallback: restore just-in-time deducted stock
       try {
@@ -1182,6 +1451,67 @@ const filteredMaterialTotal = useMemo(() => {
 
   const selectedFilterMaterial = materialFilter !== 'all' ? getStockCodeById(materialFilter) : null;
 
+  /**
+   * Raw materials used across the currently filtered batches, and what each was
+   * used for. Built from `pre_weigh_materials` (what was actually weighed),
+   * falling back to the BOM recipe for batches that were never pre-weighed.
+   *
+   * It follows the same filters as the batch list above, so narrowing by date,
+   * status, product or raw material narrows this report too.
+   */
+  const rawMaterialUsage = useMemo(
+    () =>
+      aggregateRawMaterialUsage(
+        filteredBatches.map((b) => ({
+          id: b.id,
+          batch_number: b.batch_number,
+          finished_good_id: b.finished_good_id,
+          production_date: String(
+            b.planned_production_date || b.production_end || b.planned_production_date || '',
+          ).slice(0, 10) || null,
+          pre_weigh_materials: (b.pre_weigh_materials as any) ?? null,
+        })),
+        { stockCode: (id) => getStockCodeById(id ?? '') },
+        // Recipe fallback only. This mirrors how the batch itself was created
+        // (see createBatchesFor) so the estimate matches the app: percentage
+        // BOMs are expanded down the whole WIP tree, everything else uses
+        // quantity_per_batch x planned size.
+        (batchId, materialId) => {
+          if (!materialId) return null;
+          const batch = productionBatches.find((b) => b.id === batchId);
+          if (!batch) return null;
+
+          const plannedQty = parseFloat(String(batch.planned_batch_size)) || 0;
+          const usesPercentageBom =
+            (getStockCodeById(batch.finished_good_id) as any)?.bom_uses_percentage === true;
+
+          const requirementList = usesPercentageBom
+            ? computeBatchMaterialRequirements(
+                stockCodes,
+                boms,
+                batch.finished_good_id,
+                plannedQty,
+              )
+            : (getBOMById(batch.bom_id)?.components || []).map((comp) => ({
+                stock_code_id: comp.material_stock_code_id,
+                quantity: comp.quantity_per_batch * plannedQty,
+              }));
+
+          const match = requirementList.find((r) => r.stock_code_id === materialId);
+          return match ? match.quantity : null;
+        },
+      ),
+    [filteredBatches, getStockCodeById, getBOMById, boms, productionBatches, stockCodes],
+  );
+
+  // Totals are grouped by unit: adding kilograms to units to litres would
+  // produce a meaningless number.
+  const rawMaterialUsageTotals = useMemo(
+    () => summariseUsageByUom(rawMaterialUsage),
+    [rawMaterialUsage],
+  );
+
+
   const selectedProduct = formData.finished_good_id 
     ? getStockCodeById(formData.finished_good_id) 
     : null;
@@ -1218,7 +1548,7 @@ const filteredMaterialTotal = useMemo(() => {
         </TabsTrigger>
         <TabsTrigger value="planned" className="gap-2 text-xs sm:text-sm">
           <CalendarDays className="h-4 w-4" />
-          Planned Queue
+          Queued Printing
         </TabsTrigger>
         <TabsTrigger value="suggested" className="gap-2 text-xs sm:text-sm">
           <Sparkles className="h-4 w-4" />
@@ -1476,7 +1806,7 @@ const filteredMaterialTotal = useMemo(() => {
 
           {/* Best-Before (expiry) sticker — 30 x 30 mm */}
           <Dialog open={!!stickerDialogBatch} onOpenChange={(o) => { if (!o) setStickerDialogBatch(null); }}>
-            <DialogContent className="sm:max-w-md">
+            <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
               <DialogHeader>
                 <DialogTitle>Best-Before Sticker (30 x 30 mm)</DialogTitle>
                 <DialogDescription>
@@ -1536,18 +1866,39 @@ const filteredMaterialTotal = useMemo(() => {
                       max={50}
                       value={stickerCopies}
                       onChange={(e) => setStickerCopies(Math.max(1, parseInt(e.target.value) || 1))}
+                      className="w-28"
                     />
+                    <p className="text-xs text-muted-foreground">
+                      Saved on this batch. Many batches may share the same Best Before date —
+                      each keeps its own date and its own queued stickers.
+                    </p>
                   </div>
                 </div>
               )}
 
-              <DialogFooter className="flex-col gap-2 sm:flex-row">
+              {/* Four actions no longer fit on one line, so the footer wraps instead of
+                  overlapping. The queue action is full width on its own row. */}
+              <DialogFooter className="flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-end">
                 <Button variant="outline" onClick={() => setStickerDialogBatch(null)}>Close</Button>
                 <Button variant="outline" onClick={handlePrintSticker} disabled={!stickerBestBefore} className="gap-2">
                   <Printer className="h-4 w-4" /> Print ({stickerCopies})
                 </Button>
                 <Button onClick={handleDownloadSticker} disabled={!stickerBestBefore} className="gap-2">
                   <Download className="h-4 w-4" /> Download Sticker
+                </Button>
+                {/* Saves the date on the batch and queues the stickers for the
+                    midnight run. Separate from the Batch Sheet QR job. */}
+                <Button
+                  onClick={handleSaveAndQueueSticker}
+                  disabled={!stickerBestBefore || stickerSaving}
+                  className="w-full gap-2 sm:w-auto sm:ml-auto"
+                >
+                  {stickerSaving ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Printer className="h-4 w-4" />
+                  )}
+                  Save &amp; Queue for Midnight ({stickerCopies})
                 </Button>
               </DialogFooter>
             </DialogContent>
@@ -1616,6 +1967,17 @@ const filteredMaterialTotal = useMemo(() => {
               placeholder="All finished products"
             />
           </div>
+          {/* Toggles the "raw materials used, and what for" breakdown for the
+              batches currently matching the filters above. */}
+          <Button
+            variant={showRawMaterialUsage ? 'default' : 'outline'}
+            size="sm"
+            className="gap-2"
+            onClick={() => setShowRawMaterialUsage((v) => !v)}
+          >
+            <BarChart3 className="h-4 w-4" />
+            Raw Materials Used
+          </Button>
         </div>
         {/* Summary */}
         <div className="flex flex-wrap items-center gap-x-6 gap-y-2 border-t border-border pt-3 text-sm">
@@ -1636,6 +1998,94 @@ const filteredMaterialTotal = useMemo(() => {
             </Button>
           )}
         </div>
+
+        {/* Raw materials used in this range, and what they were used for. */}
+        {showRawMaterialUsage && (
+          <div className="border-t border-border pt-3">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+              <Label className="text-sm font-semibold">Raw materials used</Label>
+              <span className="flex flex-wrap items-center gap-x-3 text-xs text-muted-foreground">
+                <span>{rawMaterialUsage.length} material(s) across {filteredBatches.length} batch sheet(s)</span>
+                {/* Totals are per unit of measure - they are never added
+                    together, because kg + units + litres is meaningless. */}
+                {rawMaterialUsageTotals.map((t) => (
+                  <span key={t.uom}>
+                    <span className="font-semibold text-foreground">
+                      {t.total.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                    </span>{' '}
+                    {t.uom}
+                  </span>
+                ))}
+              </span>
+            </div>
+
+            {rawMaterialUsage.length === 0 ? (
+              <p className="rounded border border-dashed border-border p-4 text-center text-sm text-muted-foreground">
+                No raw materials recorded on the batches matching these filters.
+              </p>
+            ) : (
+              <div className="max-h-96 overflow-y-auto rounded border border-border">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th>Raw Material</th>
+                      <th>Description</th>
+                      <th className="text-right">Total Used</th>
+                      <th>Used for (batch → product)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rawMaterialUsage.map((row) => (
+                      <tr key={row.material_id ?? row.stock_code}>
+                        <td className="font-mono text-xs">{row.stock_code}</td>
+                        <td className="text-xs">{row.description}</td>
+                        <td className="whitespace-nowrap text-right font-semibold">
+                          {row.total_used.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                          {row.uom ? ` ${row.uom}` : ''}
+                        </td>
+                        <td className="text-xs">
+                          <ul className="space-y-1">
+                            {row.uses.map((use) => {
+                              const fg = getStockCodeById(use.finished_good_id);
+                              return (
+                                <li key={`${row.stock_code}-${use.batch_id}`} className="flex flex-wrap items-center gap-1">
+                                  <span className="font-mono">{use.batch_number}</span>
+                                  <ArrowRight className="h-3 w-3 text-muted-foreground" />
+                                  <span>{fg?.stock_code ?? use.finished_good_id}</span>
+                                  {fg?.description && (
+                                    <span className="text-muted-foreground">({fg.description})</span>
+                                  )}
+                                  <span className="text-muted-foreground">
+                                    · {use.quantity.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                                    {row.uom ? ` ${row.uom}` : ''}
+                                  </span>
+                                  {use.internal_lot_number && (
+                                    <Badge variant="outline" className="font-mono text-[10px]">
+                                      {use.internal_lot_number}
+                                    </Badge>
+                                  )}
+                                  {!use.measured && (
+                                    <Badge variant="outline" className="text-[10px]" title="No weighed quantity was recorded; the BOM recipe was used instead">
+                                      recipe
+                                    </Badge>
+                                  )}
+                                </li>
+                              );
+                            })}
+                          </ul>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <p className="mt-1.5 text-xs text-muted-foreground">
+              Quantities come from what was recorded at pre-weigh. Items marked &quot;recipe&quot;
+              had no weighed quantity, so the batch BOM was used instead.
+            </p>
+          </div>
+        )}
       </div>
 
       {/* Batch Cards */}

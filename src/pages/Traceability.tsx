@@ -54,7 +54,17 @@ interface ExportField {
 }
 
 const Traceability: React.FC = () => {
-  const { stockCodes, suppliers, receivingRecords, productionBatches, dispatchRecords, stockMovements, loading } = useFMSData();
+ const {
+  stockCodes,
+  suppliers,
+  receivingRecords,
+  productionBatches,
+  dispatchRecords,
+  stockMovements,
+  boms,
+  stockLevels,
+  loading
+ } = useFMSData();
   const { logActivity } = useActivityLog();
 
   const [activeTab, setActiveTab] = useState<'trace' | 'usage'>('trace');
@@ -81,6 +91,7 @@ const Traceability: React.FC = () => {
     { key: 'customer', label: 'Customer', checked: true },
     { key: 'status', label: 'Status', checked: false },
   ]);
+
 
   const getStockCode = (id: string) => stockCodes.find(sc => sc.id === id);
   const getSupplier = (id: string) => suppliers.find(s => s.id === id);
@@ -426,6 +437,8 @@ const Traceability: React.FC = () => {
             stockCodes={stockCodes}
             productionBatches={productionBatches}
             stockMovements={stockMovements}
+            stockLevels={stockLevels}
+            boms={boms}
           />
         </TabsContent>
 

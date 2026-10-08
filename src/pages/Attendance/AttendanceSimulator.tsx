@@ -169,20 +169,6 @@ const AttendanceSimulator: React.FC = () => {
   setEvents((current) => [event, ...current]);
 };
 
-  // Show the successful simulated device event on screen
-  const event: SimulatedAttendanceEvent = {
-    id: crypto.randomUUID(),
-    deviceId: 'DUR-ATT-01',
-    factory: 'Durban Factory',
-    employeeId: selectedEmployee.id,
-    employeeNumber: selectedEmployee.employee_number || '',
-    employeeName: `${selectedEmployee.first_name} ${selectedEmployee.last_name}`,
-    eventType,
-    timestamp: now.toISOString(),
-  };
-
-  setEvents((current) => [event, ...current]);
-};
   const formatEventTime = (timestamp: string) =>
     new Date(timestamp).toLocaleString('en-ZA', {
       dateStyle: 'medium',

@@ -127,8 +127,11 @@ const loadBatchSheetsToday = async () => {
         clearInterval(intervalId);
       }
 
-      refreshDashboard();
-
+      // Don't force a fresh fetch on mount: the shared cache (via
+      // useFMSData) already serves the initial data. Only start the
+      // polling timer so the first forced refresh and downstream queries
+      // (pickle soaking stages, batch sheets) run 60s after the page is
+      // visible, avoiding a redundant extra round trip on page load.
       intervalId = setInterval(() => {
         refreshDashboard();
       }, 60000);

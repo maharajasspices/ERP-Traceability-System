@@ -5,7 +5,14 @@ import { format, parseISO } from 'date-fns';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { supabase } from '@/integrations/supabase/client';
+import {
+  DEFAULT_STICKER_COPIES,
+  PRINT_DOCUMENT_TYPE,
+  PRINT_STATUS,
+  getPendingPrintJobs,
+  queueBatchSheet,
+  type PrintQueueRow,
+} from '@/lib/printQueue';
 import type { FMSProductionBatch } from '@/hooks/useFMSData';
 
 const WEEKDAYS = [
@@ -54,10 +61,8 @@ export const getNextWorkingDayKey = (from: Date = new Date()): string => {
   return localDateKey(next);
 };
 
-interface QueuedBatch {
-  batch_id: string | null;
-  status: string;
-}
+/** Pending print jobs, as returned by `getPendingPrintJobs`. */
+type QueuedBatch = PrintQueueRow;
 
 /**
  * Planned Production Queue for the next working day.
@@ -98,17 +103,7 @@ export const PlannedProductionQueue: React.FC<PlannedProductionQueueProps> = ({
   const loadQueue = useCallback(async () => {
     setLoadingQueue(true);
     try {
-      const { data, error } = await supabase
-        .from('fms_print_queue')
-        .select('batch_id, status')
-        .in('status', ['QUEUED', 'PRINTING']);
-
-      if (error) throw error;
-      setQueuedBatches((data as QueuedBatch[] | null) ?? []);
-    } catch (err) {
-      console.error('Failed to load print queue:', err);
-      // The list still renders; every row simply shows as not queued.
-      setQueuedBatches([]);
+      setQueuedBatches(await getPendingPrintJobs());
     } finally {
       setLoadingQueue(false);
     }
@@ -118,13 +113,49 @@ export const PlannedProductionQueue: React.FC<PlannedProductionQueueProps> = ({
     void loadQueue();
   }, [loadQueue]);
 
+  // A BATCH_SHEET job and a BEST_BEFORE_STICKER job are separate. This badge
+  // only reflects the Batch Sheet, so a batch with stickers queued but no
+  // sheet queued still shows as available to queue here.
   const isQueued = useCallback(
     (batchId: string) =>
       queuedBatches.some(
-        (q) => q.batch_id === batchId && q.status !== 'PRINTED',
+        (q) =>
+          q.batch_id === batchId &&
+          q.document_type === PRINT_DOCUMENT_TYPE.BATCH_SHEET &&
+          q.status !== PRINT_STATUS.PRINTED,
       ),
     [queuedBatches],
   );
+
+  /**
+   * The pending sticker job for a batch, or null.
+   *
+   * Returned as the whole row (not a boolean) because the badge needs the
+   * snapshotted copy count. Sticker jobs are tracked separately from Batch
+   * Sheet jobs and never affect the "Queue for Printing" button.
+   */
+  const pendingStickerJob = useCallback(
+    (batchId: string): QueuedBatch | null =>
+      queuedBatches.find(
+        (q) =>
+          q.batch_id === batchId &&
+          q.document_type === PRINT_DOCUMENT_TYPE.BEST_BEFORE_STICKER &&
+          q.status !== PRINT_STATUS.PRINTED,
+      ) ?? null,
+    [queuedBatches],
+  );
+
+  const queuedBatchesForDisplay = useMemo(() => {
+    const queuedBatchIds = new Set (
+      queuedBatches.map((job) => job.batch_id),
+    );
+
+    return productionBatches.filter(
+      (batch) => 
+        batch.status !== 'cancelled' &&
+      queuedBatchIds.has(batch.id),
+    );
+  }, [productionBatches, queuedBatches]);
 
   /**
    * Add the batch's Batch Sheet to the print queue as a single QUEUED job.
@@ -137,47 +168,27 @@ export const PlannedProductionQueue: React.FC<PlannedProductionQueueProps> = ({
   const handleQueue = async (batch: FMSProductionBatch) => {
     setQueuingId(batch.id);
     try {
-      const { data: existing, error: lookupError } = await supabase
-        .from('fms_print_queue')
-        .select('id')
-        .eq('batch_id', batch.id)
-        .eq('status', 'QUEUED')
-        .maybeSingle();
+      const result = await queueBatchSheet(batch.id);
 
-      if (lookupError) throw lookupError;
-
-      if (existing) {
-        toast.info(`${batch.batch_number} is already queued for printing.`);
-        await loadQueue();
+      if (!result.ok) {
+        toast.error(
+          result.schemaMissing
+            ? 'The print queue is not set up yet. Apply the print queue migration, then try again.'
+            : result.reason,
+        );
         return;
       }
 
-      const { error: insertError } = await supabase
-        .from('fms_print_queue')
-        .insert({
-          batch_id: batch.id,
-          document_type: 'BATCH_SHEET',
-          status: 'QUEUED',
-        });
-
-      if (insertError && insertError.code !== '23505') {
-        throw insertError;
-      }
-
-      if (insertError) {
-        // 23505: another click won the race, so it is already queued.
+      if (result.updated) {
         toast.info(`${batch.batch_number} is already queued for printing.`);
       } else {
-        toast.success('Batch sheet queued for printing', {
-          description: `${batch.batch_number} - production has NOT started.`,
+        toast.success('Batch sheet queued for midnight printing', {
+          description: `${batch.batch_number} — production has NOT started.`,
         });
       }
 
       await loadQueue();
       await onQueued?.();
-    } catch (err) {
-      console.error('Failed to queue batch sheet:', err);
-      toast.error(`Could not queue ${batch.batch_number} for printing`);
     } finally {
       setQueuingId(null);
     }
@@ -243,7 +254,11 @@ export const PlannedProductionQueue: React.FC<PlannedProductionQueueProps> = ({
               {plannedBatches.map((batch) => {
                 const finishedGood = getStockCodeById(batch.finished_good_id);
                 const alreadyQueued = isQueued(batch.id);
+                const stickerJob = pendingStickerJob(batch.id);
                 const busy = queuingId === batch.id;
+                const bestBefore = batch.best_before_date
+                  ? String(batch.best_before_date).slice(0, 10)
+                  : null;
 
                 return (
                   <li
@@ -264,6 +279,14 @@ export const PlannedProductionQueue: React.FC<PlannedProductionQueueProps> = ({
                             Queued for printing
                           </Badge>
                         )}
+                        {/* A separate job type, shown separately. It never
+                            affects the Batch Sheet button. */}
+                        {stickerJob && (
+                          <Badge variant="outline" className="border-amber-600 text-amber-700">
+                            <Printer className="mr-1 h-3 w-3" />
+                            Stickers queued ({stickerJob.copies ?? DEFAULT_STICKER_COPIES})
+                          </Badge>
+                        )}
                       </div>
                       <p className="mt-0.5 truncate text-sm text-muted-foreground">
                         {finishedGood?.description || 'Unknown product'}
@@ -272,6 +295,14 @@ export const PlannedProductionQueue: React.FC<PlannedProductionQueueProps> = ({
                         Planned size: {batch.planned_batch_size} kg
                         {finishedGood?.stock_code ? ` Â· ${finishedGood.stock_code}` : ''}
                       </p>
+                      {/* The date that will be printed. A sticker job is only
+                          created once a date is saved, so this records what is
+                          queued rather than estimating anything. */}
+                      {bestBefore && (
+                        <p className="mt-0.5 text-xs text-muted-foreground">
+                          Best Before: <span className="font-mono">{bestBefore}</span>
+                        </p>
+                      )}
                     </div>
 
                     <div className="flex shrink-0 gap-2">

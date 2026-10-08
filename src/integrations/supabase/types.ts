@@ -1,4 +1,4 @@
-export type Json =
+﻿export type Json =
   | string
   | number
   | boolean
@@ -10,7 +10,32 @@ export type Database = {
   // Allows to automatically instantiate createClient with right options
   // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
   __InternalSupabase: {
-    PostgrestVersion: "13.0.5"
+    PostgrestVersion: "14.5"
+  }
+  graphql_public: {
+    Tables: {
+      [_ in never]: never
+    }
+    Views: {
+      [_ in never]: never
+    }
+    Functions: {
+      graphql: {
+        Args: {
+          extensions?: Json
+          operationName?: string
+          query?: string
+          variables?: Json
+        }
+        Returns: Json
+      }
+    }
+    Enums: {
+      [_ in never]: never
+    }
+    CompositeTypes: {
+      [_ in never]: never
+    }
   }
   public: {
     Tables: {
@@ -194,6 +219,8 @@ export type Database = {
           effective_date: string
           finished_good_id: string
           id: string
+          max_soaking_days: number | null
+          min_soaking_days: number | null
           obsolete_reason: string | null
           organoleptic_parameters: Json | null
           parent_finished_good_id: string | null
@@ -208,6 +235,8 @@ export type Database = {
           effective_date: string
           finished_good_id: string
           id?: string
+          max_soaking_days?: number | null
+          min_soaking_days?: number | null
           obsolete_reason?: string | null
           organoleptic_parameters?: Json | null
           parent_finished_good_id?: string | null
@@ -222,6 +251,8 @@ export type Database = {
           effective_date?: string
           finished_good_id?: string
           id?: string
+          max_soaking_days?: number | null
+          min_soaking_days?: number | null
           obsolete_reason?: string | null
           organoleptic_parameters?: Json | null
           parent_finished_good_id?: string | null
@@ -241,39 +272,6 @@ export type Database = {
           {
             foreignKeyName: "fms_bom_parent_finished_good_id_fkey"
             columns: ["parent_finished_good_id"]
-            isOneToOne: false
-            referencedRelation: "fms_stock_codes"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      fms_bom_finished_goods: {
-        Row: {
-          bom_id: string
-          created_at: string | null
-          finished_good_id: string
-        }
-        Insert: {
-          bom_id: string
-          created_at?: string | null
-          finished_good_id: string
-        }
-        Update: {
-          bom_id?: string
-          created_at?: string | null
-          finished_good_id?: string
-        }
-        Relationships: [
-          {
-            foreignKeyName: "fms_bom_finished_goods_bom_id_fkey"
-            columns: ["bom_id"]
-            isOneToOne: false
-            referencedRelation: "fms_bom"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "fms_bom_finished_goods_finished_good_id_fkey"
-            columns: ["finished_good_id"]
             isOneToOne: false
             referencedRelation: "fms_stock_codes"
             referencedColumns: ["id"]
@@ -319,8 +317,79 @@ export type Database = {
           },
         ]
       }
+      fms_contract_signatures: {
+        Row: {
+          created_at: string | null
+          document_id: string | null
+          employee_id: string
+          expires_at: string
+          id: string
+          sent_at: string | null
+          signature_data: string | null
+          signature_method: string | null
+          signed_at: string | null
+          signer_employee_id: string | null
+          signer_ip: string | null
+          signer_name: string | null
+          status: string
+          token: string
+          updated_at: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          document_id?: string | null
+          employee_id: string
+          expires_at: string
+          id?: string
+          sent_at?: string | null
+          signature_data?: string | null
+          signature_method?: string | null
+          signed_at?: string | null
+          signer_employee_id?: string | null
+          signer_ip?: string | null
+          signer_name?: string | null
+          status?: string
+          token: string
+          updated_at?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          document_id?: string | null
+          employee_id?: string
+          expires_at?: string
+          id?: string
+          sent_at?: string | null
+          signature_data?: string | null
+          signature_method?: string | null
+          signed_at?: string | null
+          signer_employee_id?: string | null
+          signer_ip?: string | null
+          signer_name?: string | null
+          status?: string
+          token?: string
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fms_contract_signatures_document_id_fkey"
+            columns: ["document_id"]
+            isOneToOne: false
+            referencedRelation: "fms_hr_documents"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fms_contract_signatures_employee_id_fkey"
+            columns: ["employee_id"]
+            isOneToOne: false
+            referencedRelation: "fms_hr_employees"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       fms_dispatch: {
         Row: {
+          confirmed_at: string | null
+          confirmed_by: string | null
           created_at: string | null
           customer_id: string | null
           customer_name: string
@@ -328,8 +397,11 @@ export type Database = {
           dispatched_by: string
           id: string
           invoice_number: string
+          status: string
         }
         Insert: {
+          confirmed_at?: string | null
+          confirmed_by?: string | null
           created_at?: string | null
           customer_id?: string | null
           customer_name: string
@@ -337,8 +409,11 @@ export type Database = {
           dispatched_by: string
           id?: string
           invoice_number: string
+          status?: string
         }
         Update: {
+          confirmed_at?: string | null
+          confirmed_by?: string | null
           created_at?: string | null
           customer_id?: string | null
           customer_name?: string
@@ -346,8 +421,47 @@ export type Database = {
           dispatched_by?: string
           id?: string
           invoice_number?: string
+          status?: string
         }
         Relationships: []
+      }
+      fms_dispatch_invoices: {
+        Row: {
+          created_at: string | null
+          customer_name: string | null
+          dispatch_id: string
+          file_name: string | null
+          file_path: string | null
+          id: string
+          invoice_number: string
+        }
+        Insert: {
+          created_at?: string | null
+          customer_name?: string | null
+          dispatch_id: string
+          file_name?: string | null
+          file_path?: string | null
+          id?: string
+          invoice_number: string
+        }
+        Update: {
+          created_at?: string | null
+          customer_name?: string | null
+          dispatch_id?: string
+          file_name?: string | null
+          file_path?: string | null
+          id?: string
+          invoice_number?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fms_dispatch_invoices_dispatch_id_fkey"
+            columns: ["dispatch_id"]
+            isOneToOne: false
+            referencedRelation: "fms_dispatch"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       fms_dispatch_items: {
         Row: {
@@ -356,6 +470,10 @@ export type Database = {
           dispatch_id: string
           id: string
           quantity: number
+          quantity_required: number
+          quantity_scanned: number
+          scanned_at: string | null
+          scanned_by: string | null
         }
         Insert: {
           batch_id: string
@@ -363,6 +481,10 @@ export type Database = {
           dispatch_id: string
           id?: string
           quantity: number
+          quantity_required?: number
+          quantity_scanned?: number
+          scanned_at?: string | null
+          scanned_by?: string | null
         }
         Update: {
           batch_id?: string
@@ -370,6 +492,10 @@ export type Database = {
           dispatch_id?: string
           id?: string
           quantity?: number
+          quantity_required?: number
+          quantity_scanned?: number
+          scanned_at?: string | null
+          scanned_by?: string | null
         }
         Relationships: [
           {
@@ -388,48 +514,59 @@ export type Database = {
           },
         ]
       }
-
-      fms_invoice_items: {
+      fms_dispatch_requirements: {
         Row: {
           created_at: string | null
           description: string | null
+          dispatch_id: string
           id: string
-          invoice_id: string
-          line_total: number
-          quantity: number
+          invoice_number: string | null
+          quantity_required: number
+          quantity_scanned: number
+          scanned_at: string | null
+          scanned_by: string | null
+          stock_code: string
           stock_code_id: string
-          unit_price: number
+          uom: string | null
         }
         Insert: {
           created_at?: string | null
           description?: string | null
+          dispatch_id: string
           id?: string
-          invoice_id: string
-          line_total?: number
-          quantity?: number
+          invoice_number?: string | null
+          quantity_required: number
+          quantity_scanned?: number
+          scanned_at?: string | null
+          scanned_by?: string | null
+          stock_code: string
           stock_code_id: string
-          unit_price?: number
+          uom?: string | null
         }
         Update: {
           created_at?: string | null
           description?: string | null
+          dispatch_id?: string
           id?: string
-          invoice_id?: string
-          line_total?: number
-          quantity?: number
+          invoice_number?: string | null
+          quantity_required?: number
+          quantity_scanned?: number
+          scanned_at?: string | null
+          scanned_by?: string | null
+          stock_code?: string
           stock_code_id?: string
-          unit_price?: number
+          uom?: string | null
         }
         Relationships: [
           {
-            foreignKeyName: "fms_invoice_items_invoice_id_fkey"
-            columns: ["invoice_id"]
+            foreignKeyName: "fms_dispatch_requirements_dispatch_id_fkey"
+            columns: ["dispatch_id"]
             isOneToOne: false
-            referencedRelation: "fms_invoices"
+            referencedRelation: "fms_dispatch"
             referencedColumns: ["id"]
           },
           {
-            foreignKeyName: "fms_invoice_items_stock_code_id_fkey"
+            foreignKeyName: "fms_dispatch_requirements_stock_code_id_fkey"
             columns: ["stock_code_id"]
             isOneToOne: false
             referencedRelation: "fms_stock_codes"
@@ -437,67 +574,404 @@ export type Database = {
           },
         ]
       }
-      fms_invoices: {
+      fms_hr_attendance: {
+        Row: {
+          attendance_date: string
+          created_at: string | null
+          employee_id: string
+          hours_worked: number | null
+          id: string
+          notes: string | null
+          status: string | null
+          time_in: string | null
+          time_out: string | null
+        }
+        Insert: {
+          attendance_date: string
+          created_at?: string | null
+          employee_id: string
+          hours_worked?: number | null
+          id?: string
+          notes?: string | null
+          status?: string | null
+          time_in?: string | null
+          time_out?: string | null
+        }
+        Update: {
+          attendance_date?: string
+          created_at?: string | null
+          employee_id?: string
+          hours_worked?: number | null
+          id?: string
+          notes?: string | null
+          status?: string | null
+          time_in?: string | null
+          time_out?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fms_hr_attendance_employee_id_fkey"
+            columns: ["employee_id"]
+            isOneToOne: false
+            referencedRelation: "fms_hr_employees"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      fms_hr_documents: {
+        Row: {
+          created_at: string | null
+          document_name: string
+          document_type: string
+          employee_id: string
+          file_path: string
+          file_size: number | null
+          id: string
+          mime_type: string | null
+          uploaded_by: string
+        }
+        Insert: {
+          created_at?: string | null
+          document_name: string
+          document_type: string
+          employee_id: string
+          file_path: string
+          file_size?: number | null
+          id?: string
+          mime_type?: string | null
+          uploaded_by: string
+        }
+        Update: {
+          created_at?: string | null
+          document_name?: string
+          document_type?: string
+          employee_id?: string
+          file_path?: string
+          file_size?: number | null
+          id?: string
+          mime_type?: string | null
+          uploaded_by?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fms_hr_documents_employee_id_fkey"
+            columns: ["employee_id"]
+            isOneToOne: false
+            referencedRelation: "fms_hr_employees"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      fms_hr_employees: {
+        Row: {
+          address: string | null
+          bank_account_number: string | null
+          bank_name: string | null
+          contract_signed: boolean | null
+          contract_signed_date: string | null
+          created_at: string | null
+          date_of_birth: string | null
+          department: string | null
+          email: string | null
+          emergency_contact_name: string | null
+          emergency_contact_phone: string | null
+          employee_number: string | null
+          employment_type: string | null
+          first_name: string
+          id: string
+          id_number: string | null
+          job_title: string | null
+          last_name: string
+          leave_pin: string | null
+          leave_pin_hash: string | null
+          phone: string | null
+          signed_contract_url: string | null
+          start_date: string | null
+          status: string | null
+          supervisor: string | null
+          system_role: string | null
+          termination_date: string | null
+          termination_reason: string | null
+          updated_at: string | null
+        }
+        Insert: {
+          address?: string | null
+          bank_account_number?: string | null
+          bank_name?: string | null
+          contract_signed?: boolean | null
+          contract_signed_date?: string | null
+          created_at?: string | null
+          date_of_birth?: string | null
+          department?: string | null
+          email?: string | null
+          emergency_contact_name?: string | null
+          emergency_contact_phone?: string | null
+          employee_number?: string | null
+          employment_type?: string | null
+          first_name: string
+          id?: string
+          id_number?: string | null
+          job_title?: string | null
+          last_name: string
+          leave_pin?: string | null
+          leave_pin_hash?: string | null
+          phone?: string | null
+          signed_contract_url?: string | null
+          start_date?: string | null
+          status?: string | null
+          supervisor?: string | null
+          system_role?: string | null
+          termination_date?: string | null
+          termination_reason?: string | null
+          updated_at?: string | null
+        }
+        Update: {
+          address?: string | null
+          bank_account_number?: string | null
+          bank_name?: string | null
+          contract_signed?: boolean | null
+          contract_signed_date?: string | null
+          created_at?: string | null
+          date_of_birth?: string | null
+          department?: string | null
+          email?: string | null
+          emergency_contact_name?: string | null
+          emergency_contact_phone?: string | null
+          employee_number?: string | null
+          employment_type?: string | null
+          first_name?: string
+          id?: string
+          id_number?: string | null
+          job_title?: string | null
+          last_name?: string
+          leave_pin?: string | null
+          leave_pin_hash?: string | null
+          phone?: string | null
+          signed_contract_url?: string | null
+          start_date?: string | null
+          status?: string | null
+          supervisor?: string | null
+          system_role?: string | null
+          termination_date?: string | null
+          termination_reason?: string | null
+          updated_at?: string | null
+        }
+        Relationships: []
+      }
+      fms_hr_leave: {
         Row: {
           created_at: string | null
           created_by: string
-          customer_address: string | null
-          customer_email: string | null
-          customer_name: string
-          customer_phone: string | null
-          due_date: string | null
+          days_requested: number
+          employee_id: string
+          end_date: string
           id: string
-          invoice_date: string
-          invoice_number: string
-          notes: string | null
-          status: Database["public"]["Enums"]["fms_invoice_status"]
-          subtotal: number
-          tax_amount: number
-          tax_rate: number
-          total: number
+          leave_type: string
+          reason: string | null
+          review_notes: string | null
+          reviewed_at: string | null
+          reviewed_by: string | null
+          start_date: string
+          status: string | null
           updated_at: string | null
         }
         Insert: {
           created_at?: string | null
           created_by: string
-          customer_address?: string | null
-          customer_email?: string | null
-          customer_name: string
-          customer_phone?: string | null
-          due_date?: string | null
+          days_requested: number
+          employee_id: string
+          end_date: string
           id?: string
-          invoice_date?: string
-          invoice_number: string
-          notes?: string | null
-          status?: Database["public"]["Enums"]["fms_invoice_status"]
-          subtotal?: number
-          tax_amount?: number
-          tax_rate?: number
-          total?: number
+          leave_type: string
+          reason?: string | null
+          review_notes?: string | null
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          start_date: string
+          status?: string | null
           updated_at?: string | null
         }
         Update: {
           created_at?: string | null
           created_by?: string
-          customer_address?: string | null
-          customer_email?: string | null
-          customer_name?: string
-          customer_phone?: string | null
-          due_date?: string | null
+          days_requested?: number
+          employee_id?: string
+          end_date?: string
           id?: string
-          invoice_date?: string
-          invoice_number?: string
-          notes?: string | null
-          status?: Database["public"]["Enums"]["fms_invoice_status"]
-          subtotal?: number
-          tax_amount?: number
-          tax_rate?: number
-          total?: number
+          leave_type?: string
+          reason?: string | null
+          review_notes?: string | null
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          start_date?: string
+          status?: string | null
           updated_at?: string | null
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "fms_hr_leave_employee_id_fkey"
+            columns: ["employee_id"]
+            isOneToOne: false
+            referencedRelation: "fms_hr_employees"
+            referencedColumns: ["id"]
+          },
+        ]
       }
-  
+      fms_hr_warnings: {
+        Row: {
+          acknowledged_at: string | null
+          booking_token: string | null
+          created_at: string
+          details: string | null
+          employee_id: string
+          id: string
+          issued_at: string
+          issued_by: string
+          meeting_date: string | null
+          meeting_end_time: string | null
+          meeting_message: string | null
+          meeting_postponed_to: string | null
+          meeting_requested: boolean
+          meeting_resolved_at: string | null
+          meeting_start_time: string | null
+          meeting_status: string | null
+          meeting_type: string | null
+          reason: string
+          signature: string
+          status: string
+          updated_at: string
+          warning_type: string
+        }
+        Insert: {
+          acknowledged_at?: string | null
+          booking_token?: string | null
+          created_at?: string
+          details?: string | null
+          employee_id: string
+          id?: string
+          issued_at?: string
+          issued_by: string
+          meeting_date?: string | null
+          meeting_end_time?: string | null
+          meeting_message?: string | null
+          meeting_postponed_to?: string | null
+          meeting_requested?: boolean
+          meeting_resolved_at?: string | null
+          meeting_start_time?: string | null
+          meeting_status?: string | null
+          meeting_type?: string | null
+          reason: string
+          signature: string
+          status?: string
+          updated_at?: string
+          warning_type: string
+        }
+        Update: {
+          acknowledged_at?: string | null
+          booking_token?: string | null
+          created_at?: string
+          details?: string | null
+          employee_id?: string
+          id?: string
+          issued_at?: string
+          issued_by?: string
+          meeting_date?: string | null
+          meeting_end_time?: string | null
+          meeting_message?: string | null
+          meeting_postponed_to?: string | null
+          meeting_requested?: boolean
+          meeting_resolved_at?: string | null
+          meeting_start_time?: string | null
+          meeting_status?: string | null
+          meeting_type?: string | null
+          reason?: string
+          signature?: string
+          status?: string
+          updated_at?: string
+          warning_type?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fms_hr_warnings_employee_id_fkey"
+            columns: ["employee_id"]
+            isOneToOne: false
+            referencedRelation: "fms_hr_employees"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      fms_leave_requests: {
+        Row: {
+          created_at: string
+          employee_email: string | null
+          employee_id: string
+          employee_name: string
+          employee_number: string | null
+          end_date: string
+          hr_comment: string | null
+          id: string
+          leave_type: string
+          reason: string | null
+          reviewed_at: string | null
+          reviewed_by: string | null
+          start_date: string
+          status: string
+          total_days: number
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          employee_email?: string | null
+          employee_id: string
+          employee_name: string
+          employee_number?: string | null
+          end_date: string
+          hr_comment?: string | null
+          id?: string
+          leave_type: string
+          reason?: string | null
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          start_date: string
+          status?: string
+          total_days: number
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          employee_email?: string | null
+          employee_id?: string
+          employee_name?: string
+          employee_number?: string | null
+          end_date?: string
+          hr_comment?: string | null
+          id?: string
+          leave_type?: string
+          reason?: string | null
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          start_date?: string
+          status?: string
+          total_days?: number
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fms_leave_requests_employee_id_fkey"
+            columns: ["employee_id"]
+            isOneToOne: false
+            referencedRelation: "fms_hr_employees"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fms_leave_requests_reviewed_by_fkey"
+            columns: ["reviewed_by"]
+            isOneToOne: false
+            referencedRelation: "fms_users"
+            referencedColumns: ["user_id"]
+          },
+        ]
+      }
       fms_materials_used: {
         Row: {
           batch_id: string
@@ -597,27 +1071,301 @@ export type Database = {
         }
         Relationships: []
       }
-      fms_print_queue: {
+      fms_pickle_runs: {
         Row: {
           batch_id: string | null
+          completed_at: string | null
+          created_at: string | null
+          created_by: string | null
+          finished_good_id: string
+          id: string
+          notes: string | null
+          planned_total_qty: number
+          run_number: string
+          started_at: string | null
+          status: string
+          unit_of_measure: string
+          updated_at: string | null
+        }
+        Insert: {
+          batch_id?: string | null
+          completed_at?: string | null
+          created_at?: string | null
+          created_by?: string | null
+          finished_good_id: string
+          id?: string
+          notes?: string | null
+          planned_total_qty: number
+          run_number?: string
+          started_at?: string | null
+          status?: string
+          unit_of_measure?: string
+          updated_at?: string | null
+        }
+        Update: {
+          batch_id?: string | null
+          completed_at?: string | null
+          created_at?: string | null
+          created_by?: string | null
+          finished_good_id?: string
+          id?: string
+          notes?: string | null
+          planned_total_qty?: number
+          run_number?: string
+          started_at?: string | null
+          status?: string
+          unit_of_measure?: string
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fms_pickle_runs_batch_id_fkey"
+            columns: ["batch_id"]
+            isOneToOne: false
+            referencedRelation: "fms_production_batches"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fms_pickle_runs_finished_good_id_fkey"
+            columns: ["finished_good_id"]
+            isOneToOne: false
+            referencedRelation: "fms_stock_codes"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      fms_pickle_stage_ingredients: {
+        Row: {
+          created_at: string | null
+          id: string
+          internal_lot_number: string | null
+          material_stock_code_id: string
+          measured_at: string | null
+          measured_qty: number | null
+          operator_id: string | null
+          receiving_record_id: string | null
+          required_qty: number
+          source_stage_id: string | null
+          source_type: string
+          stage_id: string
+          status: string
+          unit_of_measure: string
+          variance: number | null
+        }
+        Insert: {
+          created_at?: string | null
+          id?: string
+          internal_lot_number?: string | null
+          material_stock_code_id: string
+          measured_at?: string | null
+          measured_qty?: number | null
+          operator_id?: string | null
+          receiving_record_id?: string | null
+          required_qty?: number
+          source_stage_id?: string | null
+          source_type?: string
+          stage_id: string
+          status?: string
+          unit_of_measure?: string
+          variance?: number | null
+        }
+        Update: {
+          created_at?: string | null
+          id?: string
+          internal_lot_number?: string | null
+          material_stock_code_id?: string
+          measured_at?: string | null
+          measured_qty?: number | null
+          operator_id?: string | null
+          receiving_record_id?: string | null
+          required_qty?: number
+          source_stage_id?: string | null
+          source_type?: string
+          stage_id?: string
+          status?: string
+          unit_of_measure?: string
+          variance?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fms_pickle_stage_ingredients_material_stock_code_id_fkey"
+            columns: ["material_stock_code_id"]
+            isOneToOne: false
+            referencedRelation: "fms_stock_codes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fms_pickle_stage_ingredients_receiving_record_id_fkey"
+            columns: ["receiving_record_id"]
+            isOneToOne: false
+            referencedRelation: "fms_receiving"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fms_pickle_stage_ingredients_source_stage_id_fkey"
+            columns: ["source_stage_id"]
+            isOneToOne: false
+            referencedRelation: "fms_pickle_stages"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fms_pickle_stage_ingredients_stage_id_fkey"
+            columns: ["stage_id"]
+            isOneToOne: false
+            referencedRelation: "fms_pickle_stages"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      fms_pickle_stages: {
+        Row: {
+          actual_ready_date: string | null
+          completed_at: string | null
+          completed_quantity: number | null
+          container_id: string | null
+          created_at: string | null
+          elapsed_days: number | null
+          id: string
+          is_root: boolean
+          is_soaking: boolean
+          max_ready_at: string | null
+          max_ready_date: string | null
+          min_ready_at: string | null
+          min_ready_date: string | null
+          operator_id: string | null
+          output_lot_id: string | null
+          parent_stage_id: string | null
+          process_instructions: string | null
+          required_qty: number
+          run_id: string
+          soaking_start_at: string | null
+          stage_order: number
+          started_at: string | null
+          status: string
+          stock_code_id: string
+          unit_of_measure: string
+          verified: boolean
+          verified_at: string | null
+          verified_by: string | null
+        }
+        Insert: {
+          actual_ready_date?: string | null
+          completed_at?: string | null
+          completed_quantity?: number | null
+          container_id?: string | null
+          created_at?: string | null
+          elapsed_days?: number | null
+          id?: string
+          is_root?: boolean
+          is_soaking?: boolean
+          max_ready_at?: string | null
+          max_ready_date?: string | null
+          min_ready_at?: string | null
+          min_ready_date?: string | null
+          operator_id?: string | null
+          output_lot_id?: string | null
+          parent_stage_id?: string | null
+          process_instructions?: string | null
+          required_qty?: number
+          run_id: string
+          soaking_start_at?: string | null
+          stage_order?: number
+          started_at?: string | null
+          status?: string
+          stock_code_id: string
+          unit_of_measure?: string
+          verified?: boolean
+          verified_at?: string | null
+          verified_by?: string | null
+        }
+        Update: {
+          actual_ready_date?: string | null
+          completed_at?: string | null
+          completed_quantity?: number | null
+          container_id?: string | null
+          created_at?: string | null
+          elapsed_days?: number | null
+          id?: string
+          is_root?: boolean
+          is_soaking?: boolean
+          max_ready_at?: string | null
+          max_ready_date?: string | null
+          min_ready_at?: string | null
+          min_ready_date?: string | null
+          operator_id?: string | null
+          output_lot_id?: string | null
+          parent_stage_id?: string | null
+          process_instructions?: string | null
+          required_qty?: number
+          run_id?: string
+          soaking_start_at?: string | null
+          stage_order?: number
+          started_at?: string | null
+          status?: string
+          stock_code_id?: string
+          unit_of_measure?: string
+          verified?: boolean
+          verified_at?: string | null
+          verified_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fms_pickle_stages_output_lot_id_fkey"
+            columns: ["output_lot_id"]
+            isOneToOne: false
+            referencedRelation: "fms_receiving"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fms_pickle_stages_parent_stage_id_fkey"
+            columns: ["parent_stage_id"]
+            isOneToOne: false
+            referencedRelation: "fms_pickle_stages"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fms_pickle_stages_run_id_fkey"
+            columns: ["run_id"]
+            isOneToOne: false
+            referencedRelation: "fms_pickle_runs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fms_pickle_stages_stock_code_id_fkey"
+            columns: ["stock_code_id"]
+            isOneToOne: false
+            referencedRelation: "fms_stock_codes"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      fms_print_queue: {
+        Row: {
+          batch_id: string
+          copies: number | null
           created_at: string
           document_type: string
+          error_message: string | null
           id: string
           printed_at: string | null
           status: string
         }
         Insert: {
-          batch_id?: string | null
+          batch_id: string
+          copies?: number | null
           created_at?: string
-          document_type: string
+          document_type?: string
+          error_message?: string | null
           id?: string
           printed_at?: string | null
           status?: string
         }
         Update: {
-          batch_id?: string | null
+          batch_id?: string
+          copies?: number | null
           created_at?: string
           document_type?: string
+          error_message?: string | null
           id?: string
           printed_at?: string | null
           status?: string
@@ -636,6 +1384,7 @@ export type Database = {
         Row: {
           actual_quantity_produced: number | null
           batch_number: string
+          best_before_date: string | null
           bom_id: string
           closed_at: string | null
           created_at: string | null
@@ -661,12 +1410,14 @@ export type Database = {
           scrap_waste: number | null
           status: string
           steps_checker_name: string | null
+          sticker_copies: number
           supervisor_id: string | null
           waste_notes: string | null
         }
         Insert: {
           actual_quantity_produced?: number | null
           batch_number?: string
+          best_before_date?: string | null
           bom_id: string
           closed_at?: string | null
           created_at?: string | null
@@ -692,12 +1443,14 @@ export type Database = {
           scrap_waste?: number | null
           status?: string
           steps_checker_name?: string | null
+          sticker_copies?: number
           supervisor_id?: string | null
           waste_notes?: string | null
         }
         Update: {
           actual_quantity_produced?: number | null
           batch_number?: string
+          best_before_date?: string | null
           bom_id?: string
           closed_at?: string | null
           created_at?: string | null
@@ -723,6 +1476,7 @@ export type Database = {
           scrap_waste?: number | null
           status?: string
           steps_checker_name?: string | null
+          sticker_copies?: number
           supervisor_id?: string | null
           waste_notes?: string | null
         }
@@ -759,8 +1513,8 @@ export type Database = {
           rejection_reason: string | null
           status: string
           stock_code_id: string
-          supplier_batch_number: string
-          supplier_id: string
+          supplier_batch_number: string | null
+          supplier_id: string | null
         }
         Insert: {
           cost_price_per_kg?: number | null
@@ -777,8 +1531,8 @@ export type Database = {
           rejection_reason?: string | null
           status?: string
           stock_code_id: string
-          supplier_batch_number: string
-          supplier_id: string
+          supplier_batch_number?: string | null
+          supplier_id?: string | null
         }
         Update: {
           cost_price_per_kg?: number | null
@@ -795,8 +1549,8 @@ export type Database = {
           rejection_reason?: string | null
           status?: string
           stock_code_id?: string
-          supplier_batch_number?: string
-          supplier_id?: string
+          supplier_batch_number?: string | null
+          supplier_id?: string | null
         }
         Relationships: [
           {
@@ -846,7 +1600,6 @@ export type Database = {
         Row: {
           allergen_types: string[] | null
           approved_supplier_ids: string[] | null
-          bom_uses_percentage: boolean
           created_at: string | null
           custom_allergens: string[] | null
           description: string
@@ -862,7 +1615,6 @@ export type Database = {
         Insert: {
           allergen_types?: string[] | null
           approved_supplier_ids?: string[] | null
-          bom_uses_percentage?: boolean
           created_at?: string | null
           custom_allergens?: string[] | null
           description: string
@@ -878,7 +1630,6 @@ export type Database = {
         Update: {
           allergen_types?: string[] | null
           approved_supplier_ids?: string[] | null
-          bom_uses_percentage?: boolean
           created_at?: string | null
           custom_allergens?: string[] | null
           description?: string
@@ -892,6 +1643,266 @@ export type Database = {
           updated_at?: string | null
         }
         Relationships: []
+      }
+      fms_stock_levels: {
+        Row: {
+          id: string
+          low_stock_threshold: number
+          quantity_on_hand: number
+          reserved_quantity: number
+          stock_code_id: string
+          updated_at: string | null
+        }
+        Insert: {
+          id?: string
+          low_stock_threshold?: number
+          quantity_on_hand?: number
+          reserved_quantity?: number
+          stock_code_id: string
+          updated_at?: string | null
+        }
+        Update: {
+          id?: string
+          low_stock_threshold?: number
+          quantity_on_hand?: number
+          reserved_quantity?: number
+          stock_code_id?: string
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fms_stock_levels_stock_code_id_fkey"
+            columns: ["stock_code_id"]
+            isOneToOne: true
+            referencedRelation: "fms_stock_codes"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      fms_stock_movements: {
+        Row: {
+          batch_id: string | null
+          batch_number: string | null
+          created_at: string | null
+          created_by: string | null
+          id: string
+          movement_type: string
+          notes: string | null
+          quantity_change: number
+          reference_id: string | null
+          stock_code_id: string
+        }
+        Insert: {
+          batch_id?: string | null
+          batch_number?: string | null
+          created_at?: string | null
+          created_by?: string | null
+          id?: string
+          movement_type: string
+          notes?: string | null
+          quantity_change: number
+          reference_id?: string | null
+          stock_code_id: string
+        }
+        Update: {
+          batch_id?: string | null
+          batch_number?: string | null
+          created_at?: string | null
+          created_by?: string | null
+          id?: string
+          movement_type?: string
+          notes?: string | null
+          quantity_change?: number
+          reference_id?: string | null
+          stock_code_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fms_stock_movements_batch_id_fkey"
+            columns: ["batch_id"]
+            isOneToOne: false
+            referencedRelation: "fms_production_batches"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fms_stock_movements_stock_code_id_fkey"
+            columns: ["stock_code_id"]
+            isOneToOne: false
+            referencedRelation: "fms_stock_codes"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      fms_stock_order_items: {
+        Row: {
+          created_at: string
+          id: string
+          manager_notes: string | null
+          order_id: string
+          quantity_ordered: number
+          quantity_received: number
+          status: string
+          stock_code_id: string
+          uom: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          manager_notes?: string | null
+          order_id: string
+          quantity_ordered?: number
+          quantity_received?: number
+          status?: string
+          stock_code_id: string
+          uom: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          manager_notes?: string | null
+          order_id?: string
+          quantity_ordered?: number
+          quantity_received?: number
+          status?: string
+          stock_code_id?: string
+          uom?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fms_stock_order_items_order_fk"
+            columns: ["order_id"]
+            isOneToOne: false
+            referencedRelation: "fms_stock_orders"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      fms_stock_orders: {
+        Row: {
+          checked_at: string | null
+          checked_by: string | null
+          created_at: string
+          created_by: string | null
+          id: string
+          invoice_file_path: string | null
+          invoice_number: string | null
+          notes: string | null
+          order_date: string
+          po_number: string
+          status: string
+          supplier_id: string
+          updated_at: string
+        }
+        Insert: {
+          checked_at?: string | null
+          checked_by?: string | null
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          invoice_file_path?: string | null
+          invoice_number?: string | null
+          notes?: string | null
+          order_date?: string
+          po_number: string
+          status?: string
+          supplier_id: string
+          updated_at?: string
+        }
+        Update: {
+          checked_at?: string | null
+          checked_by?: string | null
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          invoice_file_path?: string | null
+          invoice_number?: string | null
+          notes?: string | null
+          order_date?: string
+          po_number?: string
+          status?: string
+          supplier_id?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      fms_stock_reservations: {
+        Row: {
+          batch_id: string
+          batch_number: string
+          consumed_at: string | null
+          consumed_by: string | null
+          created_at: string | null
+          id: string
+          internal_lot_number: string | null
+          quantity_reserved: number
+          receiving_record_id: string | null
+          released_at: string | null
+          released_by: string | null
+          reserved_at: string | null
+          reserved_by: string | null
+          status: string
+          stock_code_id: string
+        }
+        Insert: {
+          batch_id: string
+          batch_number: string
+          consumed_at?: string | null
+          consumed_by?: string | null
+          created_at?: string | null
+          id?: string
+          internal_lot_number?: string | null
+          quantity_reserved: number
+          receiving_record_id?: string | null
+          released_at?: string | null
+          released_by?: string | null
+          reserved_at?: string | null
+          reserved_by?: string | null
+          status?: string
+          stock_code_id: string
+        }
+        Update: {
+          batch_id?: string
+          batch_number?: string
+          consumed_at?: string | null
+          consumed_by?: string | null
+          created_at?: string | null
+          id?: string
+          internal_lot_number?: string | null
+          quantity_reserved?: number
+          receiving_record_id?: string | null
+          released_at?: string | null
+          released_by?: string | null
+          reserved_at?: string | null
+          reserved_by?: string | null
+          status?: string
+          stock_code_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fms_stock_reservations_batch_id_fkey"
+            columns: ["batch_id"]
+            isOneToOne: false
+            referencedRelation: "fms_production_batches"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fms_stock_reservations_receiving_record_id_fkey"
+            columns: ["receiving_record_id"]
+            isOneToOne: false
+            referencedRelation: "fms_receiving"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fms_stock_reservations_stock_code_id_fkey"
+            columns: ["stock_code_id"]
+            isOneToOne: false
+            referencedRelation: "fms_stock_codes"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       fms_supplier_material_prices: {
         Row: {
@@ -943,6 +1954,45 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      fms_supplier_order_emails: {
+        Row: {
+          created_at: string
+          emailed_at: string
+          emailed_by: string | null
+          id: string
+          notes: string | null
+          quantity: number
+          received_at: string | null
+          status: string
+          stock_code_id: string
+          supplier_id: string
+        }
+        Insert: {
+          created_at?: string
+          emailed_at?: string
+          emailed_by?: string | null
+          id?: string
+          notes?: string | null
+          quantity: number
+          received_at?: string | null
+          status?: string
+          stock_code_id: string
+          supplier_id: string
+        }
+        Update: {
+          created_at?: string
+          emailed_at?: string
+          emailed_by?: string | null
+          id?: string
+          notes?: string | null
+          quantity?: number
+          received_at?: string | null
+          status?: string
+          stock_code_id?: string
+          supplier_id?: string
+        }
+        Relationships: []
       }
       fms_suppliers: {
         Row: {
@@ -1885,8 +2935,6 @@ export type Database = {
           submitted_at?: string | null
           updated_at?: string
         }
-        //update: {
-        a}
         Update: {
           approved_at?: string | null
           approved_by?: string | null
@@ -2274,6 +3322,18 @@ export type Database = {
         }
         Relationships: []
       }
+      test_hr: {
+        Row: {
+          id: string | null
+        }
+        Insert: {
+          id?: string | null
+        }
+        Update: {
+          id?: string | null
+        }
+        Relationships: []
+      }
       user_credits: {
         Row: {
           balance: number
@@ -2437,6 +3497,46 @@ export type Database = {
         }
         Returns: undefined
       }
+      fms_apply_stock_movement: {
+        Args: {
+          p_batch_id?: string
+          p_batch_number?: string
+          p_created_by?: string
+          p_movement_type: string
+          p_notes?: string
+          p_quantity_change: number
+          p_reference_id?: string
+          p_stock_code_id: string
+        }
+        Returns: number
+      }
+      fms_consume_batch_reservations: {
+        Args: {
+          p_batch_id: string
+          p_batch_number: string
+          p_created_by?: string
+        }
+        Returns: {
+          is_low: boolean
+          new_quantity_on_hand: number
+          stock_code_id: string
+        }[]
+      }
+      fms_delete_receiving_confirmation: {
+        Args: { p_receiving_id: string }
+        Returns: Json
+      }
+      fms_fifo_allocate_lots: {
+        Args: { p_quantity_required: number; p_stock_code_id: string }
+        Returns: {
+          expiry_date: string
+          internal_lot_number: string
+          quantity_available: number
+          quantity_to_use: number
+          received_at: string
+          receiving_record_id: string
+        }[]
+      }
       fms_generate_lot_number: { Args: never; Returns: string }
       fms_has_access: { Args: { _user_id: string }; Returns: boolean }
       fms_has_role: {
@@ -2448,6 +3548,32 @@ export type Database = {
       }
       fms_is_delete_admin: { Args: { _user_id: string }; Returns: boolean }
       fms_is_qa_viewer: { Args: { _user_id: string }; Returns: boolean }
+      fms_pickle_run_number: { Args: never; Returns: string }
+      fms_release_batch_reservations: {
+        Args: {
+          p_batch_id: string
+          p_batch_number: string
+          p_created_by?: string
+        }
+        Returns: {
+          net_stock_after: number
+          quantity_released: number
+          stock_code_id: string
+        }[]
+      }
+      fms_reserve_batch_stock: {
+        Args: {
+          p_batch_id: string
+          p_batch_number: string
+          p_created_by?: string
+          p_reservations: Json
+        }
+        Returns: {
+          net_stock_after: number
+          quantity_reserved: number
+          stock_code_id: string
+        }[]
+      }
       get_value_feedback_anonymous: {
         Args: { p_scorecard_id: string }
         Returns: {
@@ -2481,7 +3607,6 @@ export type Database = {
     }
     Enums: {
       app_role: "admin" | "employee" | "customer" | "manager" | "hr"
-      fms_invoice_status: "draft" | "issued" | "paid" | "cancelled"
       fms_role:
         | "system_admin"
         | "production_supervisor"
@@ -2489,6 +3614,7 @@ export type Database = {
         | "stores_operator"
         | "dispatch_user"
         | "qa_viewer"
+        | "hr_user"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -2504,12 +3630,12 @@ export type Tables<
   DefaultSchemaTableNameOrOptions extends
     | keyof (DefaultSchema["Tables"] & DefaultSchema["Views"])
     | { schema: keyof DatabaseWithoutInternals },
-  TableName extends DefaultSchemaTableNameOrOptions extends {
+  TableName extends (DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof (DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"] &
         DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Views"])
-    : never = never,
+    : never) = never,
 > = DefaultSchemaTableNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -2533,11 +3659,11 @@ export type TablesInsert<
   DefaultSchemaTableNameOrOptions extends
     | keyof DefaultSchema["Tables"]
     | { schema: keyof DatabaseWithoutInternals },
-  TableName extends DefaultSchemaTableNameOrOptions extends {
+  TableName extends (DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
-    : never = never,
+    : never) = never,
 > = DefaultSchemaTableNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -2558,11 +3684,11 @@ export type TablesUpdate<
   DefaultSchemaTableNameOrOptions extends
     | keyof DefaultSchema["Tables"]
     | { schema: keyof DatabaseWithoutInternals },
-  TableName extends DefaultSchemaTableNameOrOptions extends {
+  TableName extends (DefaultSchemaTableNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaTableNameOrOptions["schema"]]["Tables"]
-    : never = never,
+    : never) = never,
 > = DefaultSchemaTableNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -2583,11 +3709,11 @@ export type Enums<
   DefaultSchemaEnumNameOrOptions extends
     | keyof DefaultSchema["Enums"]
     | { schema: keyof DatabaseWithoutInternals },
-  EnumName extends DefaultSchemaEnumNameOrOptions extends {
+  EnumName extends (DefaultSchemaEnumNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[DefaultSchemaEnumNameOrOptions["schema"]]["Enums"]
-    : never = never,
+    : never) = never,
 > = DefaultSchemaEnumNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -2600,11 +3726,11 @@ export type CompositeTypes<
   PublicCompositeTypeNameOrOptions extends
     | keyof DefaultSchema["CompositeTypes"]
     | { schema: keyof DatabaseWithoutInternals },
-  CompositeTypeName extends PublicCompositeTypeNameOrOptions extends {
+  CompositeTypeName extends (PublicCompositeTypeNameOrOptions extends {
     schema: keyof DatabaseWithoutInternals
   }
     ? keyof DatabaseWithoutInternals[PublicCompositeTypeNameOrOptions["schema"]]["CompositeTypes"]
-    : never = never,
+    : never) = never,
 > = PublicCompositeTypeNameOrOptions extends {
   schema: keyof DatabaseWithoutInternals
 }
@@ -2614,10 +3740,12 @@ export type CompositeTypes<
     : never
 
 export const Constants = {
+  graphql_public: {
+    Enums: {},
+  },
   public: {
     Enums: {
       app_role: ["admin", "employee", "customer", "manager", "hr"],
-      fms_invoice_status: ["draft", "issued", "paid", "cancelled"],
       fms_role: [
         "system_admin",
         "production_supervisor",
@@ -2625,6 +3753,7 @@ export const Constants = {
         "stores_operator",
         "dispatch_user",
         "qa_viewer",
+        "hr_user",
       ],
     },
   },

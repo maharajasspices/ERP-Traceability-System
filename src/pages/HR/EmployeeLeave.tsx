@@ -271,7 +271,6 @@ const EmployeeLeave: React.FC = () => {
     }
 
     setSubmitting(true);
-
     try {
       const { data, error } =
         await supabase.functions.invoke(

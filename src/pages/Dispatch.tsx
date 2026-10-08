@@ -100,6 +100,8 @@ const Dispatch: React.FC = () => {
         dispatchedBy: user?.id || '',
       });
 
+      
+
       if (created) {
         logActivity({
           action_type: 'create',

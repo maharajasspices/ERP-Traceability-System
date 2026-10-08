@@ -168,6 +168,15 @@ export interface FMSProductionBatch {
   info_checker_name?: string;
   steps_checker_name?: string;
   quality_checker_name?: string;
+  /**
+   * Best Before date for this batch's finished goods.
+   *
+   * Set by a person before the midnight print run. Many batches may carry the
+   * exact same date - it is never unique and never used as an identifier.
+   */
+  best_before_date?: string | null;
+  /** How many 30x30mm Best Before stickers to print for this batch. */
+  sticker_copies?: number | null;
   created_at: string;
   closed_at?: string;
 }
@@ -330,7 +339,21 @@ const dataCache: FMSDataCache = {
   userId: null,
 };
 
-const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+const CACHE_TTL = 10 * 60 * 1000; // 10 minutes
+
+// How often a cache-HIT mount may re-fetch supplier order emails. Every mount
+// of any page calls fetchData(), so without this throttle each navigation
+// fired an extra round trip against fms_supplier_order_emails.
+const EMAILS_REFRESH_TTL = 30 * 1000;
+let emailsFetchedAt = 0;
+
+// The fetch currently in progress, if any. `useFMSData` is a plain hook rather
+// than a context, so EVERY component that calls it mounts its own copy and
+// fires its own fetchData() — and the Dashboard re-fires a forced fetch on a
+// 60s timer. On a slow connection one fetch can outlive that interval, so
+// without this the requests stack up and saturate the network. Sharing one
+// in-flight promise turns N concurrent callers into a single fetch.
+let inFlightFetch: Promise<void> | null = null;
 
 // Validated Edge Function call with rate limiting
 interface ValidatedRequestOptions {
@@ -355,6 +378,12 @@ export function useFMSData() {
   const [stockReservations, setStockReservations] = useState<FMSStockReservation[]>([]);
   const [supplierOrderEmails, setSupplierOrderEmails] = useState<FMSSupplierOrderEmail[]>([]);
   const [loading, setLoading] = useState(true);
+  // Cleared when the SECONDARY wave (dispatch, movements, reservations,
+  // supplier order emails, stock orders) lands. Pages that render those
+  // tables gate on `loading || secondaryLoading`; core-only pages gate on
+  // `loading` and unblock as soon as wave 1 (stock codes, suppliers,
+  // receiving, BOMs, batches, stock levels) finishes.
+  const [secondaryLoading, setSecondaryLoading] = useState(true);
 
 
 
@@ -391,13 +420,21 @@ export function useFMSData() {
       try {
         const table = options.table as any;
         if (options.operation === 'insert') {
-          const { data, error } = await supabase.from(table).insert(options.data as any).select().single();
+          const { data, error} = await (supabase.from(table) as any)
+          .insert(options.data)
+          .select()
+          .single();
+
           if (error) return { data: null, error: error.message };
           return { data: data as T, error: null };
         }
         if (options.operation === 'update') {
           if (!options.id) return { data: null, error: 'ID required for update' };
-          const { data, error } = await supabase.from(table).update(options.data as any).eq('id', options.id).select().single();
+         const { data, error} = await (supabase.from (table) as any)
+         .update(options.data)
+         .eq('id', options.id)
+         .select()
+         .single()
           if (error) return { data: null, error: error.message };
           return { data: data as T, error: null };
         }
@@ -446,6 +483,7 @@ export function useFMSData() {
     // after sign-out, and on first render before the session resolves).
     if (!user) {
       setLoading(false);
+      setSecondaryLoading(false);
       return;
     }
 
@@ -469,25 +507,46 @@ export function useFMSData() {
       if (dataCache.stockReservations) setStockReservations(dataCache.stockReservations);
       if (dataCache.supplierOrderEmails) setSupplierOrderEmails(dataCache.supplierOrderEmails);
       setLoading(false);
+      setSecondaryLoading(false);
 
-      // Always fetch supplier order emails fresh from Supabase (never from
-      // cache) so the Pending Delivery tab stays up to date after emails are
-      // sent. Guarded: this runs outside the main try/finally below, so a
+      // Refresh supplier order emails in the background so the Pending
+      // Delivery tab stays up to date after emails are sent. Throttled to
+      // EMAILS_REFRESH_TTL: this branch runs on EVERY cache-hit mount, so
+      // without the throttle every navigation fired an extra round trip.
+      // Guarded: this runs outside the main try/finally below, so a
       // network throw here would otherwise reject out of fetchData.
-      try {
-        const { data: emailsData, error: emailsError } = await supabase
-          .from('fms_supplier_order_emails')
-          .select('*')
-          .order('emailed_at', { ascending: false });
-        if (emailsError) {
-          console.error('[FMS] supplier_order_emails fetch error:', emailsError);
-        } else if (emailsData) {
-          setSupplierOrderEmails(emailsData as FMSSupplierOrderEmail[]);
+      if (Date.now() - emailsFetchedAt >= EMAILS_REFRESH_TTL) {
+        emailsFetchedAt = Date.now();
+        try {
+          const { data: emailsData, error: emailsError } = await supabase
+            .from('fms_supplier_order_emails')
+            .select('*')
+            .order('emailed_at', { ascending: false });
+          if (emailsError) {
+            console.error('[FMS] supplier_order_emails fetch error:', emailsError);
+          } else if (emailsData) {
+            setSupplierOrderEmails(emailsData as FMSSupplierOrderEmail[]);
+          }
+        } catch (emailsErr) {
+          console.error('[FMS] supplier_order_emails fetch failed:', emailsErr);
         }
-      } catch (emailsErr) {
-        console.error('[FMS] supplier_order_emails fetch failed:', emailsErr);
       }
 
+      return;
+    }
+
+    // Another component (or the Dashboard's 60s forced refresh) is already
+    // fetching. Join it rather than stack a duplicate request, then pick the
+    // shared result up through the normal cache path above.
+    if (inFlightFetch) {
+      await inFlightFetch;
+      if (dataCache.fetchedAt !== null && dataCache.userId === user.id) {
+        return fetchData(false);
+      }
+      // Shared fetch failed (or belonged to another user) — do not leave this
+      // instance stuck on a spinner.
+      setLoading(false);
+      setSecondaryLoading(false);
       return;
     }
 
@@ -536,34 +595,24 @@ export function useFMSData() {
 
     setLoading(true);
 
+    // Publish this fetch so concurrent callers (another mounted component, or
+    // the Dashboard's 60s forced refresh) can join it instead of starting
+    // their own identical request. Assigned synchronously, before the first
+    // await, so no caller can slip past this check.
+    let signalFetchDone!: () => void;
+    inFlightFetch = new Promise<void>((resolve) => {
+      signalFetchDone = resolve;
+    });
+
     try {
-      // BOM <-> finished-good links (join table, one BOM version -> many FGs).
-      // Loaded tolerantly: before migration
-      // 20260921000000_bom_parent_finished_good.sql is applied the table does
-      // not exist, in which case we fall back to the legacy single column.
-      // NOTE: inside the try so that the `finally` below always clears
-      // `loading` — a throw here used to leave the page spinning forever.
-      const linksRes = await dbOrLocal<FMSBOMFinishedGoodLink>(
-        () =>
-          supabase
-            .from('fms_bom')
-            .select('id, finished_good_id')
-            .then((res: any) => ({
-              data: (res.data || []).map((row: any) => ({
-                bom_id: row.id,
-                finished_good_id: row.finished_good_id,
-              })),
-              error: res.error,
-            })),
-        () => []
-      );
-      const linksByBom = new Map<string, string[]>();
-      for (const link of linksRes || []) {
-        if (!link?.bom_id || !link?.finished_good_id) continue;
-        const list = linksByBom.get(link.bom_id) || [];
-        if (!list.includes(link.finished_good_id)) list.push(link.finished_good_id);
-        linksByBom.set(link.bom_id, list);
-      }
+      // BOM <-> finished-good links (one BOM version -> many FGs).
+      //
+      // This used to issue its OWN query against fms_bom (selecting id and
+      // finished_good_id) purely to build this map. The main BOM fetch in the
+      // Promise.all below already returns those same rows and columns, so the
+      // extra request bought nothing except another serial round trip on every
+      // cold load. The map is now built from `bomsRes` once it arrives.
+      let linksByBom = new Map<string, string[]>();
       const withJoinLinks = (bom: any): FMSBOM => {
         const ids = linksByBom.get(bom.id);
         return {
@@ -572,22 +621,66 @@ export function useFMSData() {
           components: bom.fms_bom_components || bom.components || [],
         } as FMSBOM;
       };
+      const buildJoinLinks = (
+        rows: Array<{ id?: string | null; finished_good_id?: string | null }>,
+      ): Map<string, string[]> => {
+        const map = new Map<string, string[]>();
+        for (const row of rows || []) {
+          if (!row?.id || !row?.finished_good_id) continue;
+          const list = map.get(row.id) || [];
+          if (!list.includes(row.finished_good_id)) list.push(row.finished_good_id);
+          map.set(row.id, list);
+        }
+        return map;
+      };
 
-      // Stock codes
-      const stockCodesData = await dbOrLocal<FMSStockCode>(
-        () => fetchAllStockCodes().then((data) => ({ data, error: null })),
-        () => []
-      );
-      setStockCodes(stockCodesData);
+      // Two waves, not one. Pages that only need core tables (stock codes,
+      // suppliers, receiving, BOMs, batches, stock levels) gate on `loading`,
+      // which is cleared after wave 1 below; pages that render dispatch,
+      // movements, reservations, emails or orders gate on
+      // `loading || secondaryLoading` and wait for wave 2 as well.
+      const [stockCodesRes, suppliersRes, receivingRes, bomsRes, batchesRes, stockLevelsRes] = await Promise.all([
 
-      const [suppliersRes, receivingRes, bomsRes, batchesRes, dispatchRes, stockLevelsRes, stockMovementsRes, stockReservationsRes, supplierOrderEmailsRes, stockOrdersRes] = await Promise.all([
-
+        dbOrLocal<FMSStockCode>(
+          () => fetchAllStockCodes().then((data) => ({ data, error: null })),
+          () => []
+        ),
         dbOrLocal<FMSSupplier>(
           () => supabase.from('fms_suppliers').select('*').order('name').then((res: any) => ({ data: res.data, error: res.error })),
           () => []
         ),
         dbOrLocal<FMSReceiving>(
-          () => supabase.from('fms_receiving').select('*').order('received_at', { ascending: false }).then((res: any) => ({ data: res.data, error: res.error })),
+          // Paginated like stock codes and batches: a single page silently
+          // caps at 1000 rows, and received_at DESC means the OLDEST
+          // receivings would be the ones dropped - understating any
+          // receiving-window total (e.g. the Stock Recon report).
+          async () => {
+            const pageSize = 1000;
+            let from = 0;
+            const all: FMSReceiving[] = [];
+
+            while (true) {
+              const { data, error } = await supabase
+                .from('fms_receiving')
+                .select('*')
+                .order('received_at', { ascending: false })
+                .range(from, from + pageSize - 1);
+
+              if (error) throw error;
+
+              const page = (data || []) as FMSReceiving[];
+              all.push(...page);
+
+              if (page.length < pageSize) break;
+
+              from += pageSize;
+            }
+
+            return {
+              data: all,
+              error: null,
+            };
+          },
           () => []
         ),
         dbOrLocal<any>(
@@ -616,7 +709,7 @@ export function useFMSData() {
               if (page.length < pageSize) break;
 
               from += pageSize;
-            }
+            }  
 
             return {
               data: all,
@@ -626,12 +719,83 @@ export function useFMSData() {
           () => []
         ),
 
-        dbOrLocal<any>(
-          () => supabase.from('fms_dispatch').select('*, fms_dispatch_items(*), fms_dispatch_invoices(*), fms_dispatch_requirements(*)').order('dispatch_date', { ascending: false }).then((res: any) => ({ data: res.data, error: res.error })),
-          () => []
-        ),
         dbOrLocal<FMSStockLevel>(
           () => (supabase.from('fms_stock_levels' as any) as any).select('*').then((res: any) => ({ data: res.data, error: res.error })),
+          () => []
+        ),
+      ]);
+
+      setStockCodes(stockCodesRes);
+      // Build the BOM link map from the SAME rows the main BOM fetch already
+      // returned — the old dedicated `linksRes` query was a duplicate request.
+      // Must happen before anything maps through withJoinLinks below.
+      linksByBom = buildJoinLinks(bomsRes);
+      setSuppliers(suppliersRes);
+      if (receivingRes) setReceivingRecords(receivingRes);
+      if (bomsRes) {
+        setBoms(bomsRes.map((bom: any) => withJoinLinks(bom)));
+      }
+      setProductionBatches(batchesRes);
+      if (stockLevelsRes) setStockLevels(stockLevelsRes);
+      // Wave 1 done: unblock every page that gates on core data only.
+      setLoading(false);
+
+      // Wave 2: extended tables. Pages that render these gate on
+      // `loading || secondaryLoading`; everyone else is already interactive.
+      const [dispatchRes, stockMovementsRes, stockReservationsRes, supplierOrderEmailsRes, stockOrdersRes] = await Promise.all([
+        dbOrLocal<any>(
+          // The invoice/requirement child tables are fetched SEPARATELY from
+          // the dispatch header. Joining them here would mean that if those
+          // tables do not exist yet (migration not applied) the WHOLE dispatch
+          // list silently disappears. Fetching them separately degrades to an
+          // empty picking list instead of taking the page down.
+          async () => {
+            const base = await supabase
+              .from('fms_dispatch')
+              .select('*, fms_dispatch_items(*)')
+              .order('dispatch_date', { ascending: false });
+
+            if (base.error || !base.data) {
+              return { data: base.data, error: base.error };
+            }
+
+            const ids = base.data.map((d: any) => d.id);
+            let invoices: any[] = [];
+            let requirements: any[] = [];
+
+            if (ids.length > 0) {
+              const [invRes, reqRes] = await Promise.all([
+                (supabase.from('fms_dispatch_invoices' as any) as any).select('*').in('dispatch_id', ids),
+                (supabase.from('fms_dispatch_requirements' as any) as any).select('*').in('dispatch_id', ids),
+              ]);
+
+              if (invRes.error) {
+                console.warn(
+                  '[FMS] fms_dispatch_invoices unavailable - has the dispatch migration been applied?',
+                  invRes.error,
+                );
+              } else {
+                invoices = invRes.data ?? [];
+              }
+
+              if (reqRes.error) {
+                console.warn(
+                  '[FMS] fms_dispatch_requirements unavailable - has the dispatch migration been applied?',
+                  reqRes.error,
+                );
+              } else {
+                requirements = reqRes.data ?? [];
+              }
+            }
+
+            const enriched = base.data.map((d: any) => ({
+              ...d,
+              fms_dispatch_invoices: invoices.filter((i) => i.dispatch_id === d.id),
+              fms_dispatch_requirements: requirements.filter((r) => r.dispatch_id === d.id),
+            }));
+
+            return { data: enriched, error: null };
+          },
           () => []
         ),
         dbOrLocal<FMSStockMovement>(
@@ -642,12 +806,15 @@ export function useFMSData() {
           () => (supabase.from('fms_stock_reservations' as any) as any).select('*').order('created_at', { ascending: false }).then((res: any) => ({ data: res.data, error: res.error })),
           () => []
         ),
-      
         dbOrLocal<FMSSupplierOrderEmail>(
-          () => (supabase.from('fms_supplier_order_emails' as any) as any).select('*').order('emailed_at', { ascending: false }).then((res: any) => ({ data: res.data, error: res.error })),
+          () => supabase
+            .from('fms_supplier_order_emails')
+            .select('*')
+            .order('emailed_at', { ascending: false })
+            .then((res: any) => ({ data: res.data, error: res.error })),
           () => []
         ),
-        
+
         dbOrLocal<FMSStockOrder>(
           () => (supabase.from('fms_stock_orders' as any) as any)
             .select('*, fms_stock_order_items(*)')
@@ -657,33 +824,13 @@ export function useFMSData() {
         ),
       ]);
 
-   
-       setSuppliers(suppliersRes);
-          if (receivingRes) setReceivingRecords(receivingRes);
-
-          if (bomsRes) {
-            setBoms(bomsRes.map((bom: any) => withJoinLinks(bom)));
-          }
-
-          setProductionBatches(batchesRes);
-
-          console.log('[FMS] Production batches received:', batchesRes.length);
-          console.log(
-            '[FMS] Production batch statuses:',
-            batchesRes.reduce((counts: Record<string, number>, batch: FMSProductionBatch) => {
-              counts[batch.status] = (counts[batch.status] || 0) + 1;
-              return counts;
-            }, {})
-          );
-
-          if (dispatchRes) {
+      if (dispatchRes) {
         const dispatchWithItems = dispatchRes.map(withDispatchRelations);
         setDispatchRecords(dispatchWithItems as FMSDispatch[]);
       }
-      if (stockLevelsRes) setStockLevels(stockLevelsRes);
       if (stockMovementsRes) setStockMovements(stockMovementsRes);
       if (stockReservationsRes) setStockReservations(stockReservationsRes);
-      if (supplierOrderEmailsRes) setSupplierOrderEmails(supplierOrderEmailsRes);
+      if (supplierOrderEmailsRes) setSupplierOrderEmails(supplierOrderEmailsRes as FMSSupplierOrderEmail[]);
       if (stockOrdersRes) {
         setStockOrders(stockOrdersRes.map((o: any) => ({
           ...o,
@@ -693,11 +840,12 @@ export function useFMSData() {
 
       // Store in cache
       dataCache.suppliers = suppliersRes;
-      dataCache.stockCodes = stockCodesData;
+      dataCache.stockCodes = stockCodesRes;
       dataCache.receivingRecords = receivingRes;
       if (bomsRes) {
         dataCache.boms = bomsRes.map((bom: any) => withJoinLinks(bom));
       }
+       
       dataCache.productionBatches = batchesRes;
       dataCache.dispatchRecords = dispatchRes.map(withDispatchRelations);
       dataCache.stockLevels = stockLevelsRes;
@@ -714,6 +862,11 @@ export function useFMSData() {
       console.error('Error fetching FMS data:', error);
     } finally {
       setLoading(false);
+      setSecondaryLoading(false);
+      // Clear BEFORE resolving: joiners re-enter fetchData() immediately and
+      // must not see a stale in-flight promise.
+      inFlightFetch = null;
+      signalFetchDone();
     }
   }, [user]);
 
@@ -721,6 +874,26 @@ export function useFMSData() {
     fetchData();
   }, [fetchData]);
 
+const loadSupplierOrderEmails = async () => {
+  try {
+    const { data, error } = await supabase
+      .from('fms_supplier_order_emails')
+      .select('*')
+      .order('emailed_at', { ascending: false });
+
+    if (error) {
+      console.error('[FMS] supplier_order_emails fetch error:', error);
+      return [];
+    }
+
+    const rows = (data || []) as FMSSupplierOrderEmail[];
+    setSupplierOrderEmails(rows);
+    return rows;
+  } catch (err) {
+    console.error('[FMS] supplier_order_emails fetch failed:', err);
+    return [];
+  }
+};
   // Supplier operations - validated through Edge Function
   const addSupplier = async (supplier: Omit<FMSSupplier, 'id' | 'created_at' | 'updated_at'>) => {
     // Client-side pre-validation for fast feedback
@@ -749,6 +922,7 @@ export function useFMSData() {
     }
     return data;
   };
+
 
   const updateSupplier = async (id: string, updates: Partial<FMSSupplier>) => {
     // Client-side pre-validation
@@ -1157,7 +1331,19 @@ export function useFMSData() {
 
     if (dispatchError || !dispatchData) {
       console.error('[FMS] Create dispatch from invoice error:', dispatchError);
-      toast.error(dispatchError?.message || 'Failed to create dispatch');
+
+      // PGRST204 / 42P01 mean the database is missing the dispatch migration.
+      // That is a deployment problem, not a user error, so say exactly what to
+      // run instead of surfacing a raw PostgREST message.
+      const raw = String(dispatchError?.message ?? dispatchError ?? '');
+      if (/PGRST204|42P01|status.*column|schema cache/i.test(raw)) {
+        toast.error(
+          'Dispatch tables are not up to date. Apply the migration 20260922000000_dispatch_invoice_workflow.sql in the Supabase SQL Editor, then reload.',
+          { duration: 12000 },
+        );
+      } else {
+        toast.error(raw || 'Failed to create dispatch');
+      }
       return null;
     }
 
@@ -1718,6 +1904,7 @@ export function useFMSData() {
     supplierOrderEmails,
     stockOrders,
     loading,
+    secondaryLoading,
     
     // Refresh (forces a fresh fetch, bypassing cache)
     refreshData: () => fetchData(true),
