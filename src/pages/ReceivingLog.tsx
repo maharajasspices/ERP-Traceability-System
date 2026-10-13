@@ -534,6 +534,12 @@ const statusFixAttempted = useRef<Set<string>>(new Set());
     setSupplierSearch('');
     setReceivingLines([]);
     setReceivingInvoiceFile(null);
+    // Pre-fill a generated lot number so staff can SEE it and edit it before
+    // saving (instead of only discovering the auto-generated one after saving).
+    // Uses the same DB sequence as save-time, so the shown number is what saves.
+    void resolveLotNumber(null).then((lot) => {
+      setFormData(prev => (prev.internal_lot_number.trim() ? prev : { ...prev, internal_lot_number: lot }));
+    });
   };
 
   // Queue the current entry as a line item and reset line-level fields,
@@ -568,6 +574,11 @@ const statusFixAttempted = useRef<Set<string>>(new Set());
       cost_price_per_kg: '',
     }));
     setStockCodeSearch('');
+    // Each queued line keeps its own lot number; pre-fill the NEXT line with a
+    // fresh generated one so it is visible/editable just like the first.
+    void resolveLotNumber(null).then((lot) => {
+      setFormData(prev => (prev.internal_lot_number.trim() ? prev : { ...prev, internal_lot_number: lot }));
+    });
     toast.success('Line item added — enter the next material, or click Record Receiving to save all');
   };
 
@@ -1081,6 +1092,10 @@ const statusFixAttempted = useRef<Set<string>>(new Set());
     });
 
     setConfirmingEmailOrder(emailOrder);
+    // Pre-fill a generated lot number so it is visible/editable here too.
+    void resolveLotNumber(null).then((lot) => {
+      setEmailOrderFormData(prev => (prev.internal_lot_number.trim() ? prev : { ...prev, internal_lot_number: lot }));
+    });
   };
  
 const handleSelectAllQualityChecks = () => {
@@ -2649,13 +2664,13 @@ const getExportFilteredRecords = () => {
                         onChange={(e) =>
                           setFormData(prev => ({ ...prev, internal_lot_number: e.target.value }))
                         }
-                        placeholder="Leave blank to generate automatically"
+                        placeholder="Auto-generated — edit if the supplier supplied one"
                         className="font-mono"
                       />
                       <p className="text-xs text-muted-foreground">
                         {formData.internal_lot_number.trim()
-                          ? 'Using the number you entered.'
-                          : 'The system will generate a lot number when you save.'}
+                          ? 'You can edit this number before saving.'
+                          : 'Generating a lot number…'}
                       </p>
                     </div>
                     <div className="space-y-2">
@@ -3560,7 +3575,7 @@ const getExportFilteredRecords = () => {
                   internal_lot_number: e.target.value,
                 }))
               }
-              placeholder="Leave blank to generate automatically"
+              placeholder="Auto-generated — edit if needed"
               className="font-mono"
             />
           </div>
