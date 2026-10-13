@@ -47,6 +47,7 @@ const Dispatch: React.FC = () => {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [viewDialogOpen, setViewDialogOpen] = useState(false);
   const [selectedRecord, setSelectedRecord] = useState<FMSDispatch | null>(null);
+  const selectedRequirements = dispatchRecords.find((record) => record.id === selectedRecord?.id)?.requirements ?? selectedRecord?.requirements ?? [];
   const [invoiceDrafts, setInvoiceDrafts] = useState<InvoiceDraft[]>([]);
   const [creating, setCreating] = useState(false);
   const [isConfirming, setIsConfirming] = useState(false);
@@ -128,18 +129,30 @@ const Dispatch: React.FC = () => {
   };
 
   // ---- Pack scan verification ----
-  const handleRecordScan = useCallback(
-    async (requirement: Parameters<typeof recordDispatchScan>[0]) => {
-      setBusyScan(true);
-      try {
-        const result = await recordDispatchScan(requirement, user?.id || '');
-        return result.ok;
-      } finally {
-        setBusyScan(false);
+ const handleRecordScan = useCallback(
+  async (
+    requirement: Parameters<typeof recordDispatchScan>[0],
+    batchId?: string,
+  ) => {
+    setBusyScan(true);
+    try {
+      const result = await recordDispatchScan(
+        requirement,
+        user?.id || '',
+        batchId,
+      );
+
+      if (result.ok) {
+        await refreshData();
       }
-    },
-    [recordDispatchScan, user?.id],
-  );
+
+      return result.ok;
+    } finally {
+      setBusyScan(false);
+    }
+  },
+  [recordDispatchScan, user?.id, refreshData],
+);
 
   const handleUndoScan = useCallback(
     async (requirement: Parameters<typeof undoDispatchScan>[0]) => {
@@ -238,7 +251,6 @@ const Dispatch: React.FC = () => {
     toast.success('Dispatch deleted successfully');
     await refreshData();
   };
-
   const filteredRecords = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     if (!q) return dispatchRecords;
@@ -257,6 +269,7 @@ const Dispatch: React.FC = () => {
       </div>
     );
   }
+
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -480,16 +493,16 @@ const Dispatch: React.FC = () => {
                     This dispatch has no invoice lines, so there is nothing to verify.
                   </p>
                 ) : (
-                  <DispatchScanPanel
-                    requirements={selectedRecord.requirements ?? []}
-                    productionBatches={productionBatches}
-                    stockCodes={stockCodes}
-                    canConfirm={dispatchProgress(selectedRecord.requirements ?? []).complete}
-                    isConfirming={isConfirming || busyScan}
-                    onScan={handleRecordScan}
-                    onUndo={handleUndoScan}
-                    onConfirm={handleConfirmDispatch}
-                  />
+                    <DispatchScanPanel
+                      requirements={selectedRequirements}
+                      productionBatches={productionBatches}
+                      stockCodes={stockCodes}
+                      canConfirm={dispatchProgress(selectedRequirements).complete}
+                      isConfirming={isConfirming || busyScan}
+                      onScan={handleRecordScan}
+                      onUndo={handleUndoScan}
+                      onConfirm={handleConfirmDispatch}
+                    />
                 )}
               </div>
             </>

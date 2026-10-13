@@ -1399,67 +1399,70 @@ const loadSupplierOrderEmails = async () => {
    * and again by the `trg_fms_guard_requirement_scan` trigger in the database
    * (so two packers scanning simultaneously cannot over-fulfil a line).
    */
-  const recordDispatchScan = async (
-    requirement: FMSDispatchRequirement,
-    scannedBy: string,
-  ): Promise<{ ok: boolean; quantity_scanned?: number; reason?: string }> => {
-    const required = Number(requirement.quantity_required) || 0;
-    const scanned = Number(requirement.quantity_scanned) || 0;
+ 
 
-    if (scanned >= required) {
-      return {
-        ok: false,
-        reason: `All ${required} of ${requirement.stock_code} have already been scanned`,
-      };
+
+ const recordDispatchScan = async (
+  requirement: FMSDispatchRequirement,
+  scannedBy: string,
+  batchId?: string,
+ ): Promise<{ ok: boolean; quantity_scanned?: number; reason?: string}> => {
+  const { data, error } = await (supabase as any).rpc(
+    'fms_record_dispatch_scan',
+    {
+      p_requirement_id: requirement.id,
+      p_batch_id: batchId ?? null,
     }
-
-    const next = scanned + 1;
-    const { error } = await (supabase as any)
-      .from('fms_dispatch_requirements')
-      .update({
-        quantity_scanned: next,
-        scanned_by: scannedBy,
-        scanned_at: new Date().toISOString(),
-      })
-      .eq('id', requirement.id)
-      // Compare-and-set: if a concurrent scan already moved the counter, this
-      // update matches zero rows and Supabase reports no error, so we re-read
-      // below and tell the operator to scan again.
-      .eq('quantity_scanned', scanned)
-      .select();
-
-    if (error) {
-      // The trigger raises P0001 when the new value would exceed the requirement.
-      if (error.code === 'P0001') {
-        return { ok: false, reason: error.message };
-      }
-      console.error('[FMS] Record dispatch scan error:', error);
-      return { ok: false, reason: error.message || 'Could not save the scan' };
-    }
-
-    await fetchData();
-    return { ok: true, quantity_scanned: next };
+  );
+  if (error) {
+    console.error('[FMS] Record dispatch scan error:', error);
+    return {
+      ok: false,
+      reason: error.message || 'Could not save the scan',
+    };
+ };
+ if (!data?.ok) {
+  return {
+    ok: false,
+    reason: data?.reason || 'Could not save the scan,'
   };
+ };
+ await fetchData();
 
-  /** Undo a single scan (packer picked the wrong item). */
-  const undoDispatchScan = async (requirement: FMSDispatchRequirement): Promise<boolean> => {
-    const current = Number(requirement.quantity_scanned) || 0;
-    if (current <= 0) return false;
+ return {
+  ok: true,
+  quantity_scanned:data.quantity_scanned
+ };
+};
+  
 
-    const { error } = await (supabase as any)
-      .from('fms_dispatch_requirements')
-      .update({ quantity_scanned: current - 1 })
-      .eq('id', requirement.id)
-      .eq('quantity_scanned', current);
+  /* Undo a single scan (picker picked the wrong item to scan). */
+const undoDispatchScan = async (
+  requirement: FMSDispatchRequirement,
+): Promise<boolean> => {
+  const { data, error } = await (supabase as any).rpc(
+    'fms_undo_dispatch_scan',
+    {
+      p_requirement_id: requirement.id,
+    },
+  );
 
-    if (error) {
-      console.error('[FMS] Undo dispatch scan error:', error);
-      return false;
-    }
+  if (error) {
+    console.error('[FMS] Undo dispatch scan error:', error);
+    toast.error(error.message || 'Could not undo the scan');
+    return false;
+  }
 
-    await fetchData();
-    return true;
-  };
+  if (!data?.ok) {
+    toast.error(data?.reason || 'Could not undo the scan');
+    return false;
+  }
+
+  await fetchData();
+  toast.info('One scan removed');
+  return true;
+};
+
 
   /**
    * Explicitly confirm a dispatch. This is the ONLY operation that moves a

@@ -67,7 +67,7 @@ const StockCodes: React.FC = () => {
   const { stockCodes, suppliers, loading, addStockCode, updateStockCode, refreshData, getSupplierById, stockLevels } = useFMSData();
   const { canDelete } = useDeletePermission();
   const { logActivity } = useActivityLog();
-  const { pricesForSupplier, prices: allPrices } = useSupplierPrices();
+  const { pricesForSupplier, prices: allPrices, avgPriceForStockCode } = useSupplierPrices();
   const [searchQuery, setSearchQuery] = useState('');
   const [filterType, setFilterType] = useState<ItemType | 'all'>('all');
   const [filterStatus, setFilterStatus] = useState<StockStatus | 'all'>('all');
@@ -251,6 +251,14 @@ const StockCodes: React.FC = () => {
     return matchesSearch && matchesType && matchesStatus;
   });
 
+  /** Approved supplier names for a stock code, comma-separated (matches the pricing dialog). */
+  const supplierNamesFor = (sc: typeof stockCodes[0]): string => {
+    const names = (sc.approved_supplier_ids || [])
+      .map(id => getSupplierById(id)?.name)
+      .filter((name): name is string => !!name);
+    return names.length > 0 ? names.join(', ') : 'None';
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -286,6 +294,8 @@ const StockCodes: React.FC = () => {
                   UOM: sc.unit_of_measure,
                   Storage: sc.storage_condition,
                   Allergens: sc.has_allergens ? (sc.allergen_types || []).join(', ') : 'None',
+                  Suppliers: supplierNamesFor(sc),
+                  'Avg Price / kg': formatZAR(avgPriceForStockCode(sc.id)),
                   Status: sc.status,
                 }));
                 exportToExcel(rows, 'stock_codes');
@@ -296,6 +306,8 @@ const StockCodes: React.FC = () => {
                   Description: sc.description,
                   Type: sc.item_type.replace('_', ' '),
                   UOM: sc.unit_of_measure,
+                  Suppliers: supplierNamesFor(sc),
+                  'Avg Price / kg': formatZAR(avgPriceForStockCode(sc.id)),
                   Status: sc.status,
                 }));
                 exportToPDF(rows, 'stock_codes');

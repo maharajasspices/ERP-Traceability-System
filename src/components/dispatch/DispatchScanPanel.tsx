@@ -30,7 +30,12 @@ interface DispatchScanPanelProps {
   /** Scanning never dispatches: the lady confirms explicitly. */
   canConfirm: boolean;
   isConfirming: boolean;
-  onScan: (requirement: FMSDispatchRequirement) => Promise<boolean>;
+
+  onScan: (
+  requirement: FMSDispatchRequirement,
+  batchId?: string,
+) => Promise<boolean>;
+
   onUndo: (requirement: FMSDispatchRequirement) => Promise<boolean>;
   onConfirm: () => void;
 }
@@ -114,12 +119,17 @@ export const DispatchScanPanel = ({
       let stockCodeId: string | null = null;
       let label = '';
 
+      let batchId: string | undefined;
+
       if (resolved.kind === 'batch' && resolved.batchNumber) {
         const batch = batchByNumber.get(resolved.batchNumber);
-        if (!batch) {
-          reject(`Batch ${resolved.batchNumber} is not available for dispatch`);
-          return;
-        }
+          if (!batch) {
+            reject(`Batch ${resolved.batchNumber} is not available for dispatch`);
+            return;
+          }
+
+          batchId = batch.id;
+
         if (batch.status !== 'closed') {
           reject(`Batch ${resolved.batchNumber} is not closed yet`);
           return;
@@ -160,7 +170,7 @@ export const DispatchScanPanel = ({
         return;
       }
 
-      const ok = await onScan(target);
+      const ok = await onScan(target, batchId);
       if (ok) {
         const message = `${target.stock_code} verified (${target.quantity_scanned + 1}/${target.quantity_required})`;
         pushEvent(true, message);
@@ -251,7 +261,6 @@ export const DispatchScanPanel = ({
             style={{ width: `${pct}%` }}
           />
         </div>
-
         <div className="mt-3 grid grid-cols-3 gap-2 text-center">
           <div className="rounded border border-border bg-card py-2">
             <div className="text-xs text-muted-foreground">Required</div>
@@ -351,14 +360,25 @@ export const DispatchScanPanel = ({
                 <span className="text-muted-foreground">Scan <b className="text-green-600">{row.quantity_scanned}</b></span>
                 <span className="text-muted-foreground">Left <b className={row.remaining > 0 ? 'text-amber-600' : 'text-muted-foreground'}>{row.remaining}</b></span>
               </div>
-              {!row.is_complete && row.lines.some((l) => l.quantity_scanned > 0) && (
+              {row.lines.some((l) => l.quantity_scanned > 0)&& (
                 <Button
                   type="button"
                   variant="ghost"
                   size="icon"
                   className="h-7 w-7"
                   title="Undo one scan"
-                  onClick={() => onUndo(row.lines.find((l) => l.quantity_scanned > 0)!)}
+                  onClick={() => {
+                    const scannedLine =[...row.lines]
+                        .filter((l) => l.quantity_scanned > 0)
+                        .sort(
+                          (a, b) =>
+                            new Date(b.scanned_at ?? 0).getTime() -
+                            new Date(a.scanned_at ?? 0).getTime(),
+                        )[0]
+                    if (scannedLine) {
+                      void onUndo(scannedLine);
+                    }
+                  }}
                 >
                   <Undo2 className="h-3.5 w-3.5" />
                 </Button>
@@ -401,6 +421,11 @@ export const DispatchScanPanel = ({
           {progress.complete
             ? 'Confirming marks this delivery as dispatched.'
             : 'Scanning alone never dispatches. Everything on the invoice must be scanned first.'}
+        </p>
+        <p className='mt-1.5 text-center text-xs text-muted-foreground'>
+          {progress.complete
+          ? 'Confirming marks this delivery as dispatched.'
+        : 'Scanning alone never dispaches. Everyhting on the invoice must be scanned first.'}
         </p>
       </div>
     </div>
