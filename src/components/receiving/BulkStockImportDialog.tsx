@@ -39,6 +39,9 @@ export type ImportedReceivingLine = {
   production_date: string;
   expiry_date: string;
   cost_price_per_kg: string;
+  /** Auto-resolved supplier for this line (imports only); falls back to the delivery supplier. */
+  supplier_id?: string;
+  supplier_name?: string;
 };
 
 interface BulkStockImportDialogProps {
@@ -140,7 +143,7 @@ export const BulkStockImportDialog = ({
 
     onImported(
       result.lines.map((l: StockImportLine) => ({
-        internal_lot_number: '',
+        internal_lot_number: l.internal_lot_number,
         stock_code_id: l.stock_code_id,
         stock_code: l.stock_code,
         material_description: l.material_description,
@@ -243,6 +246,7 @@ export const BulkStockImportDialog = ({
                         <th>Row</th>
                         <th>Stock Code</th>
                         <th>Description</th>
+                        <th>Lot</th>
                         <th className="text-right">Qty</th>
                         <th>UOM</th>
                         <th>Batch</th>
@@ -255,6 +259,13 @@ export const BulkStockImportDialog = ({
                           <td className="text-xs text-muted-foreground">{line.rowNumber}</td>
                           <td className="font-mono text-xs">{line.stock_code}</td>
                           <td className="text-xs">{line.material_description}</td>
+                          <td className="text-xs">
+                            {line.internal_lot_number ? (
+                              <span className="font-medium">{line.internal_lot_number}</span>
+                            ) : (
+                              <span className="text-amber-600">auto</span>
+                            )}
+                          </td>
                           <td className="text-right font-medium">{line.quantity_received}</td>
                           <td className="text-xs text-muted-foreground">{line.uom}</td>
                           <td className="text-xs text-muted-foreground">

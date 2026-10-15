@@ -25,6 +25,8 @@ export interface StockImportLine {
   material_description: string;
   quantity_received: string;
   uom: string;
+  /** Internal lot number typed in the sheet; blank means the log generates one. */
+  internal_lot_number: string;
   supplier_batch_number: string;
   production_date: string;
   expiry_date: string;
@@ -311,6 +313,7 @@ export const parseStockSheet = (
       material_description: product.description,
       quantity_received: String(qty),
       uom: raw.uom || product.unit_of_measure,
+      internal_lot_number: lot,
       supplier_batch_number: batch,
       production_date: production,
       expiry_date: expiry,
@@ -359,6 +362,7 @@ export const importStockFile = async (
 
 /** The columns a template sheet uses, in order. */
 export const TEMPLATE_HEADERS = [
+  'Lot',
   'Stock Code',
   'Description',
   'Quantity',
@@ -373,11 +377,12 @@ export const TEMPLATE_HEADERS = [
 export const buildStockTemplate = (stockCodes: StockCodeLike[]): Blob => {
   const example = stockCodes.slice(0, 5);
   const body = example.length
-    ? example.map((sc) => [sc.stock_code, sc.description, '', sc.unit_of_measure, '', '', '', ''])
-    : [['', '', '', 'kg', '', '', '', '']];
+    ? example.map((sc) => ['', sc.stock_code, sc.description, '', sc.unit_of_measure, '', '', '', ''])
+    : [['', '', '', '', 'kg', '', '', '', '']];
 
   const sheet = XLSX.utils.aoa_to_sheet([TEMPLATE_HEADERS, ...body]);
   sheet['!cols'] = [
+    { wch: 16 },
     { wch: 16 },
     { wch: 34 },
     { wch: 12 },

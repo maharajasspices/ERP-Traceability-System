@@ -451,6 +451,9 @@ const statusFixAttempted = useRef<Set<string>>(new Set());
     production_date: string;
     expiry_date: string;
     cost_price_per_kg: string;
+    /** Imported lines carry a per-line supplier; manual lines fall back to the delivery supplier. */
+    supplier_id?: string;
+    supplier_name?: string;
   }[]>([]);
 
   // Optional invoice attachment for additional information
@@ -549,6 +552,10 @@ const statusFixAttempted = useRef<Set<string>>(new Set());
       toast.error('Fill in Stock Code, Supplier and Quantity before adding the line item');
       return;
     }
+    if (!(formData.supplier_batch_number ?? '').trim()) {
+      toast.error('Fill in the Supplier Batch Number before adding the line item');
+      return;
+    }
     setReceivingLines(prev => [...prev, {
       internal_lot_number: formData.internal_lot_number,
       stock_code_id: formData.stock_code_id,
@@ -595,7 +602,37 @@ const statusFixAttempted = useRef<Set<string>>(new Set());
    * is saved, exactly like a hand-typed one.
    */
   const handleBulkImported = (lines: ImportedReceivingLine[]) => {
-    setReceivingLines(lines);
+    // Auto-resolve supplier and price for every imported line, mirroring the
+    // manual entry: supplier from the last receipt / last price for the
+    // material, price from that supplier's recorded price (falling back to the
+    // average across suppliers). A price typed in the sheet always wins.
+    const enriched = lines.map((line) => {
+      const supplier = resolveSupplierForStockCode(line.stock_code_id);
+      const costFromSheet = (line.cost_price_per_kg ?? '').trim();
+      return {
+        ...line,
+        supplier_id: supplier?.id,
+        supplier_name: supplier?.name,
+        cost_price_per_kg: costFromSheet || resolvePriceForStockCode(line.stock_code_id, supplier?.id),
+      };
+    });
+    setReceivingLines(enriched);
+    // If the delivery has no supplier yet, seed it from the first resolved line
+    // so the delivery-level fields are consistent for the single-supplier case.
+    if (!formData.supplier_id) {
+      const firstSupplier = enriched.find(l => l.supplier_id);
+      if (firstSupplier) {
+        setFormData(prev => ({
+          ...prev,
+          supplier_id: firstSupplier.supplier_id,
+          supplier_name: firstSupplier.supplier_name,
+        }));
+      }
+    }
+    // Bring the receiving dialog forward so the imported lines are visible for
+    // review and saving, whether import was launched from the page toolbar or
+    // from inside the dialog itself (where it is already open).
+    setDialogOpen(true);
     // Clear the single-entry form so the imported list is not double counted.
     setFormData(prev => ({
       ...prev,
@@ -624,11 +661,12 @@ const statusFixAttempted = useRef<Set<string>>(new Set());
     autoFillSupplierForStockCode(item.id);
   };
 
-  // Auto-pull the supplier for a stock code:
-  // 1. Supplier from the most recent receiving record for that material
-  // 2. Fallback: supplier from the most recent price entry for that material
-  const autoFillSupplierForStockCode = (stockCodeId: string) => {
-    if (!stockCodeId) return;
+  // Resolve the best supplier for a stock code WITHOUT touching form state,
+  // so both the manual entry and the spreadsheet import use identical logic:
+  //   1. Supplier from the most recent receiving record for that material
+  //   2. Fallback: supplier from the most recent price entry for that material
+  const resolveSupplierForStockCode = (stockCodeId: string): { id: string; name: string } | null => {
+    if (!stockCodeId) return null;
     let autoSupplierId = '';
     const lastReceipt = receivingRecords
       .filter(r => r.stock_code_id === stockCodeId && r.supplier_id)
@@ -647,18 +685,35 @@ const statusFixAttempted = useRef<Set<string>>(new Set());
         autoSupplierId = mostRecent.supplier_id;
       }
     }
-    if (autoSupplierId) {
-      const supplier = suppliers.find(s => s.id === autoSupplierId);
-      if (supplier) {
-        setFormData(prev => ({
-          ...prev,
-          supplier_id: supplier.id,
-          supplier_name: supplier.name,
-        }));
-        setSupplierSearch(supplier.name);
-        setShowSupplierDropdown(false);
-      }
-    }
+    if (!autoSupplierId) return null;
+    const supplier = suppliers.find(s => s.id === autoSupplierId);
+    return supplier ? { id: supplier.id, name: supplier.name } : null;
+  };
+
+  // Auto-pull the supplier for a stock code (manual entry path).
+  const autoFillSupplierForStockCode = (stockCodeId: string) => {
+    const supplier = resolveSupplierForStockCode(stockCodeId);
+    if (!supplier) return;
+    setFormData(prev => ({
+      ...prev,
+      supplier_id: supplier.id,
+      supplier_name: supplier.name,
+    }));
+    setSupplierSearch(supplier.name);
+    setShowSupplierDropdown(false);
+  };
+
+  // Resolve the cost price for a stock code from a specific supplier, falling
+  // back to the average across all suppliers that price it. Returns '' when
+  // nothing is recorded so the field is left for the operator.
+  const resolvePriceForStockCode = (stockCodeId: string, supplierId?: string): string => {
+    if (!stockCodeId) return '';
+    const list = supplierPrices.filter(p => p.stock_code_id === stockCodeId && p.cost_price_per_kg > 0);
+    if (!list.length) return '';
+    const exact = supplierId ? list.find(p => p.supplier_id === supplierId) : undefined;
+    if (exact) return String(exact.cost_price_per_kg);
+    const avg = list.reduce((s, p) => s + Number(p.cost_price_per_kg), 0) / list.length;
+    return String(avg);
   };
 
   // Keep receiver name in sync if auth loads after the form state initialised
@@ -744,14 +799,12 @@ const statusFixAttempted = useRef<Set<string>>(new Set());
       production_date: formData.production_date,
       expiry_date: formData.expiry_date,
       cost_price_per_kg: formData.cost_price_per_kg,
+      supplier_id: formData.supplier_id,
+      supplier_name: formData.supplier_name,
     }] : [];
     // Reassigned below once each line's optional lot number is resolved.
     let lines = [...receivingLines, ...currentLine];
 
-    if (!formData.supplier_id) {
-      toast.error('Please select a Supplier');
-      return;
-    }
     if (lines.length === 0) {
       toast.error('Please fill in Stock Code, Supplier, and Quantity');
       return;
@@ -759,6 +812,20 @@ const statusFixAttempted = useRef<Set<string>>(new Set());
     for (const line of lines) {
       if (!line.stock_code_id || !(parseFloat(line.quantity_received) > 0)) {
         toast.error('Each line item needs a Stock Code and a Quantity greater than 0');
+        return;
+      }
+      // A supplier is required, but it may come from the line itself (imports)
+      // or the shared delivery field (manual entry).
+      if (!line.supplier_id && !formData.supplier_id) {
+        toast.error('Please select a Supplier');
+        return;
+      }
+      // The supplier batch number is required for traceability — it is what ties
+      // the received material back to the supplier's own batch records.
+      if (!(line.supplier_batch_number ?? '').trim()) {
+        toast.error(
+          `Each line needs a Supplier Batch Number (lot ${line.internal_lot_number || 'this line'})`,
+        );
         return;
       }
       // Expiry date is optional - only validate it if provided
@@ -859,13 +926,17 @@ const statusFixAttempted = useRef<Set<string>>(new Set());
       const costNum = line.cost_price_per_kg ? parseFloat(line.cost_price_per_kg) : null;
       // Production date defaults to the date of receiving
       const productionDate = line.production_date || formData.date_received;
+      // Imported lines can carry their own supplier; manual lines use the
+      // delivery-level supplier. This lets one delivery mix materials from
+      // different suppliers without losing per-line traceability.
+      const lineSupplierId = line.supplier_id || formData.supplier_id;
 
       const result = await addReceivingRecord({
         internal_lot_number: line.internal_lot_number,
         received_at: new Date(formData.date_received).toISOString(),
         stock_code_id: line.stock_code_id,
         quantity_received: parseFloat(line.quantity_received),
-        supplier_id: formData.supplier_id,
+        supplier_id: lineSupplierId,
         supplier_batch_number: line.supplier_batch_number,
         manufacturing_date: productionDate,
         expiry_date: line.expiry_date || null,
@@ -894,9 +965,9 @@ const statusFixAttempted = useRef<Set<string>>(new Set());
       }
 
       // Sync cost price back to supplier_material_prices so rest of system stays in sync
-      if (costNum != null && !isNaN(costNum) && costNum >= 0) {
+      if (costNum != null && !isNaN(costNum) && costNum >= 0 && lineSupplierId) {
         const existing = supplierPrices.find(
-          p => p.stock_code_id === line.stock_code_id && p.supplier_id === formData.supplier_id
+          p => p.stock_code_id === line.stock_code_id && p.supplier_id === lineSupplierId
         );
         if (existing) {
           if (Number(existing.cost_price_per_kg) !== costNum) {
@@ -907,7 +978,7 @@ const statusFixAttempted = useRef<Set<string>>(new Set());
         } else {
           await (supabase.from('fms_supplier_material_prices' as any) as any)
             .insert({
-              supplier_id: formData.supplier_id,
+              supplier_id: lineSupplierId,
               stock_code_id: line.stock_code_id,
               cost_price_per_kg: costNum,
               currency: 'ZAR',
@@ -928,7 +999,7 @@ const statusFixAttempted = useRef<Set<string>>(new Set());
         details: {
           lot_number: line.internal_lot_number,
           stock_code: line.stock_code,
-          supplier: formData.supplier_name,
+          supplier: line.supplier_name || formData.supplier_name,
           quantity: `${line.quantity_received} ${line.uom}`,
           supplier_batch: line.supplier_batch_number,
           status: hasFailed ? 'declined' : 'accepted',
@@ -1412,6 +1483,12 @@ const handleSelectAllQualityChecks = () => {
     // Validate required fields (same as receiving log)
     if (!emailOrderFormData.stock_code_id || !emailOrderFormData.supplier_id || !emailOrderFormData.quantity_received) {
       toast.error('Please fill in Stock Code, Supplier, and Quantity');
+      return;
+    }
+
+    // Supplier batch number is required for traceability
+    if (!(emailOrderFormData.supplier_batch_number ?? '').trim()) {
+      toast.error('Please fill in the Supplier Batch Number');
       return;
     }
 
@@ -2496,6 +2573,17 @@ const getExportFilteredRecords = () => {
 </Dialog>
 
 
+<Button
+  variant="outline"
+  size="sm"
+  className="gap-2"
+  onClick={() => setBulkImportOpen(true)}
+  title="Import a whole delivery from an Excel / CSV / Google Sheets file"
+>
+  <FileSpreadsheet className="h-4 w-4" />
+  <span className="hidden sm:inline">Import</span>
+</Button>
+
 <Dialog>
             <DialogTrigger asChild>
               <Button variant="outline" size="sm" className="gap-2">
@@ -2741,8 +2829,14 @@ const getExportFilteredRecords = () => {
                       )}
                     </div>
                     <div className="space-y-2">
-                      <Label>Batch Number</Label>
-                      <Input value={formData.supplier_batch_number} onChange={(e) => setFormData(prev => ({ ...prev, supplier_batch_number: e.target.value }))} />
+                      <Label>Batch Number *</Label>
+                      <Input
+                        value={formData.supplier_batch_number}
+                        onChange={(e) => setFormData(prev => ({ ...prev, supplier_batch_number: e.target.value }))}
+                        placeholder="Supplier's batch / lot number"
+                        required
+                      />
+                      <p className="text-xs text-muted-foreground">Required — ties this lot back to the supplier's batch.</p>
                     </div>
                     <div className="space-y-2">
                       <Label>Cost Price / kg (ZAR)</Label>
@@ -3614,7 +3708,7 @@ const getExportFilteredRecords = () => {
         {/* Additional Fields */}
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <div className="space-y-1">
-            <Label className="text-xs">Supplier Batch Number</Label>
+            <Label className="text-xs">Supplier Batch Number *</Label>
             <Input
               value={emailOrderFormData.supplier_batch_number}
               onChange={(e) =>
@@ -3624,6 +3718,7 @@ const getExportFilteredRecords = () => {
                 }))
               }
               placeholder="Batch number"
+              required
             />
           </div>
 
