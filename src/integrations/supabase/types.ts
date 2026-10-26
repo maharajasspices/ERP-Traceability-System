@@ -574,6 +574,51 @@ export type Database = {
           },
         ]
       }
+      fms_dispatch_scan_history: {
+        Row: {
+          batch_id: string | null
+          dispatch_id: string
+          id: string
+          requirement_id: string
+          scanned_at: string
+          scanned_by: string | null
+          undone_at: string | null
+        }
+        Insert: {
+          batch_id?: string | null
+          dispatch_id: string
+          id?: string
+          requirement_id: string
+          scanned_at?: string
+          scanned_by?: string | null
+          undone_at?: string | null
+        }
+        Update: {
+          batch_id?: string | null
+          dispatch_id?: string
+          id?: string
+          requirement_id?: string
+          scanned_at?: string
+          scanned_by?: string | null
+          undone_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fms_dispatch_scan_history_dispatch_id_fkey"
+            columns: ["dispatch_id"]
+            isOneToOne: false
+            referencedRelation: "fms_dispatch"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "fms_dispatch_scan_history_requirement_id_fkey"
+            columns: ["requirement_id"]
+            isOneToOne: false
+            referencedRelation: "fms_dispatch_requirements"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       fms_hr_attendance: {
         Row: {
           attendance_date: string
@@ -1390,6 +1435,7 @@ export type Database = {
           created_at: string | null
           final_quality_checks: Json | null
           finished_good_id: string
+          finished_good_stock_credited: boolean
           id: string
           info_checker_name: string | null
           operator_id: string
@@ -1423,6 +1469,7 @@ export type Database = {
           created_at?: string | null
           final_quality_checks?: Json | null
           finished_good_id: string
+          finished_good_stock_credited?: boolean | null
           id?: string
           info_checker_name?: string | null
           operator_id: string
@@ -1456,6 +1503,7 @@ export type Database = {
           created_at?: string | null
           final_quality_checks?: Json | null
           finished_good_id?: string
+          finished_good_stock_credited?: boolean | null
           id?: string
           info_checker_name?: string | null
           operator_id?: string
@@ -3510,6 +3558,12 @@ export type Database = {
         }
         Returns: number
       }
+      fms_credit_finished_good_production: {
+        Args: {
+          p_batch_id: string;
+        };
+        Returns: number;
+      },
       fms_consume_batch_reservations: {
         Args: {
           p_batch_id: string
@@ -3549,6 +3603,13 @@ export type Database = {
       fms_is_delete_admin: { Args: { _user_id: string }; Returns: boolean }
       fms_is_qa_viewer: { Args: { _user_id: string }; Returns: boolean }
       fms_pickle_run_number: { Args: never; Returns: string }
+      fms_record_dispatch_scan: {
+        Args: {
+          p_requirement_id: string
+          p_batch_id?: string
+        }
+        Returns: Json
+      }
       fms_release_batch_reservations: {
         Args: {
           p_batch_id: string
@@ -3573,6 +3634,12 @@ export type Database = {
           quantity_reserved: number
           stock_code_id: string
         }[]
+      }
+      fms_undo_dispatch_scan: {
+        Args: {
+          p_requirement_id: string
+        }
+        Returns: Json
       }
       get_value_feedback_anonymous: {
         Args: { p_scorecard_id: string }

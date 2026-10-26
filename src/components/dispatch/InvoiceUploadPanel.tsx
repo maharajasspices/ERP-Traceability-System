@@ -6,6 +6,7 @@ import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
 import { FileText, Loader2, Upload, X, Plus, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { parseInvoiceFile } from '@/lib/invoiceParser';
+import type { FMSStockCode } from '@/hooks/useFMSData';
 
 /** A product line read off an uploaded invoice, before it becomes a requirement. */
 export interface InvoiceLine {
@@ -31,20 +32,15 @@ export interface InvoiceDraft {
   parsed: boolean;
 }
 
+
 interface InvoiceUploadPanelProps {
-  stockCodes: Array<{
-    id: string;
-    stock_code: string;
-    description: string;
-    unit_of_measure: string;
-  }>;
+  stockCodes: FMSStockCode[];
   invoices: InvoiceDraft[];
   onChange: (invoices: InvoiceDraft[]) => void;
 }
 
 let draftCounter = 0;
 const nextDraftId = () => `inv-${++draftCounter}`;
-
 const emptyDraft = (): InvoiceDraft => ({
   id: nextDraftId(),
   invoice_number: '',
@@ -77,6 +73,14 @@ export const InvoiceUploadPanel = ({
   };
 
   const addInvoice = () => onChange([...invoices, emptyDraft()]);
+
+  const addMultipleInvoices = (count: number) => {
+    const newInvoices = [...invoices];
+    for (let i = 0; i < count; i++) {
+      newInvoices.push(empty)
+    }
+    onChange(newInvoices);
+  };
 
   const removeInvoice = (id: string) => onChange(invoices.filter((inv) => inv.id !== id));
 
@@ -192,21 +196,20 @@ export const InvoiceUploadPanel = ({
     update(draft.id, { lines: draft.lines.filter((l) => l.key !== key) });
   };
 
+  // Finished goods only (active stock codes); matches how BOM/pickle selectors
+  // pick finished goods (item_type === 'finished_good', status === 'active').
   const finishedGoods = stockCodes.filter(
-    (s) => s.unit_of_measure === 'units' || s.unit_of_measure === 'each',
+    (s) => s.item_type === 'finished_good' && s.status === 'active',
   );
   const productOptions = finishedGoods.length > 0 ? finishedGoods : stockCodes;
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <Label className="text-base font-semibold">Customer invoices in this delivery</Label>
-        <Button type="button" variant="outline" size="sm" onClick={addInvoice}>
-          <Plus className="mr-1 h-4 w-4" />
-          Add invoice
-        </Button>
+      <div className='flex items-center justify-between'>
+        <Label className='text-base font-semibold'>
+          Customer invoices in this delivery
+        </Label>
       </div>
-
       {invoices.length === 0 && (
         <div className="rounded-lg border border-dashed border-border p-6 text-center">
           <FileText className="mx-auto mb-2 h-8 w-8 text-muted-foreground/50" />

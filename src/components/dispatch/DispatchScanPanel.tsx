@@ -32,9 +32,9 @@ interface DispatchScanPanelProps {
   isConfirming: boolean;
 
   onScan: (
-  requirement: FMSDispatchRequirement,
-  batchId?: string,
-) => Promise<boolean>;
+    requirement: FMSDispatchRequirment,
+    batchId?: string,
+  ) => Promise<boolean | { ok: boolean; reason?: string}>;
 
   onUndo: (requirement: FMSDispatchRequirement) => Promise<boolean>;
   onConfirm: () => void;
@@ -99,6 +99,7 @@ export const DispatchScanPanel = ({
 
   /** Accept a scan only if it maps to an outstanding invoice line. */
   const handleScan = async (raw: string) => {
+    if (busy) return;
     setBusy(true);
     try {
       const resolved = resolveDispatchScan(raw, {
@@ -170,14 +171,23 @@ export const DispatchScanPanel = ({
         return;
       }
 
-      const ok = await onScan(target, batchId);
-      if (ok) {
-        const message = `${target.stock_code} verified (${target.quantity_scanned + 1}/${target.quantity_required})`;
-        pushEvent(true, message);
-        toast.success(message);
-      } else {
-        reject('Scan could not be saved — not added');
-      }
+
+      const result = await onScan(target, batchId);
+const ok = typeof result === 'boolean' ? result : result.ok;
+
+if (ok) {
+  const message = `${target.stock_code} verified (${target.quantity_scanned + 1}/${target.quantity_required})`;
+  pushEvent(true, message);
+  toast.success(message);
+} else {
+  const reason =
+    typeof result === 'boolean'
+      ? 'Scan could not be saved — not added'
+      : result.reason || 'Scan could not be saved — not added';
+
+  reject(reason);
+}
+
     } finally {
       setBusy(false);
     }
@@ -328,6 +338,9 @@ export const DispatchScanPanel = ({
           The TOVI keyboard-wedge scanner types straight into this box. A Batch Sheet QR
           identifies the exact production batch; a product barcode is matched exactly.
         </p>
+        <p className="text-xs">
+          The TOVI keyboard-wedge scanner tyoes staright
+        </p>
       </div>
 
       {/* Picking list: Required / Scanned / Remaining per product */}
@@ -417,15 +430,10 @@ export const DispatchScanPanel = ({
           )}
           {progress.complete ? 'Confirm dispatch' : `Confirm dispatch (${progress.remaining} still to scan)`}
         </Button>
-        <p className="mt-1.5 text-center text-xs text-muted-foreground">
+               <p className="mt-1.5 text-center text-xs text-muted-foreground">
           {progress.complete
             ? 'Confirming marks this delivery as dispatched.'
             : 'Scanning alone never dispatches. Everything on the invoice must be scanned first.'}
-        </p>
-        <p className='mt-1.5 text-center text-xs text-muted-foreground'>
-          {progress.complete
-          ? 'Confirming marks this delivery as dispatched.'
-        : 'Scanning alone never dispaches. Everyhting on the invoice must be scanned first.'}
         </p>
       </div>
     </div>

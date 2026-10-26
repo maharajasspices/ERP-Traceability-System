@@ -315,12 +315,14 @@ const Traceability: React.FC = () => {
     setSearchResults(null);
   };
 
-  const handleSearch = () => {
-    const parsed = extractBestScanIdentifier(searchQuery);
-    if (!parsed) { toast.error('Please enter a search query'); return; }
-    if (searchType === 'backward') handleBackwardTrace(parsed);
-    else handleForwardTrace(parsed);
-  };
+   const handleSearch = () => {
+     const parsed = extractBestScanIdentifier(searchQuery);
+     if (!parsed) { toast.error('Please enter a search query'); return; }
+     if (searchType === 'backward') handleBackwardTrace(parsed);
+     else handleForwardTrace(parsed);
+   };
+
+  
 
   const handleQRScan = (result: string) => {
     const parsed = extractBestScanIdentifier(result);

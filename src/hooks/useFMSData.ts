@@ -179,6 +179,7 @@ export interface FMSProductionBatch {
   sticker_copies?: number | null;
   created_at: string;
   closed_at?: string;
+  finished_good_stock_credited: boolean;
 }
 
 export type FMSDispatchStatus = 'draft' | 'picking' | 'ready' | 'dispatched';
@@ -1349,20 +1350,20 @@ const loadSupplierOrderEmails = async () => {
 
     const dispatchId = dispatchData.id;
 
-    const { error: invoiceError } = await (supabase as any)
-      .from('fms_dispatch_invoices')
-      .insert(
-        invoiceNumbers.map((number) => ({
-          dispatch_id: dispatchId,
-          invoice_number: number,
-          customer_name: customerName || null,
-          file_path: filePath,
-          file_name: file?.name || null,
-        })),
-      );
-    if (invoiceError) {
-      console.error('[FMS] Attach dispatch invoices error:', invoiceError);
-    }
+     const { error: invoiceError } = await (supabase as any)
+       .from('fms_dispatch_invoices')
+       .insert(
+         invoiceNumbers.map((number) => ({
+           dispatch_id: dispatchId,
+           invoice_number: number,
+           customer_name: customerName || null,
+           file_path: filePath,
+           file_name: file?.name || null,
+         })),
+       );
+     if (invoiceError) {
+       console.error('[FMS] Attach dispatch invoices error:', invoiceError);
+      }
 
     const { error: reqError } = await (supabase as any)
       .from('fms_dispatch_requirements')
@@ -1471,16 +1472,17 @@ const undoDispatchScan = async (
    * The shipped quantity written onto each batch pick is the quantity actually
    * scanned, so Traceability reflects what physically left the building.
    */
-  const confirmDispatch = async (dispatchId: string, confirmedBy: string): Promise<boolean> => {
-    const { data: reqs, error: reqError } = await (supabase as any)
-      .from('fms_dispatch_requirements')
-      .select('*')
-      .eq('dispatch_id', dispatchId);
 
-    if (reqError) {
-      console.error('[FMS] Load dispatch requirements error:', reqError);
-      return false;
-    }
+   const confirmDispatch = async (dispatchId: string, confirmedBy: string): Promise<boolean> => {
+     const { data: reqs, error: reqError } = await (supabase as any)
+       .from('fms_dispatch_requirements')
+       .select('*')
+       .eq('dispatch_id', dispatchId);
+
+     if (reqError) {
+       console.error('[FMS] Load dispatch requirements error:', reqError);
+       return false;
+     }
 
     const outstanding = (reqs || []).filter(
       (r: any) => (r.quantity_scanned ?? 0) < (r.quantity_required ?? 0),
@@ -1524,6 +1526,7 @@ const undoDispatchScan = async (
     await fetchData();
     return true;
   };
+
 
     // Helper functions
   const getStockCodeById = (id: string) => stockCodes.find(sc => sc.id === id);

@@ -89,22 +89,25 @@ const StockCodes: React.FC = () => {
     low_stock_threshold: '0',
   });
 
-  const resetForm = () => {
-    setFormData({
-      stock_code: '',
-      description: '',
-      item_type: 'raw_material',
-      unit_of_measure: 'kg',
-      storage_condition: 'ambient',
-      has_allergens: false,
-      allergen_types: [],
-      approved_supplier_ids: [],
-      bom_uses_percentage: false,
-      status: 'active',
-      low_stock_threshold: '0',
-    });
-    setEditingItem(null);
-  };
+   const resetForm = () => {
+     setFormData({
+       stock_code: '',
+       description: '',
+       item_type: 'raw_material',
+       unit_of_measure: 'kg',
+       storage_condition: 'ambient',
+       has_allergens: false,
+       allergen_types: [],
+       approved_supplier_ids: [],
+       bom_uses_percentage: false,
+       status: 'active',
+       low_stock_threshold: '0',
+     });
+     setEditingItem(null);
+   };
+
+
+
 
   const handleOpenDialog = (item?: typeof stockCodes[0]) => {
     if (item) {
@@ -242,14 +245,14 @@ const StockCodes: React.FC = () => {
         : [...prev.approved_supplier_ids, supplierId],
     }));
   };
-
-  const filteredStockCodes = stockCodes.filter(sc => {
+   const filteredStockCodes = stockCodes.filter(sc => {
     const matchesSearch = sc.stock_code.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      sc.description.toLowerCase().includes(searchQuery.toLowerCase());
-    const matchesType = filterType === 'all' || sc.item_type === filterType;
-    const matchesStatus = filterStatus === 'all' || sc.status === filterStatus;
-    return matchesSearch && matchesType && matchesStatus;
-  });
+     sc.description.toLowerCase().includes(searchQuery.toLowerCase());
+     const matchesType = filterType === 'all' || sc.item_type === filterType;
+     const matchesStatus = filterStatus === 'all' || sc.status === filterStatus;
+     return matchesSearch && matchesType && matchesStatus;
+   })
+
 
   /** Approved supplier names for a stock code, comma-separated (matches the pricing dialog). */
   const supplierNamesFor = (sc: typeof stockCodes[0]): string => {
@@ -259,15 +262,16 @@ const StockCodes: React.FC = () => {
     return names.length > 0 ? names.join(', ') : 'None';
   };
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <Loader2 className="h-8 w-8 animate-spin text-primary" />
-        <span className="ml-2">Loading stock codes...</span>
-      </div>
-    );
-  }
+   if (loading) {
+     return (
+       <div className="flex items-center justify-center h-64">
+         <Loader2 className="h-8 w-8 animate-spin text-primary" />
+         <span className="ml-2">Loading stock codes...</span>
+       </div>
+     );
+   }
 
+   
   return (
     <div className="space-y-6 animate-fade-in">
       {/* Header */}

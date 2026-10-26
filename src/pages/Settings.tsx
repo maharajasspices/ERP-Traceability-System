@@ -81,17 +81,17 @@ const Settings: React.FC = () => {
     if (data) setFmsUsers(data);
   };
 
-  const fetchInvitations = async () => {
-    const { data, error } = await (supabase as any)
-      .from('fms_user_invitations')
-      .select('*')
-      .order('created_at', { ascending: false });
-    if (error) {
-      console.error('[Settings] Failed to fetch invitations:', error.message);
-      return;
-    }
-    if (data) setInvitations(data);
-  };
+   const fetchInvitations = async () => {
+     const { data, error } = await (supabase as any)
+       .from('fms_user_invitations')
+       .select('*')
+       .order('created_at', { ascending: false });
+     if (error) {
+       console.error('[Settings] Failed to fetch invitations:', error.message);
+       return;
+     }
+     if (data) setInvitations(data);
+   };
 
   const saveSettings = async () => {
     if (!canEdit) { toast.error('Insufficient permissions'); return; }

@@ -84,6 +84,8 @@ const Production: React.FC = () => {
   if (!bomId) return null;
   return boms.find(bom => bom.id === bomId) || null;
 };
+
+
   // Helper to get BOM by ID
 
   const { canDelete } = useDeletePermission();
@@ -150,7 +152,6 @@ const Production: React.FC = () => {
     setMaterialFilter('all');
     setProductFilter('all');
   };
-
   // Form state
   const [formData, setFormData] = useState({
     finished_good_id: '',
@@ -485,7 +486,7 @@ const Production: React.FC = () => {
           );
         }
 
-        const reservations: {
+       const reservations: {
           stock_code_id: string;
           receiving_record_id: string | null;
           internal_lot_number: string | null;
@@ -916,7 +917,7 @@ const handleUpdateOrganolepticCheck = async (
     retention_sample_taken: boolean;
     final_checks: FinalQualityChecks;
   }) => {
-    await updateProductionBatch(batchId, {
+      const closedBatch = await updateProductionBatch(batchId, {
       status: 'closed',
       actual_quantity_produced: finalData.actual_quantity,
       product_size: finalData.product_size,
@@ -928,14 +929,69 @@ const handleUpdateOrganolepticCheck = async (
       closed_at: new Date().toISOString(),
       supervisor_id: user?.id,
     });
+        if (!closedBatch || closedBatch.status !== 'closed') {
+      toast.error('Batch was not closed. Please check the error above and try again.');
+      return;
+    }
     toast.success('Batch closed successfully');
+
+    // Credit the finished good produced by this batch into stock, exactly once.
+    // Standard batches only: pickle output stock is credited by the pickle stage
+    // workflow (completeStage) and is never touched here. The credit is posted
+    // through the existing fms_apply_stock_movement mechanism (movement_type
+    // 'receipt', positive quantity) wrapped in fms_credit_finished_good_production,
+    // which locks the batch row and honours the finished_good_stock_credited flag,
+    // so a repeated close or a retried request can never post the receipt twice.
+    // Previously closed batches are not credited automatically: the flag defaults
+    // to false and is only set by a close that runs after this change.
+    const batch = productionBatches.find(b => b.id === batchId);
+    const isPickle = batch != null && isPickleBatch(batch, getStockCodeById);
+    const alreadyCredited = batch?.finished_good_stock_credited === true;
+    if (!isPickle && !alreadyCredited && batch?.finished_good_id) {
+      try {
+        // The RPC reads actual_quantity_produced from the batch row itself;
+        // the client must not supply the quantity.
+        const { error: creditError } = await (supabase.rpc as any)(
+          'fms_credit_finished_good_production',
+          {
+            p_batch_id: batchId,
+          }
+        );
+
+        if (creditError) {
+          throw creditError;
+        }
+
+        // RPC succeeded: stock was credited in the database and the
+        // finished_good_stock_credited flag is already true there. Update
+        // local application state to match, but do not treat a local-state
+        // update failure as a stock-credit failure — the database flag is
+        // authoritative and will prevent duplicate credits on any retry.
+        const localUpdated = await updateProductionBatch(batchId, {
+          finished_good_stock_credited: true,
+        });
+        if (!localUpdated) {
+          console.warn(
+            '[BatchSheet] Finished-good stock was credited, but local state could not be refreshed.'
+          );
+        }
+      } catch (err) {
+        console.error(
+          '[BatchSheet] Finished-good stock credit failed:',
+          err
+        );
+        toast.error(
+          'Batch closed, but finished-good stock could not be credited.'
+        );
+      }
+    }
+
     // Consumption normally already happened at START (see handleStartProduction).
     // This call is kept as an idempotent safety net: it only touches reservation
     // rows still in 'reserved', so for a batch started after that change it is a
     // no-op, and for a legacy batch that was started before it, it still
     // converts the set-aside into real usage exactly once. Either way no
     // reservation is left behind when the batch closes.
-    const batch = productionBatches.find(b => b.id === batchId);
     const consumptionResults = await consumeBatchReservations(batchId, batch?.batch_number || '');
 
     // Collect low stock warnings from the material consumption

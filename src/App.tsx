@@ -188,7 +188,6 @@ const App = () => (
 
                   Only HR users and system admins can access these.
               ================================================== */}
-
               <Route
                 element={
                   <HRRouteGuard>

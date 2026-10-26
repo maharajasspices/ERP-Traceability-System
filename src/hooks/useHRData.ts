@@ -6,6 +6,8 @@ import { string } from 'zod';
 
 // HR data types
 export interface HREmployee {
+
+
   id: string;
   employee_number?: string;
 
@@ -19,6 +21,8 @@ export interface HREmployee {
   email?: string;
   phone?: string;
   address?: string;
+
+ 
 
   // Employment
   department?: string;
@@ -54,16 +58,18 @@ export interface HREmployee {
 }
 
 export interface HRAttendance {
-  id: string;
-  employee_id: string;
-  attendance_date: string;
-  time_in?: string;
-  time_out?: string;
-  hours_worked?: number;
-  status: 'present' | 'absent' | 'late' | 'half_day' | 'leave';
-  notes?: string;
-  created_at: string;
-}
+   id: string;
+   employee_id: string;
+   attendance_date: string;
+   time_in?: string;
+   time_out?: string;
+   hours_worked?: number;
+   status: 'present' | 'absent' | 'late' | 'half_day' | 'leave';
+   notes?: string;
+   created_at: string;
+ }
+
+
 
 export interface HRLeave {
   id: string;
@@ -265,13 +271,13 @@ export function useHRData() {
       }
 
       // Warnings - non-critical
-      if (warningsRes.status === 'fulfilled' && !warningsRes.value.error) {
-        const warnData = (warningsRes.value.data || []) as HRWarning[];
-        setWarnings(warnData);
-        hrCache.warnings = warnData;
-      } else {
-        console.error('Error fetching warnings:', warningsRes.status === 'rejected' ? warningsRes.reason : warningsRes.value.error);
-      }
+       if (warningsRes.status === 'fulfilled' && !warningsRes.value.error) {
+         const warnData = (warningsRes.value.data || []) as HRWarning[];
+         setWarnings(warnData);
+         hrCache.warnings = warnData;
+       } else {
+         console.error('Error fetching warnings:', warningsRes.status === 'rejected' ? warningsRes.reason : warningsRes.value.error);
+       }
 
       // Contract signatures - non-critical
       if (signaturesRes.status === 'fulfilled' && !signaturesRes.value.error) {
@@ -342,6 +348,8 @@ export function useHRData() {
       employee_number: employeeNumber,
     };
 
+    
+
     const { data, error } = await hr.employees()
       .insert(employeeToInsert)
       .select()
@@ -363,24 +371,26 @@ export function useHRData() {
     return data as HREmployee;
   };
 
-  const updateEmployee = async (id: string, updates: Partial<HREmployee>) => {
-    const { data, error } = await hr.employees()
-      .update(updates)
-      .eq('id', id)
-      .select()
-      .single();
+   const updateEmployee = async (id: string, updates: Partial<HREmployee>) => {
+     const { data, error } = await hr.employees()
+       .update(updates)
+       .eq('id', id)
+       .select()
+       .single();
 
-    if (error) {
-      console.error('Update employee error:', error);
-      toast.error(error.message);
-      return null;
-    }
+     if (error) {
+       console.error('Update employee error:', error);
+       toast.error(error.message);
+       return null;
+     }
 
-    setEmployees(prev => prev.map(e => e.id === id ? { ...e, ...data } as HREmployee : e));
-    hrCache.fetchedAt = null;
-    toast.success('Employee updated successfully');
-    return data as HREmployee;
-  };
+     setEmployees(prev => prev.map(e => e.id === id ? { ...e, ...data } as HREmployee : e));
+     hrCache.fetchedAt = null;
+     toast.success('Employee updated successfully');
+     return data as HREmployee;
+   };
+
+ 
 
   const deleteEmployee = async (id: string) => {
     const { error } = await hr.employees()

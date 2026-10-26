@@ -1586,6 +1586,8 @@ const handleSelectAllQualityChecks = () => {
             });
         }
       }
+     
+
 
       // Update the email order status to received
       await updateSupplierOrderEmailStatus(confirmingEmailOrder.id, 'received');

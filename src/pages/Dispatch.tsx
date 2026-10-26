@@ -48,13 +48,33 @@ const Dispatch: React.FC = () => {
   const [viewDialogOpen, setViewDialogOpen] = useState(false);
   const [selectedRecord, setSelectedRecord] = useState<FMSDispatch | null>(null);
   const selectedRequirements = dispatchRecords.find((record) => record.id === selectedRecord?.id)?.requirements ?? selectedRecord?.requirements ?? [];
-  const [invoiceDrafts, setInvoiceDrafts] = useState<InvoiceDraft[]>([]);
+  const [invoiceDrafts, setInvoiceDrafts] = useState<InvoiceDraft[]>([{
+  id: 'inv-1',
+  invoice_number: '',
+  customer_name: '',
+  file_name: null,
+  file: null,
+  lines: [],
+  unmatched: 0,
+  parsing: false,
+  parsed: false,
+}]);
   const [creating, setCreating] = useState(false);
   const [isConfirming, setIsConfirming] = useState(false);
   const [busyScan, setBusyScan] = useState(false);
 
   // ---- Invoice upload -> dispatch ----
-  const resetForm = () => setInvoiceDrafts([]);
+  const resetForm = () => setInvoiceDrafts([{
+  id: 'inv-1',
+  invoice_number: '',
+  customer_name: '',
+  file_name: null,
+  file: null,
+  lines: [],
+  unmatched: 0,
+  parsing: false,
+  parsed: false,
+}]);
 
   /** Flatten every invoice's parsed lines into the dispatch requirements. */
   const collectedRequirements = useMemo(

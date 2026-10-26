@@ -33,11 +33,16 @@ const getAllowedOrigin = (requestOrigin: string | null): string => {
 };
 
 
+
 const createCorsHeaders = (requestOrigin: string | null) => ({
   'Access-Control-Allow-Origin': getAllowedOrigin(requestOrigin),
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Headers':
+    'authorization, x-client-info, apikey, content-type, x-supabase-api-version',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
   'Access-Control-Allow-Credentials': 'true',
+  'Vary': 'Origin',
 });
+
 
 // Validation schemas (mirrored from client-side for server enforcement)
 const codePattern = /^[A-Z0-9\s\-_]+$/i;

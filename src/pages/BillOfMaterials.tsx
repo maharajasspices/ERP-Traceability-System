@@ -296,10 +296,12 @@ const BillOfMaterials: React.FC = () => {
       }
     }
 
-    const components = formData.components.map((comp) => ({
-      material_stock_code_id: comp.material_id,
-      quantity_per_batch: isPercentageBOM ? parseFloat(comp.quantity) / 100 : parseFloat(comp.quantity),
-    }));
+   const components = formData.components.map((comp) => ({
+       material_stock_code_id: comp.material_id,
+       quantity_per_batch: isPercentageBOM ? parseFloat(comp.quantity) / 100 : parseFloat(comp.quantity),
+     }));
+
+    
 
     // Include processing steps and organoleptic parameters in the BOM
     const bomData = {
@@ -513,12 +515,14 @@ const BillOfMaterials: React.FC = () => {
     await refreshData();
   };
 
-  // HTML escape utility to prevent XSS
+   // HTML escape utility to prevent XSS
   const escapeHtml = (text: string): string => {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
+     const div = document.createElement('div');
+     div.textContent = text;
+     return div.innerHTML;
   };
+
+
 
   const handlePrintBOM = async (bom: typeof boms[0]) => {
     const finishedGood = getStockCode(bom.finished_good_id);

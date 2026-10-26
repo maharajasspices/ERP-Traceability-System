@@ -180,6 +180,7 @@ export const productionBatchSchema = z.object({
   info_checker_name: z.string().max(100).optional().nullable(),
   steps_checker_name: z.string().max(100).optional().nullable(),
   quality_checker_name: z.string().max(100).optional().nullable(),
+  finished_good_stock_credited: z.boolean().optional().nullable(),
 });
 
 // Dispatch validation schema

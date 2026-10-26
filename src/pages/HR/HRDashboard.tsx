@@ -145,36 +145,38 @@ useEffect(() => {
 
   
 
-  const handleConfirmMeeting = async (warningId: string) => {
-    setMeetingBusyId(warningId);
-    const ok = await confirmWarningMeeting(warningId);
-    setMeetingBusyId(null);
-    if (ok && pendingMeetings.length <= 1) {
-      setMeetingPopupOpen(false);
-    }
-  };
+   const handleConfirmMeeting = async (warningId: string) => {
+     setMeetingBusyId(warningId);
+     const ok = await confirmWarningMeeting(warningId);
+     setMeetingBusyId(null);
+     if (ok && pendingMeetings.length <= 1) {
+       setMeetingPopupOpen(false);
+     }
+   };
 
-  const handleRescheduleMeeting = async (warningId: string) => {
-    if (!rescheduleDate) return;
-    setMeetingBusyId(warningId);
-    const ok = await postponeWarningMeeting(warningId, rescheduleDate);
-    setMeetingBusyId(null);
-    if (ok) {
-      setSeenMeetingIds(prev => {
-        const next = new Set(prev);
-        next.add(warningId);
-        return next;
-      });
-      setReschedulingId(null);
-      setRescheduleDate('');
-      setMeetingPopupOpen(false);
-    }
-  };
+  
 
-  const getMeetingEmployeeName = (employeeId: string) => {
-    const emp = employees.find(e => e.id === employeeId);
-    return emp ? `${emp.first_name} ${emp.last_name}` : 'Unknown employee';
-  };
+   const handleRescheduleMeeting = async (warningId: string) => {
+     if (!rescheduleDate) return;
+     setMeetingBusyId(warningId);
+     const ok = await postponeWarningMeeting(warningId, rescheduleDate);
+     setMeetingBusyId(null);
+     if (ok) {
+       setSeenMeetingIds(prev => {
+         const next = new Set(prev);
+         next.add(warningId);
+         return next;
+       });
+       setReschedulingId(null);
+       setRescheduleDate('');
+       setMeetingPopupOpen(false);
+     }
+   };
+
+   const getMeetingEmployeeName = (employeeId: string) => {
+     const emp = employees.find(e => e.id === employeeId);
+     return emp ? `${emp.first_name} ${emp.last_name}` : 'Unknown employee';
+   };
 
   const formatMeetingDate = (iso: string) =>
     new Date(iso).toLocaleString('en-GB', {
@@ -198,28 +200,32 @@ useEffect(() => {
     return () => clearInterval(interval);
   }, [refreshData]);
 
-  const handleRefresh = async () => {
-    setRefreshing(true);
-    try {
-      await refreshData();
-    } finally {
-      setRefreshing(false);
-    }
-  };
+   const handleRefresh = async () => {
+     setRefreshing(true);
+     try {
+       await refreshData();
+     } finally {
+       setRefreshing(false);
+     }
+   };
 
-  const employeeMap = useMemo(() => {
-    const map = new Map<string, HREmployeeLite>();
-    employees.forEach(e => {
-      map.set(e.id, {
-        first_name: e.first_name,
-        last_name: e.last_name,
-        employee_number: e.employee_number,
-        department: e.department,
-        email: e.email,
-      });
-    });
-    return map;
-  }, [employees]);
+  
+
+   const employeeMap = useMemo(() => {
+     const map = new Map<string, HREmployeeLite>();
+     employees.forEach(e => {
+       map.set(e.id, {
+         first_name: e.first_name,
+         last_name: e.last_name,
+         employee_number: e.employee_number,
+         department: e.department,
+         email: e.email,
+       });
+     });
+     return map;
+   }, [employees]);
+
+  
 
   const today = useMemo(() => {
     const d = new Date();
@@ -235,15 +241,16 @@ useEffect(() => {
     return leave.employee_name || 'Unknown Employee';
   };
 
-  const getEmployeeNumber = (leave: any) => {
-    const emp = employeeMap.get(leave.employee_id);
-    return emp?.employee_number || leave.employee_number || '—';
-  };
+ const getEmployeeNumber = (leave: any) => {
+     const emp = employeeMap.get(leave.employee_id);
+     return emp?.employee_number || leave.employee_number || '—';
+   };
 
-  const getDepartment = (leave: any) => {
-    const emp = employeeMap.get(leave.employee_id);
-    return emp?.department || '—';
-  };
+   const getDepartment = (leave: any) => {
+     const emp = employeeMap.get(leave.employee_id);
+     return emp?.department || '—';
+   };
+  
 
   const formatDate = (dateString: string) => {
     if (!dateString) return '—';
@@ -279,33 +286,34 @@ useEffect(() => {
   // Employees whose contracts were signed today or within the last 7 days.
   // Surfaced as a notification on the HR dashboard the moment the signing
   // completes (HR dashboard polls refreshData every 15s).
-  const recentlySignedContracts = useMemo(
+   const recentlySignedContracts = useMemo(
     () =>
-      employees
-        .filter(e => e.contract_signed && e.contract_signed_date)
-        .map(e => ({
-          id: e.id,
-          name: `${e.first_name} ${e.last_name}`,
-          employee_number: e.employee_number || '—',
-          signed_date: String(e.contract_signed_date).slice(0, 10),
-          signed_contract_url: e.signed_contract_url,
-        }))
-        .filter((e) => {
-          const d = new Date(`${e.signed_date}T00:00:00`);
+       employees
+         .filter(e => e.contract_signed && e.contract_signed_date)
+         .map(e => ({
+           id: e.id,
+           name: `${e.first_name} ${e.last_name}`,
+           employee_number: e.employee_number || '—',
+           signed_date: String(e.contract_signed_date).slice(0, 10),
+           signed_contract_url: e.signed_contract_url,
+         }))
+         .filter((e) => {
+           const d = new Date(`${e.signed_date}T00:00:00`);
           const diff = (new Date(`${todayDateOnly}T00:00:00`).getTime() - d.getTime()) / (1000 * 60 * 60 * 24);
-          return diff >= 0 && diff <= 7;
-        })
-        .sort((a, b) => b.signed_date.localeCompare(a.signed_date))
-        .slice(0, 10),
-    [employees, todayDateOnly]
-  );
-const signedTodayCount = useMemo(
-  () =>
-    recentlySignedContracts.filter(
-      contract => contract.signed_date === todayDateOnly
-    ).length,
-  [recentlySignedContracts, todayDateOnly]
-);
+           return diff >= 0 && diff <= 7;
+         })
+         .sort((a, b) => b.signed_date.localeCompare(a.signed_date))
+         .slice(0, 10),
+     [employees, todayDateOnly]
+   );
+
+      const signedTodayCount = useMemo(
+        () =>
+          recentlySignedContracts.filter(
+            contract => contract.signed_date === todayDateOnly
+          ).length,
+        [recentlySignedContracts, todayDateOnly]
+      );
 
 
   const handleDecision = async (leave: any, decision: 'approved' | 'declined') => {
@@ -349,7 +357,6 @@ const signedTodayCount = useMemo(
       setLeavePopupOpen(false);
     }
   }, [pendingRequests, leavePopupOpen]);
-
 
   return (
     <div className="space-y-6 animate-fade-in">

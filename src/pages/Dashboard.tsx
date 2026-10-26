@@ -89,6 +89,7 @@ const loadBatchSheetsToday = async () => {
   setBatchSheetsToday(count ?? 0);
 };
 
+
   const {fmsUser}  = useFMSAuth();
 
   const {
@@ -209,6 +210,8 @@ const loadBatchSheetsToday = async () => {
       };
     }
 
+    
+
     // Still soaking — show live countdown with seconds precision
     const remainingMs = minMs - nowMs;
     const totalSec = Math.ceil(remainingMs / 1000);
@@ -225,7 +228,7 @@ const loadBatchSheetsToday = async () => {
     } else {
       countdownLabel = `${minutes}m ${seconds}s remaining`;
     }
-
+    
     return {
       label: countdownLabel,
       className: 'text-warning',

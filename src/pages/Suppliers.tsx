@@ -14,9 +14,11 @@ import { Plus, Search, Users, Edit, Loader2, Trash2, Wallet } from 'lucide-react
 import { SearchableSelect } from '@/components/ui/searchable-select';
 
 const Suppliers: React.FC = () => {
+
   const { suppliers, stockCodes, loading, addSupplier, updateSupplier, refreshData } = useFMSData();
   const { canDelete } = useDeletePermission();
   const { prices, refresh: refreshPrices, pricesForSupplier } = useSupplierPrices();
+ 
   const [searchQuery, setSearchQuery] = useState('');
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingSupplier, setEditingSupplier] = useState<typeof suppliers[0] | null>(null);
@@ -31,42 +33,50 @@ const Suppliers: React.FC = () => {
     code: '', name: '', contact_name: '', email: '', phone: '', address: '', is_approved: true,
   });
 
+  
+
   const resetForm = () => {
     setFormData({ code: '', name: '', contact_name: '', email: '', phone: '', address: '', is_approved: true });
     setEditingSupplier(null);
   };
 
-  const handleOpenDialog = (supplier?: typeof suppliers[0]) => {
-    if (supplier) {
-      setEditingSupplier(supplier);
-      setFormData({
-        code: supplier.code, name: supplier.name, contact_name: supplier.contact_name || '',
-        email: supplier.email || '', phone: supplier.phone || '', address: supplier.address || '',
-        is_approved: supplier.is_approved ?? true,
-      });
-    } else { resetForm(); }
-    setDialogOpen(true);
+   const handleOpenDialog = (supplier?: typeof suppliers[0]) => {
+     if (supplier) {
+       setEditingSupplier(supplier);
+       setFormData({
+         code: supplier.code, name: supplier.name, contact_name: supplier.contact_name || '',
+         email: supplier.email || '', phone: supplier.phone || '', address: supplier.address || '',
+         is_approved: supplier.is_approved ?? true,
+       });
+     } else { resetForm(); }
+     setDialogOpen(true);
+   };
+
+
+
+   const handleSubmit = async () => {
+     if (!formData.code || !formData.name) { toast.error('Code and name are required'); return; }
+     let result;
+     if (editingSupplier) {
+       result = await updateSupplier(editingSupplier.id, formData);
+     } else {
+       result = await addSupplier(formData);
+     }
+     if (!result) return; // Error already toasted inside addSupplier/updateSupplier
+     setDialogOpen(false);
+     resetForm();
+   };
+
+  
+
+   const handleDeleteSupplier = async (id: string) => {
+     const { error } = await supabase.from('fms_suppliers').delete().eq('id', id);
+     if (error) { toast.error('Failed to delete supplier'); return; }
+     toast.success('Supplier deleted successfully');
+     await refreshData();
   };
 
-  const handleSubmit = async () => {
-    if (!formData.code || !formData.name) { toast.error('Code and name are required'); return; }
-    let result;
-    if (editingSupplier) {
-      result = await updateSupplier(editingSupplier.id, formData);
-    } else {
-      result = await addSupplier(formData);
-    }
-    if (!result) return; // Error already toasted inside addSupplier/updateSupplier
-    setDialogOpen(false);
-    resetForm();
-  };
-
-  const handleDeleteSupplier = async (id: string) => {
-    const { error } = await supabase.from('fms_suppliers').delete().eq('id', id);
-    if (error) { toast.error('Failed to delete supplier'); return; }
-    toast.success('Supplier deleted successfully');
-    await refreshData();
-  };
+  
 
   // ----- Pricing dialog logic -----
   const rawMaterials = useMemo(
@@ -74,40 +84,48 @@ const Suppliers: React.FC = () => {
     [stockCodes]
   );
 
-  const openPricingDialog = (supplier: typeof suppliers[0]) => {
-    setPricingSupplier(supplier);
-    const supPrices = pricesForSupplier(supplier.id);
-    const edits: Record<string, string> = {};
-    supPrices.forEach(p => { edits[p.stock_code_id] = String(p.cost_price_per_kg); });
-    setPriceEdits(edits);
-    setAddMaterialId('');
-  };
+   const openPricingDialog = (supplier: typeof suppliers[0]) => {
+     setPricingSupplier(supplier);
+     const supPrices = pricesForSupplier(supplier.id);
+     const edits: Record<string, string> = {};
+     supPrices.forEach(p => { edits[p.stock_code_id] = String(p.cost_price_per_kg); });
+     setPriceEdits(edits);
+     setAddMaterialId('');
+   };
+  
+ 
 
-  const handleAddMaterial = () => {
-    if (!addMaterialId) return;
-    if (priceEdits[addMaterialId] !== undefined) {
-      toast.info('Already in the list — edit the price below.');
-      return;
-    }
-    setPriceEdits(prev => ({ ...prev, [addMaterialId]: '' }));
-    setAddMaterialId('');
-  };
+   const handleAddMaterial = () => {
+     if (!addMaterialId) return;
+     if (priceEdits[addMaterialId] !== undefined) {
+       toast.info('Already in the list — edit the price below.');
+       return;
+     }
+     setPriceEdits(prev => ({ ...prev, [addMaterialId]: '' }));
+     setAddMaterialId('');
+   };
 
-  const handleRemovePrice = async (stockCodeId: string) => {
-    if (!pricingSupplier) return;
-    // Remove from local edits
-    setPriceEdits(prev => {
-      const next = { ...prev };
-      delete next[stockCodeId];
-      return next;
-    });
-    // Delete from DB if exists
-    await supabase.from('fms_supplier_material_prices' as any)
-      .delete()
-      .eq('supplier_id', pricingSupplier.id)
-      .eq('stock_code_id', stockCodeId);
-    await refreshPrices();
-  };
+  
+
+   const handleRemovePrice = async (stockCodeId: string) => {
+     if (!pricingSupplier) return;
+
+     // Remove from local edits
+     setPriceEdits(prev => {
+       const next = { ...prev };
+       delete next[stockCodeId];
+       return next;
+     });
+
+     // Delete from DB if exists
+     await supabase.from('fms_supplier_material_prices' as any)
+       .delete()
+       .eq('supplier_id', pricingSupplier.id)
+       .eq('stock_code_id', stockCodeId);
+     await refreshPrices();
+   };
+
+  
 
   const handleSavePrices = async () => {
     if (!pricingSupplier) return;
