@@ -1473,20 +1473,28 @@ const undoDispatchScan = async (
    * scanned, so Traceability reflects what physically left the building.
    */
 
-   const confirmDispatch = async (dispatchId: string, confirmedBy: string): Promise<boolean> => {
-     const { data: reqs, error: reqError } = await (supabase as any)
-       .from('fms_dispatch_requirements')
-       .select('*')
-       .eq('dispatch_id', dispatchId);
+   
+const confirmDispatch = async (
+  dispatchId: string,
+  confirmedBy: string,
+): Promise<boolean> => {
+  try {
+    // Check for incomplete lines before calling the database.
+    const { data: reqs, error: reqError } = await (supabase as any)
+      .from('fms_dispatch_requirements')
+      .select('quantity_required, quantity_scanned')
+      .eq('dispatch_id', dispatchId);
 
-     if (reqError) {
-       console.error('[FMS] Load dispatch requirements error:', reqError);
-       return false;
-     }
+    if (reqError) {
+      console.error('[FMS] Load dispatch requirements error:', reqError);
+      toast.error('Could not verify dispatch quantities.');
+      return false;
+    }
 
     const outstanding = (reqs || []).filter(
       (r: any) => (r.quantity_scanned ?? 0) < (r.quantity_required ?? 0),
     );
+
     if (outstanding.length > 0) {
       toast.error(
         `${outstanding.length} line(s) are still short. Scan everything on the invoice before confirming.`,
@@ -1494,24 +1502,27 @@ const undoDispatchScan = async (
       return false;
     }
 
-    const { error: updateError } = await (supabase as any)
-      .from('fms_dispatch')
-      .update({
-        status: 'dispatched',
-        confirmed_at: new Date().toISOString(),
-        confirmed_by: confirmedBy,
-      })
-      .eq('id', dispatchId);
+    // Stock deduction and dispatch confirmation happen together in Supabase.
+    const { error: confirmError } = await (supabase as any).rpc(
+      'fms_confirm_dispatch_and_deduct',
+      { p_dispatch_id: dispatchId },
+    );
 
-    if (updateError) {
-      console.error('[FMS] Confirm dispatch error:', updateError);
-      toast.error(updateError.message || 'Failed to confirm the dispatch');
+    if (confirmError) {
+      console.error('[FMS] Confirm dispatch error:', confirmError);
+      toast.error(confirmError.message || 'Failed to confirm dispatch.');
       return false;
     }
 
     await fetchData();
+    toast.success('Dispatch confirmed and stock updated.');
     return true;
-  };
+  } catch (error: any) {
+    console.error('[FMS] Confirm dispatch error:', error);
+    toast.error(error?.message || 'Failed to confirm dispatch.');
+    return false;
+  }
+};
 
   /** Move a dispatch back into picking so corrections can be scanned. */
   const reopenDispatch = async (dispatchId: string): Promise<boolean> => {
