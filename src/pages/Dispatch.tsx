@@ -38,6 +38,7 @@ const Dispatch: React.FC = () => {
     recordDispatchScan,
     undoDispatchScan,
     confirmDispatch,
+markTruckDeparted,
     refreshData,
   } = useFMSData();
   const { canDelete } = useDeletePermission();
@@ -62,6 +63,8 @@ const Dispatch: React.FC = () => {
   const [creating, setCreating] = useState(false);
   const [isConfirming, setIsConfirming] = useState(false);
   const [busyScan, setBusyScan] = useState(false);
+  const [truckPlate, setTruckPlate] = useState('');
+  const [driverName, setDriverName] = useState('');
 
   // ---- Invoice upload -> dispatch ----
   const resetForm = () => setInvoiceDrafts([{
@@ -119,6 +122,8 @@ const Dispatch: React.FC = () => {
         file: invoiceDrafts.find((d) => d.file)?.file ?? null,
         requirements: collectedRequirements,
         dispatchedBy: user?.id || '',
+        truckPlate: truckPlate || undefined,
+        driverName: driverName || undefined,
       });
 
       
@@ -133,6 +138,8 @@ const Dispatch: React.FC = () => {
             invoice_numbers: invoiceNumbers,
             customer: primaryCustomer || 'N/A',
             lines: collectedRequirements.length,
+            truck_plate: truckPlate || 'N/A',
+            driver_name: driverName || 'N/A',
           },
         });
         toast.success('Dispatch created. Packers can now scan against the invoice.');
@@ -205,7 +212,40 @@ const Dispatch: React.FC = () => {
     } finally {
       setIsConfirming(false);
     }
-  }, [selectedRecord, confirmDispatch, dispatchRecords, logActivity, refreshData, user?.id]);
+   }, [selectedRecord, confirmDispatch, dispatchRecords, logActivity, refreshData, user?.id]);
+
+  /** Mark a truck as departed with driver name and timestamp. */
+  const handleMarkTruckDeparted = useCallback(async (dispatchId: string) => {
+    if (!selectedRecord || selectedRecord.id !== dispatchId) return;
+    const driverName = window.prompt('Enter driver name for this departure:');
+    if (!driverName || driverName.trim() === '') {
+      toast.error('Driver name is required.');
+      return;
+    }
+    setIsConfirming(true);
+    try {
+      const ok = await markTruckDeparted(dispatchId, driverName);
+      if (ok) {
+        logActivity({
+          action_type: 'update',
+          entity_type: 'dispatch',
+          entity_id: selectedRecord.invoice_number,
+          entity_name: selectedRecord.customer_name || 'Dispatch',
+          details: {
+            invoice_number: selectedRecord.invoice_number,
+            driver_name: driverName,
+            status: 'departed',
+          },
+        });
+        toast.success('Truck marked as departed.');
+        await refreshData();
+        const fresh = dispatchRecords.find((r) => r.id === selectedRecord.id);
+        if (fresh) setSelectedRecord(fresh);
+      }
+    } finally {
+      setIsConfirming(false);
+    }
+  }, [markTruckDeparted, selectedRecord, refreshData]);
 
   const handleViewRecord = (record: FMSDispatch) => {
     setSelectedRecord(record);
@@ -322,6 +362,22 @@ const Dispatch: React.FC = () => {
                 invoices={invoiceDrafts}
                 onChange={setInvoiceDrafts}
               />
+<div className="space-y-2">
+                <label className="text-xs font-medium text-muted-foreground block mb-1">Truck Plate</label>
+                <Input
+                  value={truckPlate}
+                  onChange={(e) => setTruckPlate(e.target.value)}
+                  placeholder="e.g. ABC-123"
+                  className="w-full"
+                />
+                <label className="text-xs font-medium text-muted-foreground block mb-2">Driver Name</label>
+                <Input
+                  value={driverName}
+                  onChange={(e) => setDriverName(e.target.value)}
+                  placeholder="Driver name"
+                  className="w-full"
+                />
+              </div>
 
               {collectedRequirements.length > 0 && (
                 <div className="rounded-lg border border-border bg-muted/20 p-3 text-sm">
@@ -419,6 +475,11 @@ const Dispatch: React.FC = () => {
                       <Button variant="ghost" size="icon" onClick={() => handleDownloadQRCode(record)} title="Download QR">
                         <Download className="h-4 w-4" />
                       </Button>
+                      {record.status === 'dispatched' && (
+                        <Button variant="destructive" size="icon" onClick={() => handleMarkTruckDeparted(record.id)} title="Mark as departed">
+                          <Loader2 className="h-4 w-4" />
+                        </Button>
+                      )}
                       {canDelete && (
                         <AlertDialog>
                           <AlertDialogTrigger asChild>

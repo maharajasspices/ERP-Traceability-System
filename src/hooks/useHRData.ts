@@ -56,7 +56,6 @@ export interface HREmployee {
   created_at: string;
   updated_at: string;
 }
-
 export interface HRAttendance {
    id: string;
    employee_id: string;
@@ -68,9 +67,6 @@ export interface HRAttendance {
    notes?: string;
    created_at: string;
  }
-
-
-
 export interface HRLeave {
   id: string;
   employee_id: string;
@@ -92,7 +88,6 @@ export interface HRLeave {
   created_at: string;
   updated_at: string;
 }
-
 export interface HRDocument {
   id: string;
   employee_id: string;
@@ -104,7 +99,6 @@ export interface HRDocument {
   uploaded_by: string;
   created_at: string;
 }
-
 export interface HRWarning {
   id: string;
   employee_id: string;
@@ -123,7 +117,6 @@ export interface HRWarning {
   created_at: string;
   updated_at: string;
 }
-
 export interface HRContractSignature {
   id: string;
   employee_id: string;
@@ -148,7 +141,6 @@ interface HRDataCache {
   fetchedAt: number | null;
   userId: string | null;
 }
-
 const hrCache: HRDataCache = {
   employees: null,
   attendance: null,
@@ -159,11 +151,8 @@ const hrCache: HRDataCache = {
   fetchedAt: null,
   userId: null,
 };
-
 const HR_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
-
-
 // The HR tables were added in migrations but the generated types.ts
 // hasn't been regenerated yet. Use this helper for HR table queries.
 const hr = {
@@ -174,7 +163,6 @@ const hr = {
   warnings: () => (supabase as any).from('fms_hr_warnings'),
   contractSignatures: () => (supabase as any).from('fms_contract_signatures'),
 };
-
 export function useHRData() {
   const { user } = useFMSAuth();
   const [employees, setEmployees] = useState<HREmployee[]>([]);
@@ -185,19 +173,16 @@ export function useHRData() {
   const [contractSignatures, setContractSignatures] = useState<HRContractSignature[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploadingDocument, setUploadingDocument] = useState(false);
-
   const fetchData = useCallback(async (force = false) => {
     if (!user) {
       setLoading(false);
       return;
     }
-
     // Check cache
     const cacheValid = hrCache.fetchedAt !== null &&
       hrCache.userId === user.id &&
       Date.now() - hrCache.fetchedAt < HR_CACHE_TTL &&
       !force;
-
     if (cacheValid && hrCache.employees && hrCache.attendance) {
       setEmployees(hrCache.employees);
       setAttendance(hrCache.attendance);
@@ -208,9 +193,7 @@ export function useHRData() {
       setLoading(false);
       return;
     }
-
     setLoading(true);
-
     try {
       // Use allSettled so a failure in one table (e.g. warnings not yet
       // migrated) doesn't prevent employees and other data from loading.
@@ -222,7 +205,6 @@ export function useHRData() {
         hr.warnings().select('*').order('issued_at', { ascending: false }),
         hr.contractSignatures().select('*').order('sent_at', { ascending: false }),
       ]);
-
       // Employees - critical, if this fails we show the error
       if (employeesRes.status === 'fulfilled') {
         if (employeesRes.value.error) throw employeesRes.value.error;
@@ -232,7 +214,6 @@ export function useHRData() {
       } else {
         throw employeesRes.reason;
       }
-
       // Attendance - non-critical
       if (attendanceRes.status === 'fulfilled' && !attendanceRes.value.error) {
         const attData = (attendanceRes.value.data || []) as HRAttendance[];
@@ -241,7 +222,6 @@ export function useHRData() {
       } else {
                 console.error('Error fetching attendance:', attendanceRes.status === 'rejected' ? attendanceRes.reason : attendanceRes.value.error);
       }
-
       // Leave - non-critical
      // Leave - non-critical
       if (leaveRes.status === 'fulfilled' && !leaveRes.value.error) {
@@ -260,7 +240,6 @@ export function useHRData() {
             : leaveRes.value.error
         );
       }
-
       // Documents - non-critical
       if (documentsRes.status === 'fulfilled' && !documentsRes.value.error) {
         const docData = (documentsRes.value.data || []) as HRDocument[];
@@ -269,7 +248,6 @@ export function useHRData() {
       } else {
         console.error('Error fetching documents:', documentsRes.status === 'rejected' ? documentsRes.reason : documentsRes.value.error);
       }
-
       // Warnings - non-critical
        if (warningsRes.status === 'fulfilled' && !warningsRes.value.error) {
          const warnData = (warningsRes.value.data || []) as HRWarning[];
@@ -278,7 +256,6 @@ export function useHRData() {
        } else {
          console.error('Error fetching warnings:', warningsRes.status === 'rejected' ? warningsRes.reason : warningsRes.value.error);
        }
-
       // Contract signatures - non-critical
       if (signaturesRes.status === 'fulfilled' && !signaturesRes.value.error) {
         const sigData = (signaturesRes.value.data || []) as HRContractSignature[];
@@ -287,7 +264,6 @@ export function useHRData() {
       } else {
         console.error('Error fetching contract signatures:', signaturesRes.status === 'rejected' ? signaturesRes.reason : signaturesRes.value.error);
       }
-
       hrCache.fetchedAt = Date.now();
       hrCache.userId = user.id;
     } catch (error) {
@@ -297,7 +273,6 @@ export function useHRData() {
       setLoading(false);
     }
   }, [user]);
-
   useEffect(() => {
     fetchData();
   }, [fetchData]);
@@ -323,7 +298,6 @@ export function useHRData() {
 
     // Start at EMP-0001 if there are no employees yet
     let nextNumber = 1;
-
     if (existingEmployees && existingEmployees.length > 0) {
       const lastEmployeeNumber = existingEmployees[0].employee_number;
 
@@ -332,13 +306,11 @@ export function useHRData() {
           lastEmployeeNumber.replace('EMP-', ''),
           10
         );
-
         if (!isNaN(numberPart)) {
           nextNumber = numberPart + 1;
         }
       }
     }
-
     // Generate the new employee number
     const employeeNumber = `EMP-${String(nextNumber).padStart(4, '0')}`;
 
@@ -347,9 +319,6 @@ export function useHRData() {
       ...employee,
       employee_number: employeeNumber,
     };
-
-    
-
     const { data, error } = await hr.employees()
       .insert(employeeToInsert)
       .select()
@@ -362,10 +331,8 @@ export function useHRData() {
     }
 
     setEmployees(prev => [data as HREmployee, ...prev]);
-
     // Invalidate cache
     hrCache.fetchedAt = null;
-
     toast.success(`Employee ${employeeNumber} added successfully`);
 
     return data as HREmployee;
@@ -389,9 +356,6 @@ export function useHRData() {
      toast.success('Employee updated successfully');
      return data as HREmployee;
    };
-
- 
-
   const deleteEmployee = async (id: string) => {
     const { error } = await hr.employees()
       .delete()
@@ -408,7 +372,6 @@ export function useHRData() {
     toast.success('Employee deleted');
     return true;
   };
-
   // Document operations
   const uploadDocument = async (
     employeeId: string,
@@ -429,10 +392,8 @@ export function useHRData() {
       toast.error('File too large. Maximum size is 10MB.');
       return null;
     }
-
     const safeFileName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
     const filePath = `${employeeId}/${Date.now()}_${safeFileName}`;
-
     setUploadingDocument(true);
     try {
       // 1) Upload file to storage
@@ -460,7 +421,6 @@ export function useHRData() {
         }
         return null;
       }
-
       // 2) Insert document record in the database
       const documentRecord = {
         employee_id: employeeId,
@@ -471,7 +431,6 @@ export function useHRData() {
         mime_type: file.type,
         uploaded_by: user.id,
       };
-
       const { data, error } = await hr.documents()
         .insert(documentRecord)
         .select()
@@ -484,13 +443,10 @@ export function useHRData() {
         toast.error(error.message);
         return null;
       }
-
       setDocuments(prev => [data as HRDocument, ...prev]);
       toast.success('Document uploaded successfully');
-
       // Invalidate cache so documents list refreshes
       hrCache.fetchedAt = null;
-
       return data as HRDocument;
     } catch (err) {
       console.error('Upload document error:', err);
@@ -500,27 +456,23 @@ export function useHRData() {
       setUploadingDocument(false);
     }
   };
-
   const deleteDocument = async (document: HRDocument) => {
     if (!user) {
       toast.error('You must be signed in to delete documents.');
       return false;
     }
-
     try {
       // 1) Remove file from storage if file_path exists
       if (document.file_path) {
         const { error: storageError } = await supabase.storage
           .from('hr-documents')
           .remove([document.file_path]);
-
         if (storageError) {
           console.error('Storage delete error:', storageError);
           toast.error(storageError.message || 'Failed to delete file from storage.');
           return false;
         }
       }
-
       // 2) Delete document record from database
       const { error } = await hr.documents()
         .delete()
@@ -531,13 +483,10 @@ export function useHRData() {
         toast.error(error.message);
         return false;
       }
-
       setDocuments(prev => prev.filter(d => d.id !== document.id));
       toast.success('Document deleted successfully');
-
       // Invalidate cache
       hrCache.fetchedAt = null;
-
       return true;
     } catch (err) {
       console.error('Delete document error:', err);
@@ -588,7 +537,6 @@ export function useHRData() {
         insertPayload.meeting_date = new Date(meetingDate).toISOString();
         insertPayload.meeting_status = 'pending';
       }
-
       const { data, error } = await hr.warnings()
         .insert(insertPayload)
         .select()
@@ -599,7 +547,6 @@ export function useHRData() {
         toast.error(error.message);
         return null;
       }
-
       setWarnings(prev => [data as HRWarning, ...prev]);
       hrCache.fetchedAt = null;
 
@@ -620,7 +567,7 @@ export function useHRData() {
             console.error('Warning notification error:', fnError);
             toast.warning('Warning issued, but notification could not be sent.');
           } else if (fnData?.email && !fnData.email.sent) {
-            console.warn('Email not sent:', fnData.email.reason);
+           console.warn('Email not sent:', fnData.email.reason);
             toast.warning(`Warning issued. Email not sent: ${fnData.email.reason || 'unknown'}`);
           } else if (fnData?.whatsapp && !fnData.whatsapp.sent) {
             toast.warning(`Warning issued. WhatsApp not sent: ${fnData.whatsapp.reason || 'unknown'}`);
@@ -634,7 +581,6 @@ export function useHRData() {
       } else {
         toast.success('Warning issued successfully');
       }
-
       return data as HRWarning;
     } catch (err) {
       console.error('Issue warning error:', err);
@@ -642,7 +588,6 @@ export function useHRData() {
       return null;
     }
   };
-
   const deleteWarning = async (id: string) => {
     const { error } = await hr.warnings()
       .delete()

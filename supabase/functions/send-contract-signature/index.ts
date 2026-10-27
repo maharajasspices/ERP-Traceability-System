@@ -51,6 +51,7 @@ const getAllowedOrigin = (requestOrigin: string | null): string => {
 const createCorsHeaders = (requestOrigin: string | null) => ({
   "Access-Control-Allow-Origin": getAllowedOrigin(requestOrigin),
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
   "Access-Control-Allow-Credentials": "true",
 });
 

@@ -74,6 +74,7 @@ const navItems: NavItem[] = [
     icon: Send,
     description: 'Outbound tracking',
   },
+ 
   {
     title: 'Traceability',
     href: '/traceability',

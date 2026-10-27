@@ -182,7 +182,7 @@ export interface FMSProductionBatch {
   finished_good_stock_credited: boolean;
 }
 
-export type FMSDispatchStatus = 'draft' | 'picking' | 'ready' | 'dispatched';
+export type FMSDispatchStatus = 'draft' | 'picking' | 'ready' | 'dispatched' | 'departed';
 
 export interface FMSDispatch {
   id: string;
@@ -196,6 +196,12 @@ export interface FMSDispatch {
   confirmed_at?: string | null;
   confirmed_by?: string | null;
   created_at: string;
+  /** Truck registration number (e.g. ABC-123) */
+  truck_plate?: string;
+  /** Name of the driver assigned to this dispatch */
+  driver_name?: string;
+  /** Date and time when the truck departed */
+  departed_at?: string | null;
   items?: FMSDispatchItem[];
   /** Every invoice grouped into this dispatch (one delivery). */
   invoices?: FMSDispatchInvoice[];
@@ -1513,7 +1519,6 @@ const confirmDispatch = async (
       toast.error(confirmError.message || 'Failed to confirm dispatch.');
       return false;
     }
-
     await fetchData();
     toast.success('Dispatch confirmed and stock updated.');
     return true;
@@ -1523,6 +1528,34 @@ const confirmDispatch = async (
     return false;
   }
 };
+
+/** Mark a dispatch truck as departed with driver name and timestamp. */
+  const markTruckDeparted = async (dispatchId: string, driverName: string): Promise<boolean> => {
+    try {
+      const { error } = await (supabase as any)
+        .from('fms_dispatch')
+        .update({ 
+          status: 'departed' as FMSDispatchStatus,
+          driver_name: driverName,
+          departed_at: new Date().toISOString()
+        })
+        .eq('id', dispatchId);
+
+      if (error) {
+        console.error('[FMS] Mark truck departed error:', error);
+        toast.error(error.message || 'Failed to mark truck as departed.');
+        return false;
+      }
+
+      await fetchData();
+      toast.success('Truck marked as departed.');
+      return true;
+    } catch (error: any) {
+      console.error('[FMS] Mark truck departed error:', error);
+      toast.error(error?.message || 'Failed to mark truck as departed.');
+      return false;
+    }
+  };
 
   /** Move a dispatch back into picking so corrections can be scanned. */
   const reopenDispatch = async (dispatchId: string): Promise<boolean> => {
@@ -1537,8 +1570,6 @@ const confirmDispatch = async (
     await fetchData();
     return true;
   };
-
-
     // Helper functions
   const getStockCodeById = (id: string) => stockCodes.find(sc => sc.id === id);
   const getSupplierById = (id: string) => suppliers.find(s => s.id === id);
@@ -1961,7 +1992,7 @@ const confirmDispatch = async (
     getStockCodeById,
     getSupplierById,
     getReceivingById,
-    getBOMByFinishedGoodId,
+        getBOMByFinishedGoodId,
     generateLotNumber,
   };
 }
