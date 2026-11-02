@@ -1281,21 +1281,29 @@ const loadSupplierOrderEmails = async () => {
    * removed again, so a half-created dispatch is never left behind.
    */
   const createDispatchFromInvoices = async (params: {
-    invoiceNumbers: string[];
-    customerName: string;
-    /** Uploaded document, stored in the existing 'order-documents' bucket. */
-    file?: File | null;
-    requirements: Array<{
-      stock_code_id: string;
-      stock_code: string;
-      description?: string | null;
-      uom?: string | null;
-      invoice_number?: string | null;
-      quantity_required: number;
-    }>;
-    dispatchedBy: string;
-  }): Promise<FMSDispatch | null> => {
-    const { invoiceNumbers, customerName, file, requirements, dispatchedBy } = params;
+  invoiceNumbers: string[];
+  customerName: string;
+  truckTripId?: string | null;
+  /** Uploaded document, stored in the existing 'order-documents' bucket. */
+  file?: File | null;
+  requirements: Array<{
+    stock_code_id: string;
+    stock_code: string;
+    description?: string | null;
+    uom?: string | null;
+    invoice_number?: string | null;
+    quantity_required: number;
+  }>;
+  dispatchedBy: string;
+}): Promise<FMSDispatch | null> => {
+  const {
+    invoiceNumbers,
+    customerName,
+    truckTripId,
+    file,
+    requirements,
+    dispatchedBy,
+  } = params;
 
     if (invoiceNumbers.length === 0) {
       toast.error('Add at least one invoice number');
@@ -1385,19 +1393,56 @@ const loadSupplierOrderEmails = async () => {
           quantity_scanned: 0,
         })),
       );
+      if (reqError) {
+        console.error('[FMS] Create dispatch requiremnts error:',
+          reqError);
+          toast.error(reqError.message || 'Failed to save the invoice lines');
+          await (supabase as any).from('fms_dispatch').delete().eq('id', dispatchId);
+          await fetchData();
+          return null;
+      }
 
-    if (reqError) {
-      console.error('[FMS] Create dispatch requirements error:', reqError);
-      toast.error(reqError.message || 'Failed to save the invoice lines');
-      // Roll the half-made dispatch back so it cannot linger without requirements.
-      await (supabase as any).from('fms_dispatch').delete().eq('id', dispatchId);
+      
+      // Link this dispatch to the selected truck trip, if one was selected.
+      if (truckTripId) {
+        const { error: tripLinkError } = await (supabase as any)
+          .from('fms_truck_trip_dispatches')
+          .insert({
+            trip_id: truckTripId,
+            dispatch_id: dispatchId,
+            added_by: user?.id || null,
+          });
+
+        if (tripLinkError) {
+          console.error('[FMS] Link dispatch to truck trip error:', tripLinkError);
+
+          const { error: rollbackError } = await (supabase as any)
+            .from('fms_dispatch')
+            .delete()
+            .eq('id', dispatchId);
+
+          if (rollbackError) {
+            console.error('[FMS] Dispatch rollback error:', rollbackError);
+            toast.error(
+              `Could not link the dispatch to the truck trip, and rollback failed. Please check dispatch ${dispatchId}.`,
+            );
+          } else {
+            toast.error(
+              tripLinkError.code === '23505'
+                ? 'This dispatch is already linked to that truck trip.'
+                : tripLinkError.message || 'Could not link dispatch to the truck trip.',
+            );
+          }
+
+          await fetchData();
+          return null;
+        }
+      }
+
       await fetchData();
-      return null;
-    }
-
-    await fetchData();
-    return dispatchData as FMSDispatch;
+      return dispatchData as FMSDispatch;
   };
+
 
   /**
    * Record one verified packer scan against a requirement line.
@@ -1530,32 +1575,188 @@ const confirmDispatch = async (
 };
 
 /** Mark a dispatch truck as departed with driver name and timestamp. */
-  const markTruckDeparted = async (dispatchId: string, driverName: string): Promise<boolean> => {
+ 
+const markTruckDeparted = async (
+  tripId: string,
+  driverName: string,
+): Promise<boolean> => {
+  try {
+    const cleanDriverName = driverName.trim();
+
+    if (!cleanDriverName) {
+      toast.error('Driver name is required.');
+      return false;
+    }
+
+    const { data: trip, error: tripError } = await (supabase as any)
+      .from('fms_truck_trips')
+      .select('id, status')
+      .eq('id', tripId)
+      .maybeSingle();
+
+    if (tripError || !trip) {
+      toast.error(tripError?.message || 'Truck trip not found.');
+      return false;
+    }
+
+    if (trip.status !== 'full') {
+      toast.error('Mark the truck as full before departure.');
+      return false;
+    }
+
+    const { error } = await (supabase as any)
+      .from('fms_truck_trips')
+      .update({
+        status: 'departed',
+        driver_name_snapshot: cleanDriverName,
+        departed_at: new Date().toISOString(),
+        departed_by: user?.id || null,
+      })
+      .eq('id', tripId)
+      .eq('status', 'full');
+
+    if (error) {
+      console.error('[FMS] Mark truck departed error:', error);
+      toast.error(error.message || 'Failed to mark truck as departed.');
+      return false;
+    }
+
+    await fetchData();
+    toast.success('Truck trip marked as departed.');
+    return true;
+  } catch (error: any) {
+    console.error('[FMS] Mark truck departed error:', error);
+    toast.error(error?.message || 'Failed to mark truck as departed.');
+    return false;
+  }
+};
+
+
+  const createTruckTrip = async (
+    truckId: string,
+    driverName: string,
+  ): Promise<string | null> => {
+    try {
+      if (!user?.id) {
+        toast.error('You must be signed in to create a truck trip.');
+        return null;
+      }
+
+      const cleanDriverName = driverName.trim();
+      if (!cleanDriverName) {
+        toast.error('Driver name is required.');
+        return null;
+      }
+
+      const { data, error } = await (supabase as any)
+        .from('fms_truck_trips')
+        .insert({
+          truck_id: truckId,
+          driver_name_snapshot: cleanDriverName,
+          status: 'loading',
+          started_at: new Date().toISOString(),
+          started_by: user.id,
+        })
+        .select('id')
+        .single();
+
+      if (error || !data) {
+        console.error('[FMS] Create truck trip error:', error);
+        toast.error(error?.message || 'Failed to create truck trip.');
+        return null;
+      }
+
+      await fetchData();
+      toast.success('Truck loading trip created.');
+      return data.id as string;
+    } catch (error: any) {
+      console.error('[FMS] Create truck trip error:', error);
+      toast.error(error?.message || 'Failed to create truck trip.');
+      return null;
+    }
+  };
+
+  const markTruckFull = async (tripId: string): Promise<boolean> => {
     try {
       const { error } = await (supabase as any)
-        .from('fms_dispatch')
-        .update({ 
-          status: 'departed' as FMSDispatchStatus,
-          driver_name: driverName,
-          departed_at: new Date().toISOString()
+        .from('fms_truck_trips')
+        .update({
+          status: 'full',
+          marked_full_at: new Date().toISOString(),
         })
-        .eq('id', dispatchId);
+        .eq('id', tripId)
+        .eq('status', 'loading');
 
       if (error) {
-        console.error('[FMS] Mark truck departed error:', error);
-        toast.error(error.message || 'Failed to mark truck as departed.');
+        console.error('[FMS] Mark truck full error:', error);
+        toast.error(error.message || 'Failed to mark truck as full.');
         return false;
       }
 
       await fetchData();
-      toast.success('Truck marked as departed.');
+      toast.success('Truck marked as full.');
       return true;
     } catch (error: any) {
-      console.error('[FMS] Mark truck departed error:', error);
-      toast.error(error?.message || 'Failed to mark truck as departed.');
+      console.error('[FMS] Mark truck full error:', error);
+      toast.error(error?.message || 'Failed to mark truck as full.');
       return false;
     }
   };
+
+  const addDispatchToTruckTrip = async (
+    tripId: string,
+    dispatchId: string,
+  ): Promise<boolean> => {
+    try {
+      if (!user?.id) {
+        toast.error('You must be signed in to assign a dispatch.');
+        return false;
+      }
+
+      const { data: trip, error: tripError } = await (supabase as any)
+        .from('fms_truck_trips')
+        .select('id, status')
+        .eq('id', tripId)
+        .maybeSingle();
+
+      if (tripError || !trip) {
+        toast.error(tripError?.message || 'Truck trip not found.');
+        return false;
+      }
+
+      if (trip.status !== 'loading') {
+        toast.error('Dispatches can only be added while the truck is loading.');
+        return false;
+      }
+
+      const { error } = await (supabase as any)
+        .from('fms_truck_trip_dispatches')
+        .insert({
+          trip_id: tripId,
+          dispatch_id: dispatchId,
+          added_by: user.id,
+        });
+
+      if (error) {
+        console.error('[FMS] Add dispatch to truck trip error:', error);
+        toast.error(
+          error.code === '23505'
+            ? 'This dispatch is already assigned to that truck trip.'
+            : error.message || 'Failed to assign dispatch to truck trip.',
+        );
+        return false;
+      }
+
+      await fetchData();
+      toast.success('Dispatch added to truck trip.');
+      return true;
+    } catch (error: any) {
+      console.error('[FMS] Add dispatch to truck trip error:', error);
+      toast.error(error?.message || 'Failed to assign dispatch to truck trip.');
+      return false;
+    }
+  };
+
 
   /** Move a dispatch back into picking so corrections can be scanned. */
   const reopenDispatch = async (dispatchId: string): Promise<boolean> => {
@@ -1599,7 +1800,7 @@ const confirmDispatch = async (
     notes?: string
   ): Promise<number | null> => {
     try {
-      const { data, error } = await (supabase.rpc as any)('fms_apply_stock_movement', {
+      const { data, error } = await (supabase.rpc as any)('fms_apply_stock_movement_idempotent', {
         p_stock_code_id: stockCodeId,
         p_movement_type: 'receipt',
         p_quantity_change: quantity,
@@ -1973,6 +2174,10 @@ const confirmDispatch = async (
     recordDispatchScan,
     undoDispatchScan,
     confirmDispatch,
+    markTruckDeparted,
+    createTruckTrip,
+    markTruckFull,
+    addDispatchToTruckTrip,
     reopenDispatch,
     deductStockForBatch,
     addStockForReceipt,
@@ -1996,7 +2201,6 @@ const confirmDispatch = async (
     generateLotNumber,
   };
 }
-
 /**
  * Flatten the joined child rows that Supabase returns under their table names
  * onto the dispatch record, so callers use `record.items` / `record.requirements`
@@ -2025,7 +2229,6 @@ const withDispatchRelations = (dispatch: any) => {
     requirements,
   };
 };
-
 // Utility functions
 export const formatDate = (date: string | Date): string => {
   return new Date(date).toLocaleDateString('en-GB', {

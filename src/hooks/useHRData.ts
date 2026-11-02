@@ -7,7 +7,6 @@ import { string } from 'zod';
 // HR data types
 export interface HREmployee {
 
-
   id: string;
   employee_number?: string;
 
@@ -22,14 +21,14 @@ export interface HREmployee {
   phone?: string;
   address?: string;
 
- 
-
   // Employment
   department?: string;
+  
   job_title?: string;
   system_role?: string;
   employment_type?: 'full_time' | 'part_time' | 'contract' | 'temporary' | 'intern';
   start_date?: string;
+  end_date?: string;
   supervisor?: string;
 
   // Status

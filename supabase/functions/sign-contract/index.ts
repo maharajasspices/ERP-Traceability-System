@@ -20,7 +20,7 @@ const SIGNATURE_CONFIG = {
 
 const FROM_EMAIL =
   Deno.env.get("SMTP_USER") ||
-  "zulaigah.benjamin@maharajasspices.co.za";
+  "hr@maharajasspices.co.za";
 
 const FROM_NAME = "Maharaja Spices HR";
 
@@ -665,6 +665,7 @@ serve(async (req) => {
       "authorization, x-client-info, apikey, content-type",
 
     "Access-Control-Allow-Credentials":
+"Access-Control-Allow-Methods":"POST, OPTIONS",
       "true",
   };
 

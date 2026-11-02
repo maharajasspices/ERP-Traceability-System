@@ -33,7 +33,9 @@ const Settings = lazy(() => import("./pages/Settings"));
 const AdminPasswords = lazy(() => import("./pages/AdminPasswords"));
 // TEMPORARY one-time recon preview (read-only). Delete with ReconPreview.tsx after backfill.
 const ReconPreview = lazy(() => import("./pages/ReconPreview"));
-
+const OnboardEmployee = lazy(
+  () => import("./pages/OnboardEmployee")
+);
 // ============================================================
 // Authentication / public pages
 // ============================================================
@@ -233,6 +235,8 @@ const App = () => (
                 />
               </Route>
 
+
+                
               {/* ==================================================
                   AUTHENTICATION
               ================================================== */}
@@ -269,7 +273,10 @@ const App = () => (
                 path="/book-hr-meeting"
                 element={<BookHRMeeting />}
               />
-
+              <Route
+                path="/OnboardEmployee"
+                element={<OnboardEmployee />}
+              />
               {/* ==================================================
                   MAIN ERP
 

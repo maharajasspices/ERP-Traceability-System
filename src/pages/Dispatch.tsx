@@ -38,7 +38,7 @@ const Dispatch: React.FC = () => {
     recordDispatchScan,
     undoDispatchScan,
     confirmDispatch,
-markTruckDeparted,
+    markTruckDeparted,
     refreshData,
   } = useFMSData();
   const { canDelete } = useDeletePermission();
@@ -347,7 +347,7 @@ markTruckDeparted,
               New Dispatch
             </Button>
           </DialogTrigger>
-          <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-[720px]">
+           <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-[720px]">
             <DialogHeader>
               <DialogTitle>New Dispatch from invoices</DialogTitle>
               <DialogDescription>
@@ -362,7 +362,7 @@ markTruckDeparted,
                 invoices={invoiceDrafts}
                 onChange={setInvoiceDrafts}
               />
-<div className="space-y-2">
+            <div className="space-y-2">
                 <label className="text-xs font-medium text-muted-foreground block mb-1">Truck Plate</label>
                 <Input
                   value={truckPlate}

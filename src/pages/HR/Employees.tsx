@@ -2,7 +2,7 @@ import React, { useMemo, useState, useRef } from 'react';
 import { useHRData, HREmployee, HRWarning } from '@/hooks/useHRData';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
-
+import * as XLSX from 'xlsx';
 
 import {
   Users,
@@ -29,6 +29,44 @@ import {
   PenLine,
 } from 'lucide-react';
 
+
+type EmployeeImportRow = {
+  first_name: string;
+  last_name: string;
+  id_number?: string;
+  date_of_birth?: string;
+  email?: string;
+  phone?: string;
+  address?: string;
+  department?: string;
+  job_title?: string;
+  system_role?: string;
+  employment_type?: HREmployee['employment_type'];
+  start_date?: string;
+  supervisor?: string;
+  status?: HREmployee['status'];
+  emergency_contact_name?: string;
+  emergency_contact_phone?: string;
+  bank_name?: string;
+  bank_account_number?: string;
+};
+
+type EmployeeImportPreviewRow = {
+  rowNumber: number;
+  employee: EmployeeImportRow;
+  errors: string[];
+  duplicate: boolean;
+};
+const EMPLOYEE_DEPARTMENTS = [
+  'Retail - Westville',
+  'Retail - Waterfall',
+  'Retail - Cornubia',
+  'Production',
+  'Production',
+  'IT',
+  'Admin',
+  'Deli-ish - Pick n Pay',
+]
 const Employees: React.FC = () => {
   const {
     employees,
@@ -78,6 +116,14 @@ const Employees: React.FC = () => {
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [documentType, setDocumentType] = useState('contract');
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+//Import Bulk Employee Button
+// Employee import state
+const [showImportEmployees, setShowImportEmployees] = useState(false);
+const [importFile, setImportFile] = useState<File | null>(null);
+const [importPreview, setImportPreview] = useState<Record<string, unknown>[]>([]);
+const [importErrors, setImportErrors] = useState<string[]>([]);
+const [importingEmployees, setImportingEmployees] = useState(false);
 
   // Contract signature state
   const [sendingContractSignature, setSendingContractSignature] = useState(false);
@@ -727,6 +773,308 @@ const Employees: React.FC = () => {
   // PAGE
   // ------------------------------------------------------------
 
+  
+const normaliseHeader = (header: string) =>
+  header.trim().toLowerCase().replace(/[\s-]+/g, '_');
+
+const readEmployeeImportFile = async (file: File) => {
+  const extension = file.name.split('.').pop()?.toLowerCase();
+
+  if (!['xlsx', 'csv'].includes(extension || '')) {
+    toast.error('Please select an Excel (.xlsx) or CSV (.csv) file.');
+    return;
+  }
+
+  try {
+    const buffer = await file.arrayBuffer();
+    const workbook = XLSX.read(buffer, { type: 'array', cellDates: true });
+    const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+
+    if (!worksheet) {
+      toast.error('The selected file contains no worksheet.');
+      return;
+    }
+
+    const rawRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(
+      worksheet,
+      { defval: '', raw: false }
+    );
+
+    if (!rawRows.length) {
+      toast.error('The file contains no employee rows.');
+      setImportPreview([]);
+      return;
+    }
+
+    const existingIds = new Set(
+      employees
+        .map(employee => employee.id_number?.trim().toLowerCase())
+        .filter((id): id is string => Boolean(id))
+    );
+
+    const uploadedIds = new Set<string>();
+
+    const preview: EmployeeImportPreviewRow[] = rawRows.map(
+      (rawRow, index) => {
+        const row: Record<string, unknown> = {};
+
+        Object.entries(rawRow).forEach(([key, value]) => {
+          row[normaliseHeader(key)] = value;
+        });
+
+        const text = (key: string) =>
+          String(row[key] ?? '').trim();
+
+        const employee: EmployeeImportRow = {
+          first_name: text('first_name'),
+          last_name: text('last_name'),
+          id_number: text('id_number') || undefined,
+          date_of_birth: text('date_of_birth') || undefined,
+          email: text('email') || undefined,
+          phone: text('phone') || undefined,
+          address: text('address') || undefined,
+          department: text('department') || undefined,
+          job_title: text('job_title') || undefined,
+          system_role: 'employee',
+          employment_type: (
+            text('employment_type') || 'full_time'
+          ) as HREmployee['employment_type'],
+          start_date: text('start_date') || undefined,
+          supervisor: text('supervisor') || undefined,
+          status: (
+            text('status') || 'active'
+          ) as HREmployee['status'],
+          emergency_contact_name:
+            text('emergency_contact_name') || undefined,
+          emergency_contact_phone:
+            text('emergency_contact_phone') || undefined,
+          bank_name: text('bank_name') || undefined,
+          bank_account_number:
+            text('bank_account_number') || undefined,
+        };
+
+        const errors: string[] = [];
+
+        if (!employee.first_name) errors.push('First name is required.');
+        if (!employee.last_name) errors.push('Last name is required.');
+
+        if (
+          employee.email &&
+          !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(employee.email)
+        ) {
+          errors.push('Invalid email address.');
+        }
+
+        if (
+          employee.employment_type &&
+          !['full_time', 'part_time', 'contract', 'temporary', 'intern']
+            .includes(employee.employment_type)
+        ) {
+          errors.push('Invalid employment type.');
+        }
+
+        if (
+          employee.status &&
+          !['active', 'inactive', 'on_leave', 'terminated']
+            .includes(employee.status)
+        ) {
+          errors.push('Invalid employee status.');
+        }
+
+        const id = employee.id_number?.toLowerCase();
+        const duplicate = Boolean(
+          id && (existingIds.has(id) || uploadedIds.has(id))
+        );
+
+        if (id) uploadedIds.add(id);
+
+        if (duplicate) {
+          errors.push('Duplicate ID/passport number.');
+        }
+
+        return {
+          rowNumber: index + 2,
+          employee,
+          errors,
+          duplicate,
+        };
+      }
+    );
+
+    setImportFile(file);
+    setImportPreview(preview);
+  } catch (error) {
+    console.error('Employee import file error:', error);
+    toast.error('Could not read this file. Check its format and try again.');
+  }
+};
+
+
+const handleImportEmployees = async () => {
+  const validRows = importPreview.filter(row => row.errors.length === 0);
+
+  if (!validRows.length) {
+    toast.error('There are no valid employee rows to import.');
+    return;
+  }
+
+  const confirmed = window.confirm(
+    `Import ${validRows.length} employee(s)? Existing employees will not be overwritten.`
+  );
+
+  if (!confirmed) return;
+
+  setImportingEmployees(true);
+
+  let imported = 0;
+  let failed = 0;
+  const failureMessages: string[] = [];
+
+  try {
+    for (const row of validRows) {
+      const employee = row.employee;
+
+      // Check the latest database records before inserting.
+      if (employee.id_number) {
+        const { data: existing, error: duplicateError } = await supabase
+          .from('fms_hr_employees')
+          .select('id')
+          .eq('id_number', employee.id_number)
+          .maybeSingle();
+
+        if (duplicateError) {
+          failed++;
+          failureMessages.push(
+            `Row ${row.rowNumber}: Could not check duplicate ID.`
+          );
+          continue;
+        }
+
+        if (existing) {
+          failed++;
+          failureMessages.push(
+            `Row ${row.rowNumber}: ID/passport number already exists.`
+          );
+          continue;
+        }
+      }
+
+      const result = await addEmployee({
+        first_name: employee.first_name,
+        last_name: employee.last_name,
+        id_number: employee.id_number || undefined,
+        date_of_birth: employee.date_of_birth || undefined,
+        email: employee.email || undefined,
+        phone: employee.phone || undefined,
+        address: employee.address || undefined,
+        department: employee.department || undefined,
+        job_title: employee.job_title || undefined,
+        system_role: 'employee',
+        employment_type: employee.employment_type || 'full_time',
+        start_date: employee.start_date || undefined,
+        end_date: employee.end_date || undefined,
+        supervisor: employee.supervisor || undefined,
+        status: employee.status || 'active',
+        contract_signed: false,
+        emergency_contact_name:
+          employee.emergency_contact_name || undefined,
+        emergency_contact_phone:
+          employee.emergency_contact_phone || undefined,
+        bank_name: employee.bank_name || undefined,
+        bank_account_number: employee.bank_account_number || undefined,
+      });
+
+      if (result) {
+        imported++;
+      } else {
+        failed++;
+        failureMessages.push(
+          `Row ${row.rowNumber}: Could not save ${employee.first_name} ${employee.last_name}.`
+        );
+      }
+    }
+
+    const summary = [
+      `Import finished. Imported: ${imported}. Failed or skipped: ${failed}.`,
+      ...failureMessages,
+    ];
+
+    window.alert(summary.join('\n'));
+
+    if (imported > 0) {
+      setShowImportEmployees(false);
+      setImportFile(null);
+      setImportPreview([]);
+    }
+  } catch (error) {
+    console.error('Employee import failed:', error);
+    toast.error('The import encountered an unexpected error.');
+  } finally {
+    setImportingEmployees(false);
+  }
+};
+
+
+const downloadEmployeeImportTemplate = () => {
+  const headers = [
+    'first_name',
+    'last_name',
+    'id_number',
+    'date_of_birth',
+    'email',
+    'phone',
+    'address',
+    'department',
+    'job_title',
+    'employment_type',
+    'start_date',
+    'end_date',
+    'supervisor',
+    'status',
+    'emergency_contact_name',
+    'emergency_contact_phone',
+    'bank_name',
+    'bank_account_number',
+  ];
+
+  const exampleRow = [
+    'John',
+    'Smith',
+    '9001015000088',
+    '1990-01-01',
+    'john.smith@example.com',
+    '0821234567',
+    '123 Example Street, Durban',
+    'Production',
+    'Production Operator',
+    'full_time',
+    '2026-01-01',
+    '2027-01-01',
+    '',
+    'active',
+    'Jane Smith',
+    '0827654321',
+    'Example Bank',
+    '1234567890',
+  ];
+
+  const worksheet = XLSX.utils.aoa_to_sheet([
+    headers,
+    exampleRow,
+  ]);
+
+  worksheet['!cols'] = headers.map(() => ({ wch: 24 }));
+
+  const workbook = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(
+    workbook,
+    worksheet,
+    'Employee Import Template'
+  );
+
+  XLSX.writeFile(workbook, 'employee_import_template.xlsx');
+};
+
   return (
     <div className="space-y-6 p-6">
 
@@ -758,6 +1106,151 @@ const Employees: React.FC = () => {
         </button>
 
       </div>
+
+       <button 
+            type='button'
+            onClick={() => setShowImportEmployees(true)}
+            className='inline-flex items-center gap-2 rounded-md border px-4 py-2 hover:bg-muted'
+            >
+              <Upload size={18}/>
+              Import Employees
+
+        </button>
+      <div>
+        <button
+  type="button"
+  onClick={downloadEmployeeImportTemplate}
+  className="inline-flex items-center gap-2 rounded-md border px-4 py-2 hover:bg-muted"
+>
+  <FileText size={18} />
+  Download Import Template
+</button>
+      </div>
+      
+{/* Import Employees Dialog */}
+{showImportEmployees && (
+  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+    <div className="w-full max-w-5xl max-h-[90vh] overflow-y-auto rounded-xl bg-background p-6 shadow-xl">
+      <div className="mb-5 flex items-center justify-between gap-4">
+        <div>
+          <h2 className="text-xl font-bold">Import Employees</h2>
+          <p className="text-sm text-muted-foreground">
+            Upload an Excel or CSV file to preview employee records.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            setShowImportEmployees(false);
+            setImportFile(null);
+            setImportPreview([]);
+          }}
+          className="rounded-md p-2 hover:bg-muted"
+          aria-label="Close import dialog"
+        >
+          <X size={20} />
+        </button>
+      </div>
+      <div className="mb-5 rounded-lg border border-dashed p-5">
+        <label className="mb-2 block font-medium">
+          Select employee spreadsheet
+        </label>
+        <input
+          type="file"
+          accept=".xlsx,.csv"
+          className="block w-full text-sm"
+          onChange={event => {
+            const file = event.target.files?.[0];
+            if (file) void readEmployeeImportFile(file);
+          }}
+        />
+        {importFile && (
+          <p className="mt-2 text-sm text-muted-foreground">
+            Selected: {importFile.name}
+          </p>
+        )}
+      </div>
+
+      {importPreview.length > 0 && (
+        <>
+          <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <div className="rounded-lg border p-3">
+              <p className="text-sm text-muted-foreground">Total rows</p>
+              <p className="text-2xl font-bold">{importPreview.length}</p>
+            </div>
+
+            <div className="rounded-lg border p-3">
+              <p className="text-sm text-muted-foreground">Ready to import</p>
+              <p className="text-2xl font-bold text-green-600">
+                {importPreview.filter(row => row.errors.length === 0).length}
+              </p>
+            </div>
+
+            <div className="rounded-lg border p-3">
+              <p className="text-sm text-muted-foreground">Rows with issues</p>
+              <p className="text-2xl font-bold text-destructive">
+                {importPreview.filter(row => row.errors.length > 0).length}
+              </p>
+            </div>
+          </div>
+
+          <div className="overflow-x-auto rounded-lg border">
+            <table className="w-full text-left text-sm">
+              <thead className="bg-muted">
+                <tr>
+                  <th className="p-3">Row</th>
+                  <th className="p-3">First name</th>
+                  <th className="p-3">Last name</th>
+                  <th className="p-3">ID/passport</th>
+                  <th className="p-3">Department</th>
+                  <th className="p-3">Result</th>
+                </tr>
+              </thead>
+
+              <tbody>
+                {importPreview.map(row => (
+                  <tr key={row.rowNumber} className="border-t">
+                    <td className="p-3">{row.rowNumber}</td>
+                    <td className="p-3">{row.employee.first_name || '—'}</td>
+                    <td className="p-3">{row.employee.last_name || '—'}</td>
+                    <td className="p-3">{row.employee.id_number || '—'}</td>
+                    <td className="p-3">{row.employee.department || '—'}</td>
+                    <td className="p-3">
+                      {row.errors.length === 0 ? (
+                        <span className="text-green-600">Ready</span>
+                      ) : (
+                        <span className="text-destructive">
+                          {row.errors.join(' ')}
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+
+      <button
+  type="button"
+  onClick={() => void handleImportEmployees()}
+  disabled={
+    importingEmployees ||
+    importPreview.length === 0 ||
+    !importPreview.some(row => row.errors.length === 0)
+  }
+  className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2 text-primary-foreground disabled:cursor-not-allowed disabled:opacity-50"
+>
+  {importingEmployees && (
+    <Loader2 size={16} className="animate-spin" />
+  )}
+  {importingEmployees ? 'Importing...' : 'Import Valid Employees'}
+</button>
+    </div>
+  </div>
+)}
+
 
       {/* ======================================================
           STATISTICS
@@ -1141,6 +1634,8 @@ const Employees: React.FC = () => {
                 <X className="h-5 w-5" />
               </button>
             </div>
+
+          
             {/* Form */}
             <form
               onSubmit={async (e) => {
@@ -1169,6 +1664,7 @@ const Employees: React.FC = () => {
                     system_role: employeeForm.system_role || undefined,
                     employment_type: employeeForm.employment_type,
                     start_date: employeeForm.start_date || undefined,
+                    end_date: employeeForm.end_date || undefined,
                     supervisor: employeeForm.supervisor || undefined,
                     status: employeeForm.status,
                     contract_signed: employeeForm.contract_signed,
@@ -1374,63 +1870,71 @@ const Employees: React.FC = () => {
 
                 <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
 
-                  <div>
-                    <label className="mb-1 block text-sm font-medium text-gray-700">
-                      Department
-                    </label>
+                  
 
-                    <select
-                      value={employeeForm.department}
-                      onChange={event =>
-                        setEmployeeForm({
-                          ...employeeForm,
-                          department:
-                            event.target.value,
-                        })
-                      }
-                      className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-[#ef302b]"
-                    >
+              <div>
+                <label className="mb-1 block text-sm font-medium text-gray-700">
+                  Department
+                </label>
 
-                      <option value="">
-                        Select department
+                <select
+                  value={employeeForm.department || ''}
+                  onChange={event =>
+                    setEmployeeForm({
+                      ...employeeForm,
+                      department: event.target.value,
+                    })
+                  }
+                  className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm outline-none focus:border-[#ef302b]"
+                >
+                  <option value="">
+                    Select department
+                  </option>
+
+                  {/* Preserve the employee's existing department */}
+                  {employeeForm.department &&
+                    ![
+                      'Retail – Westville',
+                      'Retail – Waterfall',
+                      'Retail – Cornubia',
+                      'Production',
+                      'IT',
+                      'Admin',
+                      'Delish – Pick n Pay',
+                    ].includes(employeeForm.department) && (
+                      <option value={employeeForm.department}>
+                        {employeeForm.department} (existing)
                       </option>
+                    )}
 
-                      <option value="HR">
-                        HR
-                      </option>
+                  <option value="Retail – Westville">
+                    Retail – Westville
+                  </option>
 
-                      <option value="Production">
-                        Production
-                      </option>
+                  <option value="Retail – Waterfall">
+                    Retail – Waterfall
+                  </option>
 
-                      <option value="Warehouse">
-                        Warehouse
-                      </option>
+                  <option value="Retail – Cornubia">
+                    Retail – Cornubia
+                  </option>
 
-                      <option value="Quality Control">
-                        Quality Control
-                      </option>
+                  <option value="Production">
+                    Production
+                  </option>
 
-                      <option value="Sales">
-                        Sales
-                      </option>
+                  <option value="IT">
+                    IT
+                  </option>
 
-                      <option value="Finance">
-                        Finance
-                      </option>
-
-                      <option value="Administration">
-                        Administration
-                      </option>
-
-                      <option value="IT">
-                        IT
-                      </option>
-
-                    </select>
-
-                  </div>
-
+                  <option value="Admin">
+                    Admin
+                  </option>
+                  <option value="Delish – Pick n Pay">
+                  Delish – Pick n Pay
+                </option>
+                </select>
+              </div>
                   <div>
                     <label className="mb-1 block text-sm font-medium text-gray-700">
                       Job Title

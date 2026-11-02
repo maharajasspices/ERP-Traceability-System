@@ -226,6 +226,20 @@ const [receivedDateTo, setReceivedDateTo] = useState('');
   const [parsingInvoice, setParsingInvoice] = useState(false);
   const [parseStatus, setParseStatus] = useState<{ found: number; matched: number } | null>(null);
   const [orderItems, setOrderItems] = useState<{ stock_code_id: string; stock_code: string; description: string; quantity_ordered: string; uom: string }[]>([]);
+
+  //Physical orders placed outide the erp
+// Physical orders placed outside the ERP
+const [physicalOrderOpen, setPhysicalOrderOpen] = useState(false);
+const [physicalOrderSaving, setPhysicalOrderSaving] = useState(false);
+const [physicalSupplierId, setPhysicalSupplierId] = useState('');
+const [physicalOrderDate, setPhysicalOrderDate] = useState(
+  new Date().toISOString().split('T')[0]
+);
+const [physicalOrderNotes, setPhysicalOrderNotes] = useState('');
+const [physicalOrderItems, setPhysicalOrderItems] = useState<
+  { stock_code_id: string; quantity_ordered: string }[]
+>([{ stock_code_id: '', quantity_ordered: '' }]);
+
   const [orderFormData, setOrderFormData] = useState({
     po_number: `PO-${new Date().getFullYear()}-${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`,
     order_date: new Date().toISOString().split('T')[0],
@@ -241,6 +255,20 @@ const [receivedDateTo, setReceivedDateTo] = useState('');
   const [confirmReceiverName, setConfirmReceiverName] = useState('');
   const [confirmCoaContent, setConfirmCoaContent] = useState('');
   const [confirmQualityChecks, setConfirmQualityChecks] = useState<Record<string, boolean>>({});
+
+
+ const [pendingReceiptRecords, setPendingReceiptRecords] = useState<
+  Record<
+    string,
+    {
+      id: string;
+      lotNumber: string;
+      quantity: number;
+      expiry: string;
+      qualityChecksSignature: string;
+    }
+  >
+>({});
 
   // Emailed order confirmation state - matches receiving log form
   const [confirmingEmailOrder, setConfirmingEmailOrder] = useState<typeof supplierOrderEmails[0] | null>(null);
@@ -1233,15 +1261,30 @@ const handleSelectAllQualityChecks = () => {
 
   // Validate items being received
   for (const it of toReceive) {
+    
     const name =
       getStockCode(it.stock_code_id)?.description || 'item';
 
     const state = confirmState[it.id];
+        const quantityToReceive = parseFloat(state?.qty || '0');
+    const alreadyReceived = Number(it.quantity_received ?? 0);
+    const orderedQuantity = Number(it.quantity_ordered ?? 0);
+    const outstandingQuantity = Math.max(
+      0,
+      orderedQuantity - alreadyReceived
+    );
+if (!Number.isFinite(quantityToReceive) || quantityToReceive <= 0) {
+  toast.error(`Enter a valid quantity received for ${name}`);
+  return;
+}
 
-    if (!(parseFloat(state?.qty || '') > 0)) {
-      toast.error(`Enter the quantity received for ${name}`);
-      return;
-    }
+if (quantityToReceive > outstandingQuantity) {
+  toast.error(
+    `${name}: you can receive a maximum of ${outstandingQuantity} more.`
+  );
+  return;
+}
+    
 
     // The LOT number is optional: a typed one is kept, a blank one is generated
     // on save, so traceability is never left blank.
@@ -1331,18 +1374,25 @@ const handleSelectAllQualityChecks = () => {
         allOk = false;
         continue;
       }
-
       // Add received quantity to stock (only for accepted receipts)
-      if (!hasFailed) {
-        await addStockForReceipt(
-          it.stock_code_id,
-          qty,
-          lotNumber,
-          `Receipt ${lotNumber} - ${
-            getStockCode(it.stock_code_id)?.description || ''
-          } (${confirmOrder.po_number})`
-        );
-      }
+        if (!hasFailed) {
+          const stockResult = await addStockForReceipt(
+            it.stock_code_id,
+            qty,
+            lotNumber,
+            `Receipt ${lotNumber} - ${
+              getStockCode(it.stock_code_id)?.description || ''
+            } (${confirmOrder.po_number})`
+          );
+
+          if (stockResult === null) {
+            allOk = false;
+            toast.error(
+              `Receipt ${lotNumber} was recorded, but the stock update failed. Please investigate before retrying.`
+            );
+            continue;
+          }
+        }
 
       // Calculate total received for this item
       const newQuantityReceived =
@@ -1476,6 +1526,8 @@ const handleSelectAllQualityChecks = () => {
   }
 };
 
+
+
   // Confirm receipt for an emailed order - same process as receiving log
   const handleConfirmEmailOrderReceipt = async () => {
     if (!confirmingEmailOrder) return;
@@ -1546,7 +1598,6 @@ const handleSelectAllQualityChecks = () => {
         received_by: user?.id || '',
         cost_price_per_kg: costNum != null && !isNaN(costNum) ? costNum : null,
       } as any);
-
       if (!result) {
         toast.error('Failed to save receiving record');
         return;
@@ -2252,6 +2303,78 @@ const handleCreateOrder = async () => {
     );
   } finally {
     setSavingOrder(false);
+  }
+};
+const handleCreatePhysicalOrder = async () => {
+  if (!physicalSupplierId) {
+    toast.error('Please select a supplier.');
+    return;
+  }
+
+  const validItems = physicalOrderItems
+    .map(item => ({
+      stock_code_id: item.stock_code_id,
+      quantity_ordered: Number(item.quantity_ordered),
+    }))
+    .filter(
+      item =>
+        item.stock_code_id &&
+        Number.isFinite(item.quantity_ordered) &&
+        item.quantity_ordered > 0
+    );
+
+  if (validItems.length === 0) {
+    toast.error('Add at least one stock item with a quantity.');
+    return;
+  }
+
+  setPhysicalOrderSaving(true);
+
+  try {
+    const poNumber =
+      `PHYS-${new Date().getFullYear()}-${Date.now()}`;
+
+    const ok = await createStockOrder(
+      {
+        po_number: poNumber,
+        supplier_id: physicalSupplierId,
+        order_date: physicalOrderDate,
+        notes: [
+          '[PHYSICAL_ORDER]',
+          physicalOrderNotes.trim(),
+        ].filter(Boolean).join(' '),
+      },
+      validItems.map(item => {
+        const stockCode = stockCodes.find(
+          code => code.id === item.stock_code_id
+        );
+
+        return {
+          stock_code_id: item.stock_code_id,
+          quantity_ordered: item.quantity_ordered,
+          uom: stockCode?.unit_of_measure || 'kg',
+        };
+      })
+    );
+
+    if (ok) {
+      toast.success('Physical order recorded. No stock has been added yet.');
+
+      setPhysicalOrderOpen(false);
+      setPhysicalSupplierId('');
+      setPhysicalOrderDate(new Date().toISOString().split('T')[0]);
+      setPhysicalOrderNotes('');
+      setPhysicalOrderItems([
+        { stock_code_id: '', quantity_ordered: '' },
+      ]);
+
+      await refreshData();
+    }
+  } catch (error) {
+    console.error('Physical order creation failed:', error);
+    toast.error('Could not record the physical order.');
+  } finally {
+    setPhysicalOrderSaving(false);
   }
 };
 
@@ -3423,7 +3546,14 @@ const getExportFilteredRecords = () => {
               <h3 className="font-semibold">
                 Orderes placed and pending deliveries.
               </h3>
-
+<Button
+  size="sm"
+  className="gap-2 ml-auto"
+  onClick={() => setPhysicalOrderOpen(true)}
+>
+  <Plus className="h-4 w-4" />
+  Record Physical Order
+</Button>
               <Badge variant="outline">
                 {stockOrders.filter(o => o.status !== 'CHECKED').length + (supplierOrderEmails || []).filter(e => e.status === 'pending').length}{' '}
                 open
@@ -3441,8 +3571,181 @@ const getExportFilteredRecords = () => {
                 </Button>
               )}
             </div>
+<Dialog
+  open={physicalOrderOpen}
+  onOpenChange={setPhysicalOrderOpen}
+>
+  <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-[650px]">
+    <DialogHeader>
+      <DialogTitle>Record Physical Stock Order</DialogTitle>
+      <DialogDescription>
+        Record stock ordered directly from a supplier.
+        This does not increase inventory until the delivery is received and confirmed.
+      </DialogDescription>
+    </DialogHeader>
 
+    <div className="space-y-4">
+      <div className="space-y-2">
+        <Label>Supplier *</Label>
+
+        <Select
+          value={physicalSupplierId}
+          onValueChange={setPhysicalSupplierId}
+        >
+          <SelectTrigger>
+            <SelectValue placeholder="Select supplier" />
+          </SelectTrigger>
+
+          <SelectContent>
+            {suppliers.map(supplier => (
+              <SelectItem key={supplier.id} value={supplier.id}>
+                {supplier.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+
+      <div className="space-y-2">
+        <Label>Order Date *</Label>
+        <Input
+          type="date"
+          value={physicalOrderDate}
+          onChange={e => setPhysicalOrderDate(e.target.value)}
+        />
+      </div>
+
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <Label>Stock Items *</Label>
+
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() =>
+              setPhysicalOrderItems(prev => [
+                ...prev,
+                { stock_code_id: '', quantity_ordered: '' },
+              ])
+            }
+          >
+            <Plus className="h-4 w-4 mr-1" />
+            Add Item
+          </Button>
+        </div>
+
+        {physicalOrderItems.map((item, index) => (
+          <div
+            key={index}
+            className="grid grid-cols-1 sm:grid-cols-[1fr_120px_auto] gap-2 items-end rounded-lg border p-3"
+          >
+            <div className="space-y-2">
+              <Label>Stock Item</Label>
+
+              <Select
+                value={item.stock_code_id}
+                onValueChange={value =>
+                  setPhysicalOrderItems(prev =>
+                    prev.map((row, i) =>
+                      i === index
+                        ? { ...row, stock_code_id: value }
+                        : row
+                    )
+                  )
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select stock" />
+                </SelectTrigger>
+
+                <SelectContent>
+                  {stockCodes.map(code => (
+                    <SelectItem key={code.id} value={code.id}>
+                      {code.stock_code} — {code.description}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label>Qty Ordered</Label>
+              <Input
+                type="number"
+                min="0.01"
+                step="any"
+                value={item.quantity_ordered}
+                onChange={e =>
+                  setPhysicalOrderItems(prev =>
+                    prev.map((row, i) =>
+                      i === index
+                        ? { ...row, quantity_ordered: e.target.value }
+                        : row
+                    )
+                  )
+                }
+                placeholder="Quantity"
+              />
+            </div>
+
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              disabled={physicalOrderItems.length === 1}
+              onClick={() =>
+                setPhysicalOrderItems(prev =>
+                  prev.filter((_, i) => i !== index)
+                )
+              }
+              title="Remove item"
+            >
+              <Trash2 className="h-4 w-4 text-destructive" />
+            </Button>
+          </div>
+        ))}
+      </div>
+
+      <div className="space-y-2">
+        <Label>Notes (optional)</Label>
+        <Textarea
+          rows={2}
+          value={physicalOrderNotes}
+          onChange={e => setPhysicalOrderNotes(e.target.value)}
+          placeholder="Expected delivery date, reference, or other details"
+        />
+      </div>
+    </div>
+
+    <DialogFooter>
+      <Button
+        variant="outline"
+        onClick={() => setPhysicalOrderOpen(false)}
+        disabled={physicalOrderSaving}
+      >
+        Cancel
+      </Button>
+
+      <Button
+        onClick={handleCreatePhysicalOrder}
+        disabled={physicalOrderSaving}
+      >
+        {physicalOrderSaving && (
+          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+        )}
+        Record Physical Order
+      </Button>
+    </DialogFooter>
+  </DialogContent>
+</Dialog>
             <div className="space-y-3">
+              <div className='border-b pb-2 mb-3'>
+                <h4 className='font-semibold'> Awaiting Supplier Deliveries</h4>
+                <p className='text-sm text-muted-foreground'>
+                  Stock Orders emailed to suppliers that have not yet been received. Confirm receipt when the delivery arrives.
+                </p>
+              </div>
               {/* Emailed Supplier Orders (from Stock Tracking) */}
               {(supplierOrderEmails || [])
                 .filter(e => e.status === 'pending')
@@ -3518,11 +3821,65 @@ const getExportFilteredRecords = () => {
                     </div>
                   );
               })}
+              <div className="border-b pb-2 mb-3 mt-6">
+                <div className="border-b pb-2 mb-3">
+  <h4 className="font-semibold">Pending Physical Deliveries</h4>
+  <p className="text-sm text-muted-foreground">
+    Orders placed directly with suppliers, awaiting delivery.
+  </p>
+</div>
+
+{stockOrders
+  .filter(
+    order =>
+      order.status !== 'CHECKED' &&
+      String((order as any).notes ?? '').startsWith('[PHYSICAL_ORDER]')
+  )
+  .map(order => (
+    <div
+      key={`physical-${order.id}`}
+      className="flex flex-wrap items-center gap-3 rounded-lg border border-amber-200 p-3"
+    >
+      <div className="flex-1 min-w-[220px]">
+        <p className="font-medium">{order.po_number}</p>
+        <p className="text-sm text-muted-foreground">
+          {suppliers.find(s => s.id === order.supplier_id)?.name || 'Unknown supplier'}
+          {' · '}
+          Ordered {formatDate(order.order_date)}
+        </p>
+        <p className="text-sm text-muted-foreground">
+          {order.items.length} item line{order.items.length !== 1 ? 's' : ''}
+        </p>
+      </div>
+
+      <Badge className="bg-amber-500 text-white">
+        Awaiting Delivery
+      </Badge>
+
+      <Button
+        size="sm"
+        onClick={() => openConfirmDialog(order)}
+        className="gap-2"
+      >
+        <PackageCheck className="h-4 w-4" />
+        Confirm Received
+      </Button>
+    </div>
+  ))}
+                <h4 className="font-semibold">Invoice Stock Orders</h4>
+                <p className="text-sm text-muted-foreground">
+                  Review and confirm stock orders created from uploaded invoices.
+                </p>
+              </div>
 
               {/* Stock Orders (from Invoice Upload) */}
-              {stockOrders
-                .filter(o => o.status !== 'CHECKED')
-                .map(order => {
+             {stockOrders
+  .filter(
+    o =>
+      o.status !== 'CHECKED' &&
+      !(String((o as any).notes ?? '').startsWith('[PHYSICAL_ORDER]'))
+  )
+  .map(order => {
           const supplier = getSupplier(order.supplier_id);
 
           const receivedCount = order.items.filter(
