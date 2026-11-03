@@ -47,13 +47,14 @@ export interface FMSStockCode {
 export interface FMSReceiving {
   id: string;
   internal_lot_number: string;
-  received_at: string;
+  received_at: string | null;
   stock_code_id: string;
   quantity_received: number;
   supplier_id: string;
   supplier_batch_number: string;
   manufacturing_date?: string | null;
   expiry_date?: string | null;
+  expected_delivery_date?: string | null;
   delivery_note_number?: string;
   quality_checks: Record<string, any>;
   status: 'accepted' | 'declined' | 'partial' | 'pending';
@@ -61,6 +62,22 @@ export interface FMSReceiving {
   received_by: string;
   created_at: string;
   cost_price_per_kg?: number | null;
+  confirmed_at?: string | null;
+  confirmed_by?: string | null;
+  stock_applied?: boolean;
+
+  // Original quantity and confirmation audit history
+  expected_quantity_received?: number | null;
+  confirmation_audit?: Array<{
+    changed_at: string;
+    changed_by: string | null;
+    original_quantity: number;
+    actual_quantity: number;
+    original_supplier_batch_number: string | null;
+    actual_supplier_batch_number: string;
+    original_expiry_date: string | null;
+    actual_expiry_date: string;
+  }>;
 }
 
 export interface FMSStockOrderItem {
@@ -1797,24 +1814,45 @@ const markTruckDeparted = async (
     stockCodeId: string,
     quantity: number,
     referenceId: string,
-    notes?: string
+    notes?: string,
+    receivingRecordId?: string  // NEW: receiving record ID for idempotent stock application
   ): Promise<number | null> => {
     try {
-      const { data, error } = await (supabase.rpc as any)('fms_apply_stock_movement_idempotent', {
-        p_stock_code_id: stockCodeId,
-        p_movement_type: 'receipt',
-        p_quantity_change: quantity,
-        p_reference_id: referenceId,
-        p_notes: notes || `Receipt ${referenceId}`,
-        p_created_by: user?.id || null,
-      });
-      
-      if (error) {
-        console.error('[FMS] Stock receipt error:', error);
-        return null;
+      if (receivingRecordId) {
+        // Use idempotent version when we have a receiving record ID
+        const { data, error } = await (supabase.rpc as any)('fms_apply_stock_movement_idempotent', {
+          p_stock_code_id: stockCodeId,
+          p_movement_type: 'receipt',
+          p_quantity_change: quantity,
+          p_receiving_record_id: receivingRecordId,
+          p_notes: notes || `Receipt ${referenceId}`,
+          p_created_by: user?.id || null,
+        });
+
+        if (error) {
+          console.error('[FMS] Stock receipt error:', error);
+          return null;
+        }
+
+        return Number(data ?? 0);
+      } else {
+        // Fallback to regular version for non-receiving-record cases
+        const { data, error } = await (supabase.rpc as any)('fms_apply_stock_movement', {
+          p_stock_code_id: stockCodeId,
+          p_movement_type: 'receipt',
+          p_quantity_change: quantity,
+          p_reference_id: referenceId,
+          p_notes: notes || `Receipt ${referenceId}`,
+          p_created_by: user?.id || null,
+        });
+
+        if (error) {
+          console.error('[FMS] Stock receipt error:', error);
+          return null;
+        }
+
+        return Number(data ?? 0);
       }
-      
-      return Number(data ?? 0);
     } catch (err) {
       console.error('[FMS] Stock receipt unexpected error:', err);
       return null;

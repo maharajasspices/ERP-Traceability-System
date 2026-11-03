@@ -52,6 +52,7 @@ const roleLabels: Record<string, string> = {
   dispatch_user: 'Dispatch User',
   qa_viewer: 'QA Viewer',
   hr_user: 'HR User',
+  hr_admin: 'HR Admin',
 };
 
 const roleOptions = Object.keys(roleLabels);
@@ -59,6 +60,12 @@ const roleOptions = Object.keys(roleLabels);
 const AdminPasswords: React.FC = () => {
   const { user, fmsUser } = useFMSAuth();
   const isAdmin = fmsUser?.role === 'system_admin';
+  const isHRAdmin = fmsUser?.role === 'hr_admin';
+  const canManageUsers = isAdmin || isHRAdmin;
+
+  const availableRoleOptions = isHRAdmin
+  ? ['hr_user']
+  : roleOptions;
 
   const [users, setUsers] = useState<FMSAdminUser[]>([]);
   const [loading, setLoading] = useState(true);
@@ -129,7 +136,9 @@ const AdminPasswords: React.FC = () => {
   const fetchUsers = async () => {
     try {
       setLoading(true);
-      const result = await callFunction({ operation: 'list_users' });
+      const result = await callFunction({
+        operation: isHRAdmin ? 'hr_list_users' : 'list_users',
+      })
       if (result) {
         setUsers(result.users || []);
       }
@@ -142,10 +151,10 @@ const AdminPasswords: React.FC = () => {
   };
 
   useEffect(() => {
-    if (isAdmin) {
-      fetchUsers();
-    }
-  }, [isAdmin]);
+    if (canManageUsers) {
+  fetchUsers();
+}
+  }, [isAdmin, canManageUsers, isHRAdmin]);
 
   const openSetDialog = (u: FMSAdminUser) => {
     if (u.user_id === user?.id) {
@@ -182,7 +191,7 @@ const AdminPasswords: React.FC = () => {
 
     try {
       await callFunction({
-        operation: 'set_password',
+        operation: isHRAdmin ? 'hr_set_password' : 'set_password',
         target_user_id: selectedUser.user_id,
         new_password: newPassword,
       });
@@ -217,7 +226,7 @@ const AdminPasswords: React.FC = () => {
 
     try {
       const result = await callFunction({
-        operation: 'reset_password',
+        operation: isHRAdmin ? 'hr_reset_password' : 'reset_password',
         target_user_id: resetUser.user_id,
       });
       setTempPassword(result.temporary_password);
@@ -266,12 +275,12 @@ const AdminPasswords: React.FC = () => {
 
     try {
       await callFunction({
-        operation: 'add_user',
-        email: newUserEmail.toLowerCase(),
-        name: newUserName,
-        role: newUserRole,
-        new_password: newUserPassword,
-      });
+  operation: isHRAdmin ? 'hr_add_user' : 'add_user',
+  email: newUserEmail.toLowerCase(),
+  name: newUserName,
+  role: isHRAdmin ? 'hr_user' : newUserRole,
+  new_password: newUserPassword,
+});
       toast.success(`User ${newUserName} added successfully.`);
       setAddDialogOpen(false);
       setNewUserEmail('');
@@ -306,13 +315,13 @@ const AdminPasswords: React.FC = () => {
     setEditing(true);
 
     try {
-      await callFunction({
-        operation: 'update_user',
-        target_user_id: editUser.user_id,
-        name: editName,
-        role: editRole,
-        is_active: editActive,
-      });
+     await callFunction({
+  operation: isHRAdmin ? 'hr_update_user' : 'update_user',
+  target_user_id: editUser.user_id,
+  name: editName,
+  role: editRole,
+  is_active: editActive,
+});
       toast.success(`User ${editName} updated successfully.`);
       setEditDialogOpen(false);
       setEditUser(null);
@@ -356,10 +365,10 @@ const AdminPasswords: React.FC = () => {
     }
   };
 
-  // Guard: Only system admin can see this page - redirect everyone else away
-  if (!isAdmin) {
-    return <Navigate to="/" replace />;
-  }
+ // Only System Admin and HR Admin can access User Management
+if (!canManageUsers) {
+  return <Navigate to="/" replace />;
+}
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -368,9 +377,10 @@ const AdminPasswords: React.FC = () => {
         <div>
           <h2 className="text-xl font-bold text-foreground">User Management</h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            Add, edit, delete users and manage their passwords. Passwords are stored as secure hashes and cannot be
-            viewed directly - you can set or reset them on behalf of users.
-          </p>
+  {isHRAdmin
+    ? 'Manage HR Staff accounts, update account details and manage passwords.'
+    : 'Add, edit, delete users and manage their passwords. Passwords are securely hashed and cannot be viewed directly.'}
+</p>
         </div>
         <div className="flex items-center gap-2">
           <Button variant="outline" size="sm" onClick={fetchUsers} disabled={loading}>
@@ -441,43 +451,52 @@ const AdminPasswords: React.FC = () => {
                     </td>
                     <td className="p-3">
                       <div className="flex items-center justify-end gap-1.5">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => openEditDialog(u)}
-                          title="Edit user details"
-                        >
-                          <Pencil className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => openSetDialog(u)}
-                          disabled={!u.is_active}
-                          title={u.user_id === user?.id ? 'Use profile settings for your own password' : 'Set a new password for this user'}
-                        >
-                          <KeyRound className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => openResetDialog(u)}
-                          disabled={!u.is_active}
-                          title={u.user_id === user?.id ? 'Use profile settings for your own password' : 'Generate a temporary password'}
-                        >
-                          <RotateCcw className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => openDeleteDialog(u)}
-                          disabled={u.user_id === user?.id}
-                          title={u.user_id === user?.id ? 'You cannot delete your own account' : 'Delete this user'}
-                          className="text-destructive hover:text-destructive"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </div>
+  {(isAdmin || (isHRAdmin && u.role === 'hr_user')) && (
+    <>
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={() => openEditDialog(u)}
+        title="Edit user details"
+      >
+        <Pencil className="h-4 w-4" />
+      </Button>
+
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={() => openSetDialog(u)}
+        disabled={!u.is_active || u.user_id === user?.id}
+        title="Set a new password"
+      >
+        <KeyRound className="h-4 w-4" />
+      </Button>
+
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={() => openResetDialog(u)}
+        disabled={!u.is_active || u.user_id === user?.id}
+        title="Generate a temporary password"
+      >
+        <RotateCcw className="h-4 w-4" />
+      </Button>
+
+      {isAdmin && (
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => openDeleteDialog(u)}
+          disabled={u.user_id === user?.id}
+          title="Delete this user"
+          className="text-destructive hover:text-destructive"
+        >
+          <Trash2 className="h-4 w-4" />
+        </Button>
+      )}
+    </>
+  )}
+</div>
                     </td>
                   </tr>
                 ))}
@@ -527,19 +546,19 @@ const AdminPasswords: React.FC = () => {
                 required
               />
             </div>
-
+{!isHRAdmin && (
             <div className="space-y-2">
               <Label htmlFor="add-role">Role</Label>
               <Select value={newUserRole} onValueChange={setNewUserRole}>
                 <SelectTrigger id="add-role"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {roleOptions.map((r) => (
+                  {availableRoleOptions.map((r) => (
                     <SelectItem key={r} value={r}>{roleLabels[r]}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
-
+)}
             <div className="space-y-2">
               <Label htmlFor="add-password">Password</Label>
               <div className="relative">
@@ -607,7 +626,7 @@ const AdminPasswords: React.FC = () => {
                 required
               />
             </div>
-
+{!isHRAdmin && (
             <div className="space-y-2">
               <Label htmlFor="edit-role">Role</Label>
               <Select value={editRole} onValueChange={setEditRole}>
@@ -619,7 +638,7 @@ const AdminPasswords: React.FC = () => {
                 </SelectContent>
               </Select>
             </div>
-
+)}
             <div className="flex items-center justify-between rounded-lg border p-3">
               <div>
                 <Label htmlFor="edit-active">Account Status</Label>

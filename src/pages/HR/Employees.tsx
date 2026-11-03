@@ -58,14 +58,13 @@ type EmployeeImportPreviewRow = {
   duplicate: boolean;
 };
 const EMPLOYEE_DEPARTMENTS = [
-  'Retail - Westville',
-  'Retail - Waterfall',
-  'Retail - Cornubia',
-  'Production',
-  'Production',
-  'IT',
-  'Admin',
+  'Deli-ish - Westville',
+  'Deli-ish - Waterfall',
+  'Deli-ish - Cornubia',
   'Deli-ish - Pick n Pay',
+   'Production',
+  'IT',
+  'Admin'
 ]
 const Employees: React.FC = () => {
   const {
@@ -1894,31 +1893,35 @@ const downloadEmployeeImportTemplate = () => {
                   {/* Preserve the employee's existing department */}
                   {employeeForm.department &&
                     ![
-                      'Retail – Westville',
-                      'Retail – Waterfall',
-                      'Retail – Cornubia',
-                      'Production',
-                      'IT',
-                      'Admin',
-                      'Delish – Pick n Pay',
+                      'Deli-ish - Westville',
+  'Deli-ish - Waterfall',
+  'Deli-ish - Cornubia',
+  'Deli-ish - Pick n Pay',
+   'Production',
+  'IT',
+  'Admin',
                     ].includes(employeeForm.department) && (
                       <option value={employeeForm.department}>
                         {employeeForm.department} (existing)
                       </option>
                     )}
 
-                  <option value="Retail – Westville">
-                    Retail – Westville
+                  <option value="Delish – Westville">
+                    Delish – Westville
                   </option>
 
-                  <option value="Retail – Waterfall">
-                    Retail – Waterfall
+                  <option value="Delish – Waterfall">
+                    Delish – Waterfall
                   </option>
 
-                  <option value="Retail – Cornubia">
-                    Retail – Cornubia
+                  <option value="Delish – Cornubia">
+                    Delish – Cornubia
                   </option>
 
+                  <option value="Delish – Pick n Pay">
+                  Delish – Pick n Pay
+                </option>
+                
                   <option value="Production">
                     Production
                   </option>
@@ -1930,9 +1933,6 @@ const downloadEmployeeImportTemplate = () => {
                   <option value="Admin">
                     Admin
                   </option>
-                  <option value="Delish – Pick n Pay">
-                  Delish – Pick n Pay
-                </option>
                 </select>
               </div>
                   <div>
@@ -2870,7 +2870,7 @@ const downloadEmployeeImportTemplate = () => {
                             )}
                             {sendingContractSignature ? 'Sending...' : 'Send for Signature'}
                           </button>
-                        )}v
+                        )}
                        {!selectedEmployee.contract_signed && (
                           <button
                             type="button"

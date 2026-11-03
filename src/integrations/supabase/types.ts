@@ -1548,8 +1548,11 @@ export type Database = {
       fms_receiving: {
         Row: {
           cost_price_per_kg: number | null
+          confirmed_at: string | null          // NEW: future receiving confirmation time
+          confirmed_by: string | null          // NEW: future receiving confirm user
           created_at: string | null
           delivery_note_number: string | null
+          expected_delivery_date: string | null  // NEW: future receiving expected delivery date
           expiry_date: string | null
           id: string
           internal_lot_number: string
@@ -1566,8 +1569,11 @@ export type Database = {
         }
         Insert: {
           cost_price_per_kg?: number | null
+          confirmed_at?: string | null          // NEW: future receiving confirmation time
+          confirmed_by?: string | null          // NEW: future receiving confirm user
           created_at?: string | null
           delivery_note_number?: string | null
+          expected_delivery_date?: string | null  // NEW: expected delivery date for future receipts
           expiry_date?: string | null
           id?: string
           internal_lot_number: string
@@ -1584,8 +1590,11 @@ export type Database = {
         }
         Update: {
           cost_price_per_kg?: number | null
+          confirmed_at?: string | null          // NEW: future receiving confirmation time
+          confirmed_by?: string | null          // NEW: future receiving confirm user
           created_at?: string | null
           delivery_note_number?: string | null
+          expected_delivery_date?: string | null  // NEW: expected delivery date for future receipts
           expiry_date?: string | null
           id?: string
           internal_lot_number?: string

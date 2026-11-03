@@ -3,7 +3,20 @@ import { Link, useLocation } from 'react-router-dom';
 import { useFMSAuth } from '@/context/FMSAuthContext';
 import { cn } from '@/lib/utils';
 import logo from '@/assets/logo.png';
-import { LayoutDashboard, Users, CalendarCheck, CalendarDays, FileText, AlertTriangle, ChevronLeft, ChevronRight, Menu, LogOut, ArrowLeft } from 'lucide-react';
+import { 
+  LayoutDashboard,
+   Users, 
+   CalendarCheck, 
+   CalendarDays, 
+   FileText, 
+   AlertTriangle, 
+   ChevronLeft, 
+   ChevronRight, 
+   Menu, 
+   LogOut, 
+   ArrowLeft,
+   KeyRound
+  } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet';
 
@@ -21,6 +34,11 @@ const hrNavItems: HRNavItem[] = [
   { title: 'Leave', href: '/hr/leave', icon: CalendarDays, description: 'Leave requests & approvals' },
   { title: 'Documents', href: '/hr/documents', icon: FileText, description: 'Contracts & staff records' },
   { title: 'Warnings', href: '/hr/warnings', icon: AlertTriangle, description: 'Disciplinary records' },
+{
+  title: 'User Management',
+  href: '/admin-passwords',
+  icon: KeyRound,
+}
 ];
 
 interface HRSidebarProps {
@@ -31,6 +49,16 @@ interface HRSidebarProps {
 const HRSidebarContent: React.FC<{ collapsed: boolean; onItemClick?: () => void }> = ({ collapsed, onItemClick }) => {
   const location = useLocation();
   const { fmsUser, signOut } = useFMSAuth();
+
+const visibleNavItems = hrNavItems.filter((item) => {
+  if (item.href === '/admin-passwords') {
+    return (
+      fmsUser?.role === 'hr_admin' ||
+      fmsUser?.role === 'system_admin'
+    );
+  }
+  return true;
+});
 
   return (
     <div className="flex h-full flex-col">
@@ -48,7 +76,7 @@ const HRSidebarContent: React.FC<{ collapsed: boolean; onItemClick?: () => void 
         <div className={cn("mb-2 px-3 text-xs font-semibold uppercase tracking-wider text-sidebar-foreground/50", collapsed && "sr-only")}>
           HR Menu
         </div>
-        {hrNavItems.map((item) => {
+        {visibleNavItems.map((item) => {
           const isActive = location.pathname === item.href || (item.href !== '/hr-dashboard' && location.pathname.startsWith(item.href));
           return (
             <Link

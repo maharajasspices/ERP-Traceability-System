@@ -97,8 +97,12 @@ export const receivingSchema = z.object({
     .optional()
     .nullable(),
   received_by: z.string().uuid('Invalid user'),
-  received_at: z.string().optional(),
+  received_at: z.string().optional().nullable(),
   cost_price_per_kg: z.number().nonnegative('Cost price must be 0 or more').max(1000000).optional().nullable(),
+    expected_delivery_date: z.string().optional().nullable(),
+  confirmed_at: z.string().optional().nullable(),
+  confirmed_by: z.string().uuid('Invalid confirming user').optional().nullable(),
+  stock_applied: z.boolean().optional(),
 });
 
 // Processing step schema for BOM

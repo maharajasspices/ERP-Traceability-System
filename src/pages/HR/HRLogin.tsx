@@ -14,7 +14,8 @@ import logo from '@/assets/logo.png';
 const HR_AUTHORIZED_EMAILS = new Set([
   'zulaigah.benjamin@maharajasspices.co.za',
   'bradly@maharajasspices.co.za',
-  'selena.veerannah@maharajasspices.co.za',
+  'shenrisha.calidin@maharajasspices.co.za',
+  'tamika.naidoo@maharajasspices.co.za'
 ]);
 
 const HRLogin: React.FC = () => {

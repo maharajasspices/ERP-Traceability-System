@@ -10,10 +10,16 @@ const getAllowedOrigin = (requestOrigin: string | null): string => {
 
   if (requestOrigin) {
     if (envOrigins.includes(requestOrigin)) return requestOrigin;
-    if (
-      requestOrigin.startsWith('http://localhost:') ||
-      requestOrigin.startsWith('https://localhost:')
-    ) {
+
+   if (
+  requestOrigin === 'http://10.0.0.114:8081' ||
+  requestOrigin === 'http://10.0.0.114:8083' ||
+  requestOrigin === 'https://erp.maharajasspices.com'
+) {
+  return requestOrigin;
+}
+    // Allow your local network development address
+    if (requestOrigin === 'http://10.0.0.114:8081') {
       return requestOrigin;
     }
   }
@@ -26,6 +32,7 @@ const getAllowedOrigin = (requestOrigin: string | null): string => {
 const createCorsHeaders = (requestOrigin: string | null) => ({
   'Access-Control-Allow-Origin': getAllowedOrigin(requestOrigin),
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
   'Access-Control-Allow-Credentials': 'true',
 });
 
@@ -69,22 +76,375 @@ serve(async (req) => {
     });
 
     // Verify the caller is a system_admin (via service role, bypassing RLS)
-    const { data: fmsUser, error: fmsError } = await adminClient
+   // Verify the caller has an authorised management role.
+const { data: fmsUser, error: fmsError } = await adminClient
+  .from('fms_users')
+  .select('role, is_active')
+  .eq('user_id', user.id)
+  .eq('is_active', true)
+  .maybeSingle();
+
+const isSystemAdmin = fmsUser?.role === 'system_admin';
+const isHRAdmin = fmsUser?.role === 'hr_admin';
+
+if (fmsError || (!isSystemAdmin && !isHRAdmin)) {
+  return new Response(
+    JSON.stringify({ error: 'Forbidden - authorised administrator access required' }),
+    { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+  );
+}
+
+const body = await req.json();
+const { operation, target_user_id, new_password, email, name, role, is_active } = body;
+
+// ============================================================
+// HR USER MANAGEMENT
+// These operations are restricted to HR Admins and System Admins.
+// HR Admins can manage HR Staff only, never ERP or HR Admin accounts.
+// ============================================================
+
+if (operation?.startsWith('hr_')) {
+  if (!isSystemAdmin && !isHRAdmin) {
+    return new Response(
+      JSON.stringify({ error: 'HR administrator access required' }),
+      { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
+  }
+  
+
+  // List only HR accounts.
+  if (operation === 'hr_list_users') {
+    const { data: hrUsers, error: hrListError } = await adminClient
       .from('fms_users')
-      .select('role, is_active')
-      .eq('user_id', user.id)
-      .eq('is_active', true)
+      .select('id, user_id, name, role, is_active, created_at, updated_at')
+      .in('role', ['hr_user', 'hr_admin'])
+      .order('name');
+
+    if (hrListError) {
+      return new Response(
+        JSON.stringify({ error: hrListError.message }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // Look up email addresses from Supabase Auth.
+    const authUsersById = new Map<string, any>();
+    let page = 1;
+    const perPage = 200;
+
+    while (true) {
+      const { data: authResult, error: authListError } =
+        await adminClient.auth.admin.listUsers({ page, perPage });
+
+      if (authListError) {
+        return new Response(
+          JSON.stringify({ error: authListError.message }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      const authUsers = authResult.users || [];
+      authUsers.forEach((au: any) => authUsersById.set(au.id, au));
+
+      if (authUsers.length < perPage) break;
+      page++;
+    }
+
+    const users = (hrUsers || []).map((hr: any) => {
+      const authUser = authUsersById.get(hr.user_id);
+
+      return {
+        ...hr,
+        email: authUser?.email || '',
+        is_active: hr.is_active && !authUser?.banned_at,
+      };
+    });
+
+    return new Response(
+      JSON.stringify({ success: true, users }),
+      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
+  }
+
+  // Create an HR Staff account only. HR Admin cannot assign HR Admin.
+  if (operation === 'hr_add_user') {
+    if (!email || !name) {
+      return new Response(
+        JSON.stringify({ error: 'Email and name are required' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    if (!new_password || new_password.length < 6) {
+      return new Response(
+        JSON.stringify({ error: 'Password must be at least 6 characters' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    const normalizedEmail = String(email).trim().toLowerCase();
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+      return new Response(
+        JSON.stringify({ error: 'Please provide a valid email address' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    let existingUser: any = null;
+    let searchPage = 1;
+    const searchPerPage = 200;
+
+    while (!existingUser) {
+      const { data: authResult, error: searchError } =
+        await adminClient.auth.admin.listUsers({
+          page: searchPage,
+          perPage: searchPerPage,
+        });
+
+      if (searchError) {
+        return new Response(
+          JSON.stringify({ error: searchError.message }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      const authUsers = authResult.users || [];
+      existingUser = authUsers.find(
+        (au: any) => au.email?.toLowerCase() === normalizedEmail
+      );
+
+      if (existingUser || authUsers.length < searchPerPage) break;
+      searchPage++;
+    }
+
+    let targetUserId: string;
+    let createdAuthUser = false;
+
+    if (existingUser) {
+      targetUserId = existingUser.id;
+
+      const { data: existingFmsUser, error: existingFmsError } = await adminClient
+        .from('fms_users')
+        .select('role')
+        .eq('user_id', targetUserId)
+        .maybeSingle();
+
+      if (existingFmsError) {
+        return new Response(
+          JSON.stringify({ error: existingFmsError.message }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      if (existingFmsUser && existingFmsUser.role !== 'hr_user') {
+        return new Response(
+          JSON.stringify({ error: 'This email already belongs to a non-HR account or an HR Admin account.' }),
+          { status: 409, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+    } else {
+      const { data: created, error: createError } =
+        await adminClient.auth.admin.createUser({
+          email: normalizedEmail,
+          password: new_password,
+          email_confirm: true,
+        });
+
+      if (createError || !created.user) {
+        return new Response(
+          JSON.stringify({ error: createError?.message || 'Could not create account' }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      targetUserId = created.user.id;
+      createdAuthUser = true;
+    }
+
+    const { error: insertError } = await adminClient
+      .from('fms_users')
+      .upsert({
+        user_id: targetUserId,
+        name: String(name).trim(),
+        role: 'hr_user',
+        is_active: true,
+      }, { onConflict: 'user_id' });
+
+    if (insertError) {
+      if (createdAuthUser) {
+        await adminClient.auth.admin.deleteUser(targetUserId);
+      }
+
+      return new Response(
+        JSON.stringify({ error: insertError.message }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    await adminClient.from('fms_audit_log').insert({
+      user_id: user.id,
+      action: 'hr_admin_add_user',
+      entity_type: 'fms_users',
+      entity_id: targetUserId,
+      old_values: null,
+      new_values: { email: normalizedEmail, name, role: 'hr_user' },
+    });
+
+    return new Response(
+      JSON.stringify({ success: true, message: 'HR Staff account created successfully' }),
+      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
+  }
+
+  // HR Admin can edit HR Staff details and account status only.
+  if (operation === 'hr_update_user') {
+    if (!target_user_id || !name || typeof is_active !== 'boolean') {
+      return new Response(
+        JSON.stringify({ error: 'Target user, name and account status are required' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    if (target_user_id === user.id) {
+      return new Response(
+        JSON.stringify({ error: 'You cannot change your own account through HR User Management' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    const { data: targetUser, error: targetError } = await adminClient
+      .from('fms_users')
+      .select('role')
+      .eq('user_id', target_user_id)
       .maybeSingle();
 
-    if (fmsError || !fmsUser || fmsUser.role !== 'system_admin') {
+    if (targetError || !targetUser || targetUser.role !== 'hr_user') {
       return new Response(
-        JSON.stringify({ error: 'Forbidden - system admin access required' }),
+        JSON.stringify({ error: 'Only HR Staff accounts can be edited here' }),
         { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    const body = await req.json();
-    const { operation, target_user_id, new_password, email, name, role, is_active } = body;
+    const { error: updateError } = await adminClient
+      .from('fms_users')
+      .update({
+        name: String(name).trim(),
+        is_active,
+      })
+      .eq('user_id', target_user_id)
+      .eq('role', 'hr_user');
+
+    if (updateError) {
+      return new Response(
+        JSON.stringify({ error: updateError.message }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    await adminClient.from('fms_audit_log').insert({
+      user_id: user.id,
+      action: 'hr_admin_update_user',
+      entity_type: 'fms_users',
+      entity_id: target_user_id,
+      old_values: null,
+      new_values: { name, is_active },
+    });
+
+    return new Response(
+      JSON.stringify({ success: true, message: 'HR Staff account updated successfully' }),
+      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
+  }
+
+  // Password operations are limited to HR Staff accounts.
+  if (operation === 'hr_reset_password' || operation === 'hr_set_password') {
+    if (!target_user_id) {
+      return new Response(
+        JSON.stringify({ error: 'Target user is required' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    if (target_user_id === user.id) {
+      return new Response(
+        JSON.stringify({ error: 'You cannot change your own password here' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    const { data: targetUser, error: targetError } = await adminClient
+      .from('fms_users')
+      .select('role, is_active')
+      .eq('user_id', target_user_id)
+      .maybeSingle();
+
+    if (targetError || !targetUser || targetUser.role !== 'hr_user' || !targetUser.is_active) {
+      return new Response(
+        JSON.stringify({ error: 'Only active HR Staff accounts can have their passwords changed here' }),
+        { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    let passwordToSet = new_password;
+
+    if (operation === 'hr_reset_password') {
+      passwordToSet = crypto.randomUUID().replace(/-/g, '').slice(0, 16) + '!Aa1';
+    } else if (!passwordToSet || passwordToSet.length < 6) {
+      return new Response(
+        JSON.stringify({ error: 'New password must be at least 6 characters' }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    const { error: passwordError } = await adminClient.auth.admin.updateUserById(
+      target_user_id,
+      { password: passwordToSet }
+    );
+
+    if (passwordError) {
+      return new Response(
+        JSON.stringify({ error: passwordError.message }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    await adminClient.from('fms_audit_log').insert({
+      user_id: user.id,
+      action: operation === 'hr_reset_password'
+        ? 'hr_admin_reset_password'
+        : 'hr_admin_set_password',
+      entity_type: 'fms_users',
+      entity_id: target_user_id,
+      old_values: null,
+      new_values: { action: 'password_changed_by_hr_admin' },
+    });
+
+    return new Response(
+      JSON.stringify({
+        success: true,
+        message: 'Password updated successfully',
+        ...(operation === 'hr_reset_password'
+          ? { temporary_password: passwordToSet }
+          : {}),
+      }),
+      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    );
+  }
+
+  return new Response(
+    JSON.stringify({ error: 'Invalid HR user management operation' }),
+    { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+  );
+}
+
+// Existing ERP user-management operations remain System Admin only.
+if (!isSystemAdmin) {
+  return new Response(
+    JSON.stringify({ error: 'Forbidden - System Admin access required for ERP user management' }),
+    { status: 403, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+  );
+}
 
     // List ALL users from auth.users, merged with fms_users data where available
     if (operation === 'list_users') {

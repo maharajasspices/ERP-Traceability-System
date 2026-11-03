@@ -178,6 +178,8 @@ const ReceivingLog: React.FC = () => {
   >(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [selectedRecord, setSelectedRecord] = useState<typeof receivingRecords[0] | null>(null);
+
+
   const [viewDialogOpen, setViewDialogOpen] = useState(false);
   receivingRecords
   const [editCoaContent, setEditCoaContent] = useState('');
@@ -226,20 +228,6 @@ const [receivedDateTo, setReceivedDateTo] = useState('');
   const [parsingInvoice, setParsingInvoice] = useState(false);
   const [parseStatus, setParseStatus] = useState<{ found: number; matched: number } | null>(null);
   const [orderItems, setOrderItems] = useState<{ stock_code_id: string; stock_code: string; description: string; quantity_ordered: string; uom: string }[]>([]);
-
-  //Physical orders placed outide the erp
-// Physical orders placed outside the ERP
-const [physicalOrderOpen, setPhysicalOrderOpen] = useState(false);
-const [physicalOrderSaving, setPhysicalOrderSaving] = useState(false);
-const [physicalSupplierId, setPhysicalSupplierId] = useState('');
-const [physicalOrderDate, setPhysicalOrderDate] = useState(
-  new Date().toISOString().split('T')[0]
-);
-const [physicalOrderNotes, setPhysicalOrderNotes] = useState('');
-const [physicalOrderItems, setPhysicalOrderItems] = useState<
-  { stock_code_id: string; quantity_ordered: string }[]
->([{ stock_code_id: '', quantity_ordered: '' }]);
-
   const [orderFormData, setOrderFormData] = useState({
     po_number: `PO-${new Date().getFullYear()}-${Math.floor(Math.random() * 10000).toString().padStart(4, '0')}`,
     order_date: new Date().toISOString().split('T')[0],
@@ -250,25 +238,25 @@ const [physicalOrderItems, setPhysicalOrderItems] = useState<
   });
   // Confirm receipt dialog
   const [confirmOrder, setConfirmOrder] = useState<FMSStockOrder | null>(null);
+  //future manual deliveries - seperate from invoice-order confirmation.
+// Future manual deliveries — separate from invoice-order confirmation.
+const [futureDeliveryToConfirm, setFutureDeliveryToConfirm] =
+  useState<(typeof receivingRecords)[number] | null>(null);
+
+const [futureDeliveryQualityChecks, setFutureDeliveryQualityChecks] =
+  useState<Record<string, boolean>>({});
+
+const [confirmingFutureDelivery, setConfirmingFutureDelivery] =
+  useState(false);
+
+const [futureDeliveryActualQuantity, setFutureDeliveryActualQuantity] = useState('');
+const [futureDeliverySupplierBatchNumber, setFutureDeliverySupplierBatchNumber] = useState('');
+const [futureDeliveryExpiryDate, setFutureDeliveryExpiryDate] = useState('');
   const [confirmState, setConfirmState] = useState<Record<string, { qty: string; lot: string; expiry: string }>>({});
   const [confirmingReceipt, setConfirmingReceipt] = useState(false);
   const [confirmReceiverName, setConfirmReceiverName] = useState('');
   const [confirmCoaContent, setConfirmCoaContent] = useState('');
   const [confirmQualityChecks, setConfirmQualityChecks] = useState<Record<string, boolean>>({});
-
-
- const [pendingReceiptRecords, setPendingReceiptRecords] = useState<
-  Record<
-    string,
-    {
-      id: string;
-      lotNumber: string;
-      quantity: number;
-      expiry: string;
-      qualityChecksSignature: string;
-    }
-  >
->({});
 
   // Emailed order confirmation state - matches receiving log form
   const [confirmingEmailOrder, setConfirmingEmailOrder] = useState<typeof supplierOrderEmails[0] | null>(null);
@@ -948,6 +936,15 @@ const statusFixAttempted = useRef<Set<string>>(new Set());
       }
     }
 
+
+   // Future-dated receiving must remain pending until delivery is confirmed.
+// Compare dates using the South African calendar date.
+const todayDateKey = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Africa/Johannesburg',
+}).format(new Date());
+
+const isFutureReceiving = formData.date_received > todayDateKey;
+
     let saved = 0;
 
     for (const line of lines) {
@@ -960,27 +957,39 @@ const statusFixAttempted = useRef<Set<string>>(new Set());
       const lineSupplierId = line.supplier_id || formData.supplier_id;
 
       const result = await addReceivingRecord({
-        internal_lot_number: line.internal_lot_number,
-        received_at: new Date(formData.date_received).toISOString(),
-        stock_code_id: line.stock_code_id,
-        quantity_received: parseFloat(line.quantity_received),
-        supplier_id: lineSupplierId,
-        supplier_batch_number: line.supplier_batch_number,
-        manufacturing_date: productionDate,
-        expiry_date: line.expiry_date || null,
-        delivery_note_number: formData.invoice_number || undefined,
-        quality_checks: qualityChecks,
-        status: hasFailed ? 'declined' : 'accepted',
-        rejection_reason: hasFailed ? 'Quality check failed' : undefined,
-        received_by: user?.id || '',
-        cost_price_per_kg: costNum != null && !isNaN(costNum) ? costNum : null,
-      } as any);
+  internal_lot_number: line.internal_lot_number,
+  received_at: isFutureReceiving
+    ? null
+    : new Date(`${formData.date_received}T00:00:00+02:00`).toISOString(),
+  expected_delivery_date: isFutureReceiving
+    ? formData.date_received
+    : null,
+  stock_code_id: line.stock_code_id,
+  quantity_received: parseFloat(line.quantity_received),
+  supplier_id: lineSupplierId,
+  supplier_batch_number: line.supplier_batch_number,
+  manufacturing_date: productionDate,
+  expiry_date: line.expiry_date || null,
+  delivery_note_number: formData.invoice_number || undefined,
+  quality_checks: qualityChecks,
+  status: isFutureReceiving
+    ? 'pending'
+    : hasFailed
+      ? 'declined'
+      : 'accepted',
+  rejection_reason: !isFutureReceiving && hasFailed
+    ? 'Quality check failed'
+    : undefined,
+  received_by: user?.id || '',
+  cost_price_per_kg: costNum != null && !isNaN(costNum) ? costNum : null,
+  stock_applied: false,
+} as any);
 
       if (!result) continue;
       saved++;
 
       // Add stock to inventory for accepted receipts
-      if (!hasFailed) {
+      if (!hasFailed && !isFutureReceiving) {
         const newQty = await addStockForReceipt(
           line.stock_code_id,
           parseFloat(line.quantity_received),
@@ -1030,7 +1039,11 @@ const statusFixAttempted = useRef<Set<string>>(new Set());
           supplier: line.supplier_name || formData.supplier_name,
           quantity: `${line.quantity_received} ${line.uom}`,
           supplier_batch: line.supplier_batch_number,
-          status: hasFailed ? 'declined' : 'accepted',
+          status: hasFailed
+           ? 'declined'
+           : isFutureReceiving
+           ? 'pending'
+           : 'accepted',
           failed_checks: failedChecks.length > 0 ? failedChecks : undefined,
           receiver: formData.receiver_name,
           cost_price_per_kg: costNum,
@@ -1046,7 +1059,15 @@ const statusFixAttempted = useRef<Set<string>>(new Set());
       return;
     }
 
-    toast.success(`${saved} material${saved > 1 ? 's' : ''} ${hasFailed ? 'declined' : 'received'} successfully`);
+   if (isFutureReceiving) {
+  toast.success(`${saved} future delivery record(s) saved successfully`);
+} else {
+  toast.success(
+    `${saved} material${saved > 1 ? 's' : ''} ${
+      hasFailed ? 'declined' : 'received'
+    } successfully`
+  );
+}
 
     // Show which lot numbers were generated, so the operator can write them on
     // the physical labels. Only blanks are listed - anything they typed is
@@ -1066,6 +1087,13 @@ const statusFixAttempted = useRef<Set<string>>(new Set());
   const getStockCode = (id: string) => stockCodes.find(sc => sc.id === id);
   const getSupplier = (id: string) => suppliers.find(s => s.id === id);
 
+ // Keep pending future deliveries visible until they are confirmed or declined.
+// Do not filter by expected date: overdue deliveries must remain visible too.
+const futureDeliveries = receivingRecords.filter(
+  record =>
+    record.status === 'pending' &&
+    !!record.expected_delivery_date
+);
   // ---- Stock orders: create + confirm receipt -------------------------
   const resetOrderForm = () => {
     setOrderFormData({
@@ -1197,6 +1225,186 @@ const statusFixAttempted = useRef<Set<string>>(new Set());
     });
   };
  
+
+const handleConfirmFutureDelivery = async () => {
+  const record = futureDeliveryToConfirm;
+
+  if (!record) {
+    toast.error('No future delivery selected');
+    return;
+  }
+
+  // Prevent an already-confirmed delivery from being processed again.
+  if (record.status !== 'pending' || record.stock_applied === true) {
+    toast.error('This delivery has already been processed. Please refresh the records.');
+    return;
+  }
+
+  // Validate actual delivery details.
+  const actualQuantity = Number(futureDeliveryActualQuantity);
+  const actualSupplierBatchNumber = futureDeliverySupplierBatchNumber.trim();
+  const actualExpiryDate = futureDeliveryExpiryDate;
+
+  if (!Number.isFinite(actualQuantity) || actualQuantity <= 0) {
+    toast.error('Please enter a valid actual quantity greater than zero.');
+    return;
+  }
+
+  if (!actualSupplierBatchNumber) {
+    toast.error('Please enter the actual supplier batch number.');
+    return;
+  }
+
+  if (!actualExpiryDate) {
+    toast.error('Please enter the actual expiry date.');
+    return;
+  }
+
+  // Check required quality checks.
+  const requiredChecks = receivingQualityChecksList.filter(
+    check => check.key !== 'coa_received'
+  );
+
+  const failedChecks = requiredChecks.filter(
+    check => !futureDeliveryQualityChecks[check.key]
+  );
+
+  if (failedChecks.length > 0) {
+    toast.error('Please complete all required quality checks before confirming.');
+    return;
+  }
+
+  setConfirmingFutureDelivery(true);
+
+  try {
+    const now = new Date().toISOString();
+
+    const originalQuantity = Number(record.quantity_received);
+
+    const updatedQualityChecks = {
+      ...((record.quality_checks || {}) as Record<string, any>),
+      ...Object.fromEntries(
+        receivingQualityChecksList.map(check => [
+          check.key,
+          futureDeliveryQualityChecks[check.key] ? 'pass' : 'fail',
+        ])
+      ),
+    };
+
+    // Preserve the original details and record the actual delivery details.
+    const auditEntry = {
+      changed_at: now,
+      changed_by: user?.id || null,
+      original_quantity: originalQuantity,
+      actual_quantity: actualQuantity,
+      original_supplier_batch_number: record.supplier_batch_number || null,
+      actual_supplier_batch_number: actualSupplierBatchNumber,
+      original_expiry_date: record.expiry_date || null,
+      actual_expiry_date: actualExpiryDate,
+    };
+
+    const updatedAudit = [
+      ...(Array.isArray(record.confirmation_audit)
+        ? record.confirmation_audit
+        : []),
+      auditEntry,
+    ];
+
+    // Add the ACTUAL quantity to stock using the idempotent receipt function.
+    const { error: stockError } = await (supabase.rpc as any)(
+      'fms_apply_stock_movement_idempotent',
+      {
+        p_stock_code_id: record.stock_code_id,
+        p_movement_type: 'receipt',
+        p_quantity_change: actualQuantity,
+        p_batch_number: actualSupplierBatchNumber,
+        p_reference_id: record.internal_lot_number,
+        p_notes: `Future delivery confirmed - ${record.internal_lot_number}. Expected quantity: ${originalQuantity}; actual quantity: ${actualQuantity}.`,
+        p_created_by: user?.id || null,
+      }
+    );
+
+    if (stockError) {
+      console.error('Future delivery stock error:', stockError);
+      toast.error(`Could not add stock: ${stockError.message}`);
+      return;
+    }
+
+    // Update the existing receiving record, preserving the original details.
+    const { data: updatedRecord, error: updateError } = await (
+      supabase.from('fms_receiving' as any) as any
+    )
+      .update({
+        status: 'accepted',
+        received_at: now,
+        confirmed_at: now,
+        confirmed_by: user?.id || null,
+        stock_applied: true,
+        quality_checks: updatedQualityChecks,
+        rejection_reason: null,
+
+        // Preserve original expected quantity.
+        expected_quantity_received:
+          record.expected_quantity_received ?? originalQuantity,
+
+        // Save actual delivery details.
+        quantity_received: actualQuantity,
+        supplier_batch_number: actualSupplierBatchNumber,
+        expiry_date: actualExpiryDate,
+
+        // Preserve the confirmation audit history.
+        confirmation_audit: updatedAudit,
+      })
+      .eq('id', record.id)
+      .eq('status', 'pending')
+      .eq('stock_applied', false)
+      .select('id')
+      .maybeSingle();
+
+    if (updateError || !updatedRecord) {
+      console.error('Future delivery record update error:', updateError);
+
+      toast.error(
+        'Stock movement was processed, but the receiving record was not updated. Please refresh and check the record before retrying.'
+      );
+
+      await refreshData();
+      return;
+    }
+
+    // Record the activity.
+    logActivity({
+      action_type: 'update',
+      entity_type: 'receiving',
+      entity_id: record.internal_lot_number,
+      entity_name: 'Future delivery confirmed',
+      details: {
+        lot_number: record.internal_lot_number,
+        original_quantity: originalQuantity,
+        actual_quantity: actualQuantity,
+        original_supplier_batch_number: record.supplier_batch_number,
+        actual_supplier_batch_number: actualSupplierBatchNumber,
+        original_expiry_date: record.expiry_date,
+        actual_expiry_date: actualExpiryDate,
+        status: 'accepted',
+        confirmed_by: fmsUser?.name || user?.id,
+        confirmed_at: now,
+      },
+    });
+
+    toast.success('Future delivery confirmed and stock added successfully.');
+
+    setFutureDeliveryToConfirm(null);
+    await refreshData();
+
+  } catch (error: any) {
+    console.error('Future delivery confirmation error:', error);
+    toast.error(error?.message || 'Failed to confirm future delivery.');
+  } finally {
+    setConfirmingFutureDelivery(false);
+  }
+};
+
 const handleSelectAllQualityChecks = () => {
   setFormData((prev) => ({
     ...prev,
@@ -1261,30 +1469,15 @@ const handleSelectAllQualityChecks = () => {
 
   // Validate items being received
   for (const it of toReceive) {
-    
     const name =
       getStockCode(it.stock_code_id)?.description || 'item';
 
     const state = confirmState[it.id];
-        const quantityToReceive = parseFloat(state?.qty || '0');
-    const alreadyReceived = Number(it.quantity_received ?? 0);
-    const orderedQuantity = Number(it.quantity_ordered ?? 0);
-    const outstandingQuantity = Math.max(
-      0,
-      orderedQuantity - alreadyReceived
-    );
-if (!Number.isFinite(quantityToReceive) || quantityToReceive <= 0) {
-  toast.error(`Enter a valid quantity received for ${name}`);
-  return;
-}
 
-if (quantityToReceive > outstandingQuantity) {
-  toast.error(
-    `${name}: you can receive a maximum of ${outstandingQuantity} more.`
-  );
-  return;
-}
-    
+    if (!(parseFloat(state?.qty || '') > 0)) {
+      toast.error(`Enter the quantity received for ${name}`);
+      return;
+    }
 
     // The LOT number is optional: a typed one is kept, a blank one is generated
     // on save, so traceability is never left blank.
@@ -1374,25 +1567,18 @@ if (quantityToReceive > outstandingQuantity) {
         allOk = false;
         continue;
       }
-      // Add received quantity to stock (only for accepted receipts)
-        if (!hasFailed) {
-          const stockResult = await addStockForReceipt(
-            it.stock_code_id,
-            qty,
-            lotNumber,
-            `Receipt ${lotNumber} - ${
-              getStockCode(it.stock_code_id)?.description || ''
-            } (${confirmOrder.po_number})`
-          );
 
-          if (stockResult === null) {
-            allOk = false;
-            toast.error(
-              `Receipt ${lotNumber} was recorded, but the stock update failed. Please investigate before retrying.`
-            );
-            continue;
-          }
-        }
+      // Add received quantity to stock (only for accepted receipts)
+      if (!hasFailed) {
+        await addStockForReceipt(
+          it.stock_code_id,
+          qty,
+          lotNumber,
+          `Receipt ${lotNumber} - ${
+            getStockCode(it.stock_code_id)?.description || ''
+          } (${confirmOrder.po_number})`
+        );
+      }
 
       // Calculate total received for this item
       const newQuantityReceived =
@@ -1525,8 +1711,80 @@ if (quantityToReceive > outstandingQuantity) {
     setConfirmingReceipt(false);
   }
 };
+ const openFutureDeliveryDialog =(
+  record: (typeof receivingRecords)[number]
+ ) => {
+  setFutureDeliveryQualityChecks ({
+    coa_received: false,
+    vehicle_clean: false,
+    no_foreign_odours: false,
+    no_pest_activity: false,
+    packaging_intact: false,
+    correct_labelling: false,
+    oraganoleptic_ok: false,
+  });
 
+  // Pre-fill actual delivery details with the expected details
+  setFutureDeliveryActualQuantity(String(record.quantity_received));
+  setFutureDeliverySupplierBatchNumber(record.supplier_batch_number || '');
+  setFutureDeliveryExpiryDate(record.expiry_date || '');
 
+  setFutureDeliveryToConfirm(record);
+
+ }
+
+const handleDeclineFutureDelivery = async () => {
+  const record = futureDeliveryToConfirm;
+  if (!record) return;
+
+  setConfirmingFutureDelivery(true);
+
+  try {
+    const now = new Date().toISOString();
+
+    const { data: updatedRecord, error } = await (
+      supabase.from('fms_receiving' as any) as any
+    )
+      .update({
+        status: 'declined',
+        rejection_reason: 'Future delivery declined on arrival',
+        confirmed_at: now,
+        confirmed_by: user?.id || null,
+        stock_applied: false,
+      })
+      .eq('id', record.id)
+      .eq('status', 'pending')
+      .select('id')
+      .maybeSingle();
+
+    if (error || !updatedRecord) {
+      console.error('Future delivery decline failed:', error);
+      toast.error('Could not decline this delivery. Please refresh and try again.');
+      return;
+    }
+
+    await logActivity({
+      action_type: 'update',
+      entity_type: 'receiving',
+      entity_id: record.internal_lot_number,
+      entity_name: getStockCode(record.stock_code_id)?.description || '',
+      details: {
+        status: 'declined',
+        stock_applied: false,
+        confirmed_at: now,
+      },
+    });
+
+    toast.success('Delivery declined. No stock was added.');
+    setFutureDeliveryToConfirm(null);
+    await refreshData();
+  } catch (error) {
+    console.error('Future delivery decline error:', error);
+    toast.error('Something went wrong while declining this delivery.');
+  } finally {
+    setConfirmingFutureDelivery(false);
+  }
+};
 
   // Confirm receipt for an emailed order - same process as receiving log
   const handleConfirmEmailOrderReceipt = async () => {
@@ -1581,6 +1839,7 @@ if (quantityToReceive > outstandingQuantity) {
     // Optional lot: keep what was typed, generate one when blank.
     const lotNumber = await resolveLotNumber(emailOrderFormData.internal_lot_number);
 
+
     try {
       const result = await addReceivingRecord({
         internal_lot_number: lotNumber,
@@ -1598,6 +1857,7 @@ if (quantityToReceive > outstandingQuantity) {
         received_by: user?.id || '',
         cost_price_per_kg: costNum != null && !isNaN(costNum) ? costNum : null,
       } as any);
+
       if (!result) {
         toast.error('Failed to save receiving record');
         return;
@@ -1679,7 +1939,21 @@ if (quantityToReceive > outstandingQuantity) {
     }
   };
 
+const todayDateKey = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Africa/Johannesburg',
+}).format(new Date());
+
 const filteredRecords = receivingRecords.filter(rec => {
+  const todayDateKey = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Africa/Johannesburg',
+  }).format(new Date());
+
+  // Hide future pending deliveries from the normal Receiving Log.
+  const isFuturePendingDelivery =
+    rec.status === 'pending' &&
+    !!rec.expected_delivery_date &&
+    rec.expected_delivery_date > todayDateKey;
+
   const matchesSearch =
     !searchQuery ||
     (rec.internal_lot_number ?? '').toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -1687,22 +1961,26 @@ const filteredRecords = receivingRecords.filter(rec => {
     (getStockCode(rec.stock_code_id)?.description ?? '')
       .toLowerCase()
       .includes(searchQuery.toLowerCase());
-const rawDate = rec.received_at || rec.created_at || '';
 
-const recordDate = rawDate
-  ? new Intl.DateTimeFormat('en-CA', {
-      timeZone: 'Africa/Johannesburg',
-    }).format(new Date(rawDate))
-  : '';
+  const rawDate = rec.received_at || rec.created_at || '';
 
-const matchesDateFrom =
-  !receivedDateFrom || recordDate >= receivedDateFrom;
+  const recordDate = rawDate
+    ? new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'Africa/Johannesburg',
+      }).format(new Date(rawDate))
+    : '';
 
-const matchesDateTo =
-  !receivedDateTo || recordDate <= receivedDateTo;
+  const matchesDateFrom = !receivedDateFrom || recordDate >= receivedDateFrom;
+  const matchesDateTo = !receivedDateTo || recordDate <= receivedDateTo;
 
-  return matchesSearch && matchesDateFrom && matchesDateTo;
+  return (
+    !isFuturePendingDelivery &&
+    matchesSearch &&
+    matchesDateFrom &&
+    matchesDateTo
+  );
 });
+
 console.log('RECEIVING COUNT:', receivingRecords.length);
 
 console.log(
@@ -2303,78 +2581,6 @@ const handleCreateOrder = async () => {
     );
   } finally {
     setSavingOrder(false);
-  }
-};
-const handleCreatePhysicalOrder = async () => {
-  if (!physicalSupplierId) {
-    toast.error('Please select a supplier.');
-    return;
-  }
-
-  const validItems = physicalOrderItems
-    .map(item => ({
-      stock_code_id: item.stock_code_id,
-      quantity_ordered: Number(item.quantity_ordered),
-    }))
-    .filter(
-      item =>
-        item.stock_code_id &&
-        Number.isFinite(item.quantity_ordered) &&
-        item.quantity_ordered > 0
-    );
-
-  if (validItems.length === 0) {
-    toast.error('Add at least one stock item with a quantity.');
-    return;
-  }
-
-  setPhysicalOrderSaving(true);
-
-  try {
-    const poNumber =
-      `PHYS-${new Date().getFullYear()}-${Date.now()}`;
-
-    const ok = await createStockOrder(
-      {
-        po_number: poNumber,
-        supplier_id: physicalSupplierId,
-        order_date: physicalOrderDate,
-        notes: [
-          '[PHYSICAL_ORDER]',
-          physicalOrderNotes.trim(),
-        ].filter(Boolean).join(' '),
-      },
-      validItems.map(item => {
-        const stockCode = stockCodes.find(
-          code => code.id === item.stock_code_id
-        );
-
-        return {
-          stock_code_id: item.stock_code_id,
-          quantity_ordered: item.quantity_ordered,
-          uom: stockCode?.unit_of_measure || 'kg',
-        };
-      })
-    );
-
-    if (ok) {
-      toast.success('Physical order recorded. No stock has been added yet.');
-
-      setPhysicalOrderOpen(false);
-      setPhysicalSupplierId('');
-      setPhysicalOrderDate(new Date().toISOString().split('T')[0]);
-      setPhysicalOrderNotes('');
-      setPhysicalOrderItems([
-        { stock_code_id: '', quantity_ordered: '' },
-      ]);
-
-      await refreshData();
-    }
-  } catch (error) {
-    console.error('Physical order creation failed:', error);
-    toast.error('Could not record the physical order.');
-  } finally {
-    setPhysicalOrderSaving(false);
   }
 };
 
@@ -3219,15 +3425,19 @@ const getExportFilteredRecords = () => {
     </TabsTrigger>
 
     <TabsTrigger value="warehouse" className="gap-2">
-      <PackageCheck className="h-4 w-4" />
-      Stock Ordered:
+  <PackageCheck className="h-4 w-4" />
+  Stock Ordered:
 
-      {stockOrders.filter(o => o.status !== 'CHECKED').length + (supplierOrderEmails || []).filter(e => e.status === 'pending').length > 0 && (
-        <span className="ml-1 rounded-full bg-warning/20 px-2 py-0.5 text-xs font-semibold text-warning">
-          {stockOrders.filter(o => o.status !== 'CHECKED').length + (supplierOrderEmails || []).filter(e => e.status === 'pending').length}
-        </span>
-      )}
-    </TabsTrigger>
+  {stockOrders.filter(o => o.status !== 'CHECKED').length +
+    (supplierOrderEmails || []).filter(e => e.status === 'pending').length +
+    futureDeliveries.length > 0 && (
+      <span className="ml-1 rounded-full bg-warning/20 px-2 py-0.5 text-xs font-semibold text-warning">
+        {stockOrders.filter(o => o.status !== 'CHECKED').length +
+          (supplierOrderEmails || []).filter(e => e.status === 'pending').length +
+          futureDeliveries.length}
+      </span>
+    )}
+</TabsTrigger>
 
     <TabsTrigger value="history" className="gap-2">
       <ClipboardList className="h-4 w-4" />
@@ -3331,11 +3541,13 @@ const getExportFilteredRecords = () => {
                     <td className="hidden lg:table-cell">{supplier?.name}</td>
                     <td className="hidden md:table-cell">{rec.expiry_date ? formatDate(rec.expiry_date) : '—'}</td>
                     <td>
-                      {rec.status === 'accepted' ? (
-                        <span className="badge-active flex items-center gap-1 text-xs"><CheckCircle className="h-3 w-3" /><span className="hidden sm:inline">Accepted</span></span>
-                      ) : (
-                        <span className="badge-inactive flex items-center gap-1 text-xs"><XCircle className="h-3 w-3" /><span className="hidden sm:inline">declined</span></span>
-                      )}
+                       {rec.status === 'accepted' ? (
+  <Badge className="bg-green-600 text-white">Accepted</Badge>
+) : rec.status === 'pending' ? (
+  <Badge className="bg-amber-500 text-white">Pending</Badge>
+) : (
+  <Badge variant="destructive">Declined</Badge>
+)}
                     </td>
                     <td className="flex gap-1">
                       <Button variant="ghost" size="icon" onClick={() => handleViewRecord(rec)} title="View details"><Eye className="h-4 w-4" /></Button>
@@ -3546,18 +3758,13 @@ const getExportFilteredRecords = () => {
               <h3 className="font-semibold">
                 Orderes placed and pending deliveries.
               </h3>
-<Button
-  size="sm"
-  className="gap-2 ml-auto"
-  onClick={() => setPhysicalOrderOpen(true)}
->
-  <Plus className="h-4 w-4" />
-  Record Physical Order
-</Button>
+
               <Badge variant="outline">
-                {stockOrders.filter(o => o.status !== 'CHECKED').length + (supplierOrderEmails || []).filter(e => e.status === 'pending').length}{' '}
-                open
-              </Badge>
+  {stockOrders.filter(o => o.status !== 'CHECKED').length +
+    (supplierOrderEmails || []).filter(e => e.status === 'pending').length +
+    futureDeliveries.length}{' '}
+  open
+</Badge>
 
               {stockOrders.filter(o => o.status !== 'CHECKED').length > 0 && (
                 <Button
@@ -3571,181 +3778,56 @@ const getExportFilteredRecords = () => {
                 </Button>
               )}
             </div>
-<Dialog
-  open={physicalOrderOpen}
-  onOpenChange={setPhysicalOrderOpen}
->
-  <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-[650px]">
-    <DialogHeader>
-      <DialogTitle>Record Physical Stock Order</DialogTitle>
-      <DialogDescription>
-        Record stock ordered directly from a supplier.
-        This does not increase inventory until the delivery is received and confirmed.
-      </DialogDescription>
-    </DialogHeader>
 
-    <div className="space-y-4">
-      <div className="space-y-2">
-        <Label>Supplier *</Label>
+            <div className="space-y-3">
+              {/* Future Deliveries recorded through Add Receiving */}
+{futureDeliveries.map(record => {
+  const supplier = getSupplier(record.supplier_id);
+  const sc = getStockCode(record.stock_code_id);
 
-        <Select
-          value={physicalSupplierId}
-          onValueChange={setPhysicalSupplierId}
-        >
-          <SelectTrigger>
-            <SelectValue placeholder="Select supplier" />
-          </SelectTrigger>
-
-          <SelectContent>
-            {suppliers.map(supplier => (
-              <SelectItem key={supplier.id} value={supplier.id}>
-                {supplier.name}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-
-      <div className="space-y-2">
-        <Label>Order Date *</Label>
-        <Input
-          type="date"
-          value={physicalOrderDate}
-          onChange={e => setPhysicalOrderDate(e.target.value)}
-        />
-      </div>
-
-      <div className="space-y-3">
-        <div className="flex items-center justify-between">
-          <Label>Stock Items *</Label>
-
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            onClick={() =>
-              setPhysicalOrderItems(prev => [
-                ...prev,
-                { stock_code_id: '', quantity_ordered: '' },
-              ])
-            }
-          >
-            <Plus className="h-4 w-4 mr-1" />
-            Add Item
-          </Button>
+  return (
+    <div
+      key={`future-${record.id}`}
+      className="flex flex-wrap items-center gap-3 rounded-lg border border-amber-200 bg-amber-50/50 p-3"
+    >
+      <div className="min-w-[220px] flex-1">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="font-medium">
+            {sc?.stock_code || 'Unknown stock code'}
+          </span>
+          <Badge variant="outline" className="border-amber-300 bg-amber-100 text-amber-800">
+            Future Delivery
+          </Badge>
+          <Badge variant="outline">Awaiting Delivery</Badge>
         </div>
 
-        {physicalOrderItems.map((item, index) => (
-          <div
-            key={index}
-            className="grid grid-cols-1 sm:grid-cols-[1fr_120px_auto] gap-2 items-end rounded-lg border p-3"
-          >
-            <div className="space-y-2">
-              <Label>Stock Item</Label>
+        <p className="text-sm text-muted-foreground">
+          {sc?.description || 'Unknown material'}
+        </p>
 
-              <Select
-                value={item.stock_code_id}
-                onValueChange={value =>
-                  setPhysicalOrderItems(prev =>
-                    prev.map((row, i) =>
-                      i === index
-                        ? { ...row, stock_code_id: value }
-                        : row
-                    )
-                  )
-                }
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Select stock" />
-                </SelectTrigger>
+        <p className="text-xs text-muted-foreground">
+          Supplier: {supplier?.name || 'Unknown supplier'}
+          {' · '}LOT: {record.internal_lot_number}
+        </p>
 
-                <SelectContent>
-                  {stockCodes.map(code => (
-                    <SelectItem key={code.id} value={code.id}>
-                      {code.stock_code} — {code.description}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="space-y-2">
-              <Label>Qty Ordered</Label>
-              <Input
-                type="number"
-                min="0.01"
-                step="any"
-                value={item.quantity_ordered}
-                onChange={e =>
-                  setPhysicalOrderItems(prev =>
-                    prev.map((row, i) =>
-                      i === index
-                        ? { ...row, quantity_ordered: e.target.value }
-                        : row
-                    )
-                  )
-                }
-                placeholder="Quantity"
-              />
-            </div>
-
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              disabled={physicalOrderItems.length === 1}
-              onClick={() =>
-                setPhysicalOrderItems(prev =>
-                  prev.filter((_, i) => i !== index)
-                )
-              }
-              title="Remove item"
-            >
-              <Trash2 className="h-4 w-4 text-destructive" />
-            </Button>
-          </div>
-        ))}
+        <p className="text-xs text-muted-foreground">
+          Expected: {formatDate(record.expected_delivery_date!)}
+          {' · '}Quantity: {record.quantity_received} {sc?.unit_of_measure || ''}
+          {record.expiry_date ? ` · Expiry: ${formatDate(record.expiry_date)}` : ''}
+        </p>
       </div>
 
-      <div className="space-y-2">
-        <Label>Notes (optional)</Label>
-        <Textarea
-          rows={2}
-          value={physicalOrderNotes}
-          onChange={e => setPhysicalOrderNotes(e.target.value)}
-          placeholder="Expected delivery date, reference, or other details"
-        />
-      </div>
+      <Button
+        size="sm"
+        className="gap-2"
+        onClick={() => openFutureDeliveryDialog(record)}
+      >
+        <PackageCheck className="h-4 w-4" />
+        Confirm / Decline
+      </Button>
     </div>
-
-    <DialogFooter>
-      <Button
-        variant="outline"
-        onClick={() => setPhysicalOrderOpen(false)}
-        disabled={physicalOrderSaving}
-      >
-        Cancel
-      </Button>
-
-      <Button
-        onClick={handleCreatePhysicalOrder}
-        disabled={physicalOrderSaving}
-      >
-        {physicalOrderSaving && (
-          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-        )}
-        Record Physical Order
-      </Button>
-    </DialogFooter>
-  </DialogContent>
-</Dialog>
-            <div className="space-y-3">
-              <div className='border-b pb-2 mb-3'>
-                <h4 className='font-semibold'> Awaiting Supplier Deliveries</h4>
-                <p className='text-sm text-muted-foreground'>
-                  Stock Orders emailed to suppliers that have not yet been received. Confirm receipt when the delivery arrives.
-                </p>
-              </div>
+  );
+})}
               {/* Emailed Supplier Orders (from Stock Tracking) */}
               {(supplierOrderEmails || [])
                 .filter(e => e.status === 'pending')
@@ -3821,65 +3903,11 @@ const getExportFilteredRecords = () => {
                     </div>
                   );
               })}
-              <div className="border-b pb-2 mb-3 mt-6">
-                <div className="border-b pb-2 mb-3">
-  <h4 className="font-semibold">Pending Physical Deliveries</h4>
-  <p className="text-sm text-muted-foreground">
-    Orders placed directly with suppliers, awaiting delivery.
-  </p>
-</div>
-
-{stockOrders
-  .filter(
-    order =>
-      order.status !== 'CHECKED' &&
-      String((order as any).notes ?? '').startsWith('[PHYSICAL_ORDER]')
-  )
-  .map(order => (
-    <div
-      key={`physical-${order.id}`}
-      className="flex flex-wrap items-center gap-3 rounded-lg border border-amber-200 p-3"
-    >
-      <div className="flex-1 min-w-[220px]">
-        <p className="font-medium">{order.po_number}</p>
-        <p className="text-sm text-muted-foreground">
-          {suppliers.find(s => s.id === order.supplier_id)?.name || 'Unknown supplier'}
-          {' · '}
-          Ordered {formatDate(order.order_date)}
-        </p>
-        <p className="text-sm text-muted-foreground">
-          {order.items.length} item line{order.items.length !== 1 ? 's' : ''}
-        </p>
-      </div>
-
-      <Badge className="bg-amber-500 text-white">
-        Awaiting Delivery
-      </Badge>
-
-      <Button
-        size="sm"
-        onClick={() => openConfirmDialog(order)}
-        className="gap-2"
-      >
-        <PackageCheck className="h-4 w-4" />
-        Confirm Received
-      </Button>
-    </div>
-  ))}
-                <h4 className="font-semibold">Invoice Stock Orders</h4>
-                <p className="text-sm text-muted-foreground">
-                  Review and confirm stock orders created from uploaded invoices.
-                </p>
-              </div>
 
               {/* Stock Orders (from Invoice Upload) */}
-             {stockOrders
-  .filter(
-    o =>
-      o.status !== 'CHECKED' &&
-      !(String((o as any).notes ?? '').startsWith('[PHYSICAL_ORDER]'))
-  )
-  .map(order => {
+              {stockOrders
+                .filter(o => o.status !== 'CHECKED')
+                .map(order => {
           const supplier = getSupplier(order.supplier_id);
 
           const receivedCount = order.items.filter(
@@ -3956,7 +3984,9 @@ const getExportFilteredRecords = () => {
             </div>
           );
         })}
-              {stockOrders.filter(o => o.status !== 'CHECKED').length === 0 && (supplierOrderEmails || []).filter(e => e.status === 'pending').length === 0 && (
+              {stockOrders.filter(o => o.status !== 'CHECKED').length === 0 &&
+  (supplierOrderEmails || []).filter(e => e.status === 'pending').length === 0 &&
+  futureDeliveries.length === 0 && (
                 <p className="py-8 text-center text-sm text-muted-foreground">
                   <Inbox className="mx-auto mb-2 h-8 w-8 opacity-50" />
                   No orders awaiting confirmation
@@ -4554,6 +4584,177 @@ const getExportFilteredRecords = () => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+{/* Future Delivery Confirmation Dialog */}
+<Dialog
+  open={!!futureDeliveryToConfirm}
+  onOpenChange={(open) => {
+    if (!open && !confirmingFutureDelivery) {
+      setFutureDeliveryToConfirm(null);
+    }
+  }}
+>
+  <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-[600px]">
+    <DialogHeader>
+      <DialogTitle>Confirm Future Delivery</DialogTitle>
+      <DialogDescription>
+        Check the delivery physically on arrival. Stock will only be added
+        after all required quality checks pass.
+      </DialogDescription>
+    </DialogHeader>
+
+    {futureDeliveryToConfirm && (
+      <div className="space-y-4 py-2">
+        <div className="space-y-2 rounded-lg border bg-muted/30 p-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="outline">Future Delivery</Badge>
+            <Badge variant="outline">Awaiting Confirmation</Badge>
+          </div>
+
+          <p className="font-semibold">
+            {getStockCode(futureDeliveryToConfirm.stock_code_id)?.stock_code}
+            {' — '}
+            {getStockCode(futureDeliveryToConfirm.stock_code_id)?.description}
+          </p>
+
+          <p className="text-sm">
+            <strong>LOT:</strong> {futureDeliveryToConfirm.internal_lot_number}
+          </p>
+
+          <p className="text-sm">
+            <strong>Supplier:</strong>{' '}
+            {getSupplier(futureDeliveryToConfirm.supplier_id)?.name || 'Unknown supplier'}
+          </p>
+
+          <p className="text-sm">
+            <strong>Quantity:</strong>{' '}
+            {futureDeliveryToConfirm.quantity_received}{' '}
+            {getStockCode(futureDeliveryToConfirm.stock_code_id)?.unit_of_measure || ''}
+          </p>
+
+          <p className="text-sm">
+            <strong>Expected delivery:</strong>{' '}
+            {futureDeliveryToConfirm.expected_delivery_date
+              ? formatDate(futureDeliveryToConfirm.expected_delivery_date)
+              : 'Not specified'}
+          </p>
+        </div>
+        {/* Actual Delivery Details */}
+        <div className="space-y-3 rounded-lg border p-3">
+          <div>
+            <Label className="font-semibold">Actual Delivery Details</Label>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Verify these details against the physical delivery. You can
+              correct them before confirming receipt.
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <Label>Actual Quantity Received</Label>
+            <Input
+              type="number"
+              min="0.01"
+              step="any"
+              value={futureDeliveryActualQuantity}
+              onChange={(e) =>
+                setFutureDeliveryActualQuantity(e.target.value)
+              }
+              disabled={confirmingFutureDelivery}
+              placeholder="Enter actual quantity"
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label>Actual Supplier Batch Number</Label>
+            <Input
+              value={futureDeliverySupplierBatchNumber}
+              onChange={(e) =>
+                setFutureDeliverySupplierBatchNumber(e.target.value)
+              }
+              disabled={confirmingFutureDelivery}
+              placeholder="Enter supplier batch number"
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label>Actual Expiry Date</Label>
+            <Input
+              type="date"
+              value={futureDeliveryExpiryDate}
+              onChange={(e) =>
+                setFutureDeliveryExpiryDate(e.target.value)
+              }
+              disabled={confirmingFutureDelivery}
+            />
+          </div>
+        </div>
+        <div className="space-y-3 rounded-lg border p-3">
+          <div>
+            <Label className="font-semibold">Quality Checks on Arrival</Label>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Tick each check only after physically inspecting the delivery.
+              All checks except COA/COC are required.
+            </p>
+          </div>
+
+          {receivingQualityChecksList.map(({ key, label }) => (
+            <label
+              key={key}
+              className="flex items-center gap-2 text-sm"
+            >
+              <Checkbox
+                checked={!!futureDeliveryQualityChecks[key]}
+                onCheckedChange={(checked) =>
+                  setFutureDeliveryQualityChecks((prev) => ({
+                    ...prev,
+                    [key]: checked === true,
+                  }))
+                }
+                disabled={confirmingFutureDelivery}
+              />
+              <span>
+                {label}
+                {key === 'coa_received' && (
+                  <span className="ml-1 text-xs text-muted-foreground">
+                    (optional)
+                  </span>
+                )}
+              </span>
+            </label>
+          ))}
+        </div>
+      </div>
+    )}
+
+    <DialogFooter className="flex-wrap gap-2">
+      <Button
+        variant="outline"
+        disabled={confirmingFutureDelivery}
+        onClick={() => setFutureDeliveryToConfirm(null)}
+      >
+        Cancel
+      </Button>
+
+      <Button
+        variant="destructive"
+        disabled={confirmingFutureDelivery}
+        onClick={handleDeclineFutureDelivery}
+      >
+        Decline Delivery
+      </Button>
+
+      <Button
+        disabled={confirmingFutureDelivery}
+        onClick={handleConfirmFutureDelivery}
+      >
+        {confirmingFutureDelivery && (
+          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+        )}
+        Confirm Received
+      </Button>
+    </DialogFooter>
+  </DialogContent>
+</Dialog>
 
       <Dialog open={viewDialogOpen} onOpenChange={setViewDialogOpen}>
         <DialogContent className="sm:max-w-[600px] max-h-[90vh] overflow-y-auto">
