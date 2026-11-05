@@ -17,6 +17,7 @@ import {
   Loader2,
   RefreshCcw,
   BellRing,
+  Copy,
 } from 'lucide-react';
 
 
@@ -90,6 +91,20 @@ useEffect(() => {
   const [seenPendingIds, setSeenPendingIds] = useState<Set<string>>(new Set());
   const [meetingPopupOpen, setMeetingPopupOpen] = useState(false);
   const [seenMeetingIds, setSeenMeetingIds] = useState<Set<string>>(new Set());
+
+
+const ONBOARDING_LINK = 'https://erp.maharajasspices.com/OnboardEmployee';
+const [onboardingLinkCopied, setOnboardingLinkCopied] = useState(false);
+
+const handleCopyOnboardingLink = async () => {
+  try {
+    await navigator.clipboard.writeText(ONBOARDING_LINK);
+    setOnboardingLinkCopied(true);
+  } catch (error) {
+    console.error('Could not copy onboarding link:', error);
+    alert('Could not copy the link. Please copy it manually.');
+  }
+};
 
 
   // Tracks whether HR has dismissed the current round of meeting popups.
@@ -651,6 +666,53 @@ useEffect(() => {
           </div>
         </div>
       </div>
+
+      
+      {/* Employee Onboarding Link */}
+      <div className="rounded-xl border border-emerald-500/20 bg-card p-5 shadow-card">
+        <div className="mb-3 flex items-center gap-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600">
+            <UserPlus className="h-5 w-5" />
+          </div>
+          <div>
+            <h3 className="font-semibold text-foreground">
+              Employee Onboarding
+            </h3>
+            <p className="text-sm text-muted-foreground">
+              Copy this link and send it to new employees to complete their onboarding.
+            </p>
+          </div>
+        </div>
+
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <Input
+            value={ONBOARDING_LINK}
+            readOnly
+            onClick={(e) => e.currentTarget.select()}
+            className="flex-1 bg-muted/30 text-sm"
+          />
+
+          <Button
+            type="button"
+            onClick={handleCopyOnboardingLink}
+            className="gap-2 bg-emerald-600 text-white hover:bg-emerald-700"
+          >
+            {onboardingLinkCopied ? (
+              <>
+                <CheckCircle2 className="h-4 w-4" />
+                Copied!
+              </>
+            ) : (
+              <>
+                <Copy className="h-4 w-4" />
+                Copy Link
+              </>
+            )}
+          </Button>
+        </div>
+      </div>
+
+      
 
       {/* Recently Signed Contracts - notification when an employee signs */}
       {recentlySignedContracts.length > 0 && (
