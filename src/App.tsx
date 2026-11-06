@@ -13,7 +13,7 @@ import { HRLayout } from "@/components/layout/HRLayout";
 import { Loader2, ShieldX, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
-
+import { QLayout } from '@/components/layout/QLayout'
 
 // ============================================================
 // Main ERP pages
@@ -66,6 +66,19 @@ const MarketingDashboard = lazy(
   () => import("./pages/MarketingSystem/MarketingDashboard")
 );
 
+
+//Quality System Pages
+const QualitySystemDashboard = lazy(() => import("./pages/QualitySystem/QualityDashboard"))
+
+const QualityLogin = lazy(
+  () => import("./pages/QualitySystem/QualityLogin")
+);
+const QualityDocuments = lazy(
+  () => import("./pages/QualitySystem/QualityDocuments")
+);
+const QualityDocumentEditor = lazy(
+  () => import('./pages/QualitySystem/QualityDocumentEditor')
+);
 // ============================================================
 // Employee leave portal
 // ============================================================
@@ -194,6 +207,70 @@ const MarketingRouteGuard: React.FC<{ children: React.ReactNode }> = ({
   return <>{children}</>;
 };
 
+// ============================================================
+// Quality Route Guard
+// ============================================================
+// ============================================================
+// Quality Route Guard
+// ========================================================
+
+const QualityRouteGuard: React.FC<{ children: React.ReactNode }> = ({
+  children,
+}) => {
+  const { user, fmsUser, loading, signOut } = useFMSAuth();
+
+  if (loading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    );
+  }
+
+  // Not logged in: send to Quality login
+  if (!user) {
+    return <Navigate to="/quality-login" replace />;
+  }
+
+  // Only Quality users and system administrators are allowed
+  if (
+    !fmsUser ||
+    (fmsUser.role !== "quality_user" &&
+      fmsUser.role !== "system_admin")
+  ) {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center bg-background p-4">
+        <ShieldX className="mx-auto h-12 w-12 text-destructive" />
+
+        <h1 className="mt-4 text-2xl font-bold">
+          Quality System Access Denied
+        </h1>
+
+        <p className="mt-2 text-center text-muted-foreground">
+          Only authorised Quality Department users and system administrators
+          can access this system.
+        </p>
+
+        <div className="mt-6 flex gap-3">
+          <Button onClick={signOut} variant="outline">
+            Sign Out
+          </Button>
+
+          <Button
+            onClick={() => {
+              window.location.href = "/";
+            }}
+            variant="outline"
+          >
+            Back to Portal
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  return <>{children}</>;
+};
 // ============================================================
 // Page loader
 // ============================================================
@@ -443,6 +520,37 @@ const App = () => (
                 element={<NotFound />}
               />
 
+                        {/* ==================================================
+                    QUALITY MANAGEMENT SYSTEM
+                ================================================== */}
+
+                {/* Quality Login - accessible without being logged in */}
+                <Route
+                  path="/quality-login"
+                  element={<QualityLogin />}
+                />
+
+                {/* Protected Quality System */}
+                <Route
+                  element={
+                    <QualityRouteGuard>
+                      <QLayout />
+                    </QualityRouteGuard>
+                  }
+                >
+                  <Route
+                    path="/quality-system/dashboard"
+                    element={<QualitySystemDashboard />}
+                  />
+                  <Route
+                    path="/quality-system/documents"
+                    element={<QualityDocuments />}
+                  />
+              </Route>
+              <Route
+    path="/quality-system/documents/:documentId"
+    element={<QualityDocumentEditor />}
+  />
             </Routes>
           </Suspense>
         </BrowserRouter>
