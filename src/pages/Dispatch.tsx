@@ -475,11 +475,6 @@ const Dispatch: React.FC = () => {
                       <Button variant="ghost" size="icon" onClick={() => handleDownloadQRCode(record)} title="Download QR">
                         <Download className="h-4 w-4" />
                       </Button>
-                      {record.status === 'dispatched' && (
-                        <Button variant="destructive" size="icon" onClick={() => handleMarkTruckDeparted(record.id)} title="Mark as departed">
-                          <Loader2 className="h-4 w-4" />
-                        </Button>
-                      )}
                       {canDelete && (
                         <AlertDialog>
                           <AlertDialogTrigger asChild>

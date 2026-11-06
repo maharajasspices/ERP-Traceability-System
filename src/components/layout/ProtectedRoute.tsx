@@ -44,6 +44,12 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children }) => {
       </div>
     );
   }
+  
+    if (fmsUser.role === 'marketing_user') {
+    return <Navigate to="/marketing-dashboard" replace />;
+    
+  }
+
 
   return <>{children}</>;
 };

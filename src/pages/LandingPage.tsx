@@ -6,6 +6,9 @@ import {
   LayoutGrid,
   ArrowRight,
   Lock,
+  Package,
+  Boxes,
+  ClipboardList
 } from 'lucide-react';
 
 import logo from '@/assets/logo.png';
@@ -33,13 +36,29 @@ const Landing: React.FC = () => {
       action: () => navigate('/hr-login'),
     },
     {
-      title: 'More Systems',
-      description:
-        'Additional business systems and departments will be added here in the future.',
-      icon: LayoutGrid,
-      color: 'orange',
-      available: false,
-    },
+  title: 'Quality System',
+  description: 'Manage product quality, inspections, testing and compliance.',
+  icon: Package,
+  color: 'red',
+  available: true,
+  action: () => {},
+},
+{
+  title: 'Business Development Management',
+  description: 'Manage retail pricing, company growth and customer relationships.',
+  icon: Boxes,
+  color: 'green',
+  available: true,
+  action: () => {},
+},
+{
+  title: 'Marketing System',
+  description: 'Manage marketing campaigns, promotions, branding and advertising',
+  icon: ClipboardList,
+  color: 'amber',
+  available: true,
+  action: () => {},
+},
   ];
 
   return (
@@ -181,7 +200,7 @@ const Landing: React.FC = () => {
                       <Lock className="h-4 w-4" />
                       Coming Soon
                     </button>
-                  )}
+                  )} 
 
                 </div>
               </div>

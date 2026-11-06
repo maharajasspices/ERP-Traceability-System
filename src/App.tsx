@@ -27,6 +27,7 @@ const BatchSheet = lazy(() => import("./pages/BatchSheet"));
 const PickleProduction = lazy(() => import("./pages/PickleProduction"));
 const StockTracking = lazy(() => import("./pages/StockTracking"));
 const Dispatch = lazy(() => import("./pages/Dispatch"));
+const QualityDashboard = lazy(() => import("./pages/QualityDashboard"));
 const Traceability = lazy(() => import("./pages/Traceability"));
 const Suppliers = lazy(() => import("./pages/Suppliers"));
 const Settings = lazy(() => import("./pages/Settings"));
@@ -59,6 +60,11 @@ const Kiosk = lazy(() => import("./pages/Attendance/Kiosk"));
 const Leave = lazy(() => import("./pages/HR/Leave"));
 const Documents = lazy(() => import("./pages/HR/Documents"));
 const Warnings = lazy(() => import("./pages/HR/Warnings"));
+
+//Marketing Pages
+const MarketingDashboard = lazy(
+  () => import("./pages/MarketingSystem/MarketingDashboard")
+);
 
 // ============================================================
 // Employee leave portal
@@ -128,6 +134,58 @@ const HRRouteGuard: React.FC<{ children: React.ReactNode }> = ({
               Back to Portal
             </Button>
           </div>
+        </div>
+      </div>
+    );
+  }
+
+  return <>{children}</>;
+};
+
+// ============================================================
+// Marketing Route Guard
+// ============================================================
+
+const MarketingRouteGuard: React.FC<{ children: React.ReactNode }> = ({
+  children,
+}) => {
+  const { user, fmsUser, loading } = useFMSAuth();
+
+  if (loading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <Navigate
+        to="/auth"
+        state={{ from: "/marketing-dashboard" }}
+        replace
+      />
+    );
+  }
+
+  if (
+    !fmsUser ||
+    (fmsUser.role !== "marketing_user" &&
+      fmsUser.role !== "system_admin")
+  ) {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center bg-background p-4">
+        <div className="text-center">
+          <ShieldX className="mx-auto h-12 w-12 text-destructive" />
+
+          <h1 className="mt-4 text-2xl font-bold">
+            Marketing Access Denied
+          </h1>
+
+          <p className="mt-2 text-muted-foreground">
+            Your account is not authorised to access the Marketing System.
+          </p>
         </div>
       </div>
     );
@@ -333,6 +391,11 @@ const App = () => (
                 />
 
                 <Route
+                  path="/quality"
+                  element={<QualityDashboard />}
+                />
+
+                <Route
                   path="/traceability"
                   element={<Traceability />}
                 />
@@ -358,6 +421,18 @@ const App = () => (
                   element={<ReconPreview />}
                 />
               </Route>
+              {/* ==================================================
+                  MARKETING SYSTEM
+              ================================================== */}
+
+              <Route
+                path="/marketing-dashboard"
+                element={
+                  <MarketingRouteGuard>
+                    <MarketingDashboard />
+                  </MarketingRouteGuard>
+                }
+              />
 
               {/* ==================================================
                   404

@@ -34,6 +34,7 @@ import {
   Timer
 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client'
+
 const Dashboard: React.FC = () => {
  const [dashboardView, setDashboardView] = useState<'overview' | 'analytics'>('overview');
    const [pickleSoakingStages, setPickleSoakingStages] = useState<any[]>([]);

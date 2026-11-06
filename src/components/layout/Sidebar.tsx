@@ -18,7 +18,7 @@ import {
   Menu,
   X,
   KeyRound,
-  BarChart3, ArrowLeft, LogOut, Box
+  BarChart3, ArrowLeft, LogOut, Box, Target
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetTrigger } from '@/components/ui/sheet';
@@ -74,6 +74,13 @@ const navItems: NavItem[] = [
     icon: Send,
     description: 'Outbound tracking',
   },
+  {
+    title: 'Quality',
+    href: '/quality',
+    icon: Target,
+    description: 'Quality inspections',
+  },
+  
  
   {
     title: 'Traceability',
@@ -114,12 +121,19 @@ interface SidebarProps {
 
 const SidebarContent: React.FC<{ collapsed: boolean; onItemClick?: () => void }> = ({ collapsed, onItemClick }) => {
   const location = useLocation();
-  const { fmsUser, signOut } = useFMSAuth();
+  const { fmsUser, signOut, canAccessModule } = useFMSAuth();
   const isQaViewer = fmsUser?.role === 'qa_viewer';
   const isAdmin = fmsUser?.role === 'system_admin';
 
   const allowedForViewer = new Set(['/', '/receiving', '/bom', '/batch-sheet', '/traceability', '/suppliers']);
   const visibleMain = isQaViewer ? navItems.filter((i) => allowedForViewer.has(i.href)) : navItems;
+
+  // Filter out nav items for modules the user doesn't have access to
+  const mainWithModuleAccess = visibleMain.filter((item) => {
+    if (item.href === '/quality') return canAccessModule('quality');
+    return true;
+  });
+
   const visibleSecondary = isQaViewer ? secondaryNavItems.filter((i) => allowedForViewer.has(i.href)) : secondaryNavItems;
 
   // Admin-only navigation items (only visible to system_admin)
@@ -146,7 +160,7 @@ const SidebarContent: React.FC<{ collapsed: boolean; onItemClick?: () => void }>
         <div className={cn("mb-2 px-3 text-xs font-semibold uppercase tracking-wider text-sidebar-foreground/50", collapsed && "sr-only")}>
           Main Menu
         </div>
-        {visibleMain.map((item) => {
+        {mainWithModuleAccess.map((item) => {
           const isActive = location.pathname === item.href || 
             (item.href !== '/' && location.pathname.startsWith(item.href));
           

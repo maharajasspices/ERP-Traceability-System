@@ -11,7 +11,11 @@ type FMSRole = 'system_admin'
 | 'dispatch_user' 
 | 'qa_viewer' 
 | 'hr_user'
-| 'hr_admin';
+| 'hr_admin'
+| 'marketing_user'
+| 'bdm_user'
+| 'quality_user'
+;
 
 interface FMSUser {
   id: string;
@@ -20,6 +24,24 @@ interface FMSUser {
   role: FMSRole;
   is_active: boolean;
 }
+type FMSModule = 'quality' | 'marketing' | 'bdm';
+
+interface FMSModuleConfig {
+  roles: FMSRole[];
+}
+
+export const MODULE_ROLES: Record<FMSModule, FMSModuleConfig> = {
+  quality: {
+    roles: ['quality_user', 'system_admin'],
+  },
+  marketing: {
+    roles: ['marketing_user', 'system_admin'],
+  },
+  bdm: {
+    roles: ['bdm_user', 'system_admin']
+  }
+};
+
 
 
 
@@ -33,6 +55,7 @@ interface FMSAuthContextType {
   signOut: () => Promise<void>;
   hasRole: (role: FMSRole) => boolean;
   isAdmin: boolean;
+  canAccessModule: (module: FMSModule) => boolean;
 }
 
 const FMSAuthContext = createContext<FMSAuthContextType | undefined>(undefined);
@@ -192,6 +215,12 @@ export const FMSAuthProvider: React.FC<{ children: ReactNode }> = ({ children })
     return fmsUser?.role === role;
   };
 
+  const canAccessModule = (module: FMSModule): boolean => {
+    const config = MODULE_ROLES[module];
+    if (!config) return false;
+    return !!fmsUser?.role && config.roles.includes(fmsUser.role);
+  };
+
   /**
    * SECURITY NOTE: This is for UI purposes ONLY. Actual admin access is enforced
    * by RLS policies using fms_has_role(auth.uid(), 'system_admin').
@@ -209,6 +238,7 @@ export const FMSAuthProvider: React.FC<{ children: ReactNode }> = ({ children })
       signOut,
       hasRole,
       isAdmin,
+      canAccessModule,
     }}>
       {children}
     </FMSAuthContext.Provider>

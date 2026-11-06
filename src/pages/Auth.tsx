@@ -21,14 +21,20 @@ const Auth: React.FC = () => {
   const [accessDenied, setAccessDenied] = useState(false);
   const [passwordBreached, setPasswordBreached] = useState<{ isBreached: boolean; count: number } | null>(null);
 
-  useEffect(() => {
-    if (!authLoading && user && fmsUser) {
-      navigate('/dashboard');
+
+useEffect(() => {
+  if (!authLoading && user && fmsUser) {
+    if (fmsUser.role === 'marketing_user') {
+      navigate('/marketing-dashboard', { replace: true });
+    } else {
+      navigate('/dashboard', { replace: true });
     }
-    if (!authLoading && user && !fmsUser) {
-      setAccessDenied(true);
-    }
-  }, [user, fmsUser, authLoading, navigate]);
+  }
+
+  if (!authLoading && user && !fmsUser) {
+    setAccessDenied(true);
+  }
+}, [user, fmsUser, authLoading, navigate]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();

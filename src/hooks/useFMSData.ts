@@ -1331,6 +1331,8 @@ const loadSupplierOrderEmails = async () => {
       return null;
     }
 
+
+    //store the invoice document first so a storage failure
     // Store the invoice document first so a storage failure is reported before
     // any rows are written.
     let filePath: string | null = null;

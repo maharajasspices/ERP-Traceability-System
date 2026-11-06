@@ -96,13 +96,35 @@ useEffect(() => {
 const ONBOARDING_LINK = 'https://erp.maharajasspices.com/OnboardEmployee';
 const [onboardingLinkCopied, setOnboardingLinkCopied] = useState(false);
 
+
 const handleCopyOnboardingLink = async () => {
   try {
-    await navigator.clipboard.writeText(ONBOARDING_LINK);
+    // Use the modern clipboard API when available
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(ONBOARDING_LINK);
+    } else {
+      // Fallback for browsers where clipboard API is unavailable
+      const textArea = document.createElement('textarea');
+      textArea.value = ONBOARDING_LINK;
+      textArea.style.position = 'fixed';
+      textArea.style.left = '-9999px';
+
+      document.body.appendChild(textArea);
+      textArea.focus();
+      textArea.select();
+
+      const copied = document.execCommand('copy');
+      document.body.removeChild(textArea);
+
+      if (!copied) {
+        throw new Error('Browser could not copy the link.');
+      }
+    }
+
     setOnboardingLinkCopied(true);
   } catch (error) {
     console.error('Could not copy onboarding link:', error);
-    alert('Could not copy the link. Please copy it manually.');
+    alert('Could not copy the link. Please select and copy it manually.');
   }
 };
 
