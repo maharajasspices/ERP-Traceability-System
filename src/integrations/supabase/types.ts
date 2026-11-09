@@ -3479,6 +3479,168 @@ export type Database = {
         Relationships: []
       }
     }
+    
+      fms_quality_documents: {
+        Row: {
+          id: string
+          document_no: string
+          title: string
+          category: string
+          document_type: string
+          version_no: number
+          issue_date: string | null
+          revision_date: string | null
+          compiled_by: string | null
+          approved_by: string | null
+          content: string
+          status: string
+          created_by: string | null
+          updated_by: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          document_no: string
+          title: string
+          category: string
+          document_type: string
+          version_no?: number
+          issue_date?: string | null
+          revision_date?: string | null
+          compiled_by?: string | null
+          approved_by?: string | null
+          content: string
+          status?: string
+          created_by?: string | null
+          updated_by?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          document_no?: string
+          title?: string
+          category?: string
+          document_type?: string
+          version_no?: number
+          issue_date?: string | null
+          revision_date?: string | null
+          compiled_by?: string | null
+          approved_by?: string | null
+          content?: string
+          status?: string
+          created_by?: string | null
+          updated_by?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      fms_quality_document_revisions: {
+        Row: {
+          id: string
+          document_id: string
+          version_no: number
+          title: string
+          content: string
+          issue_date: string | null
+          revision_date: string | null
+          compiled_by: string | null
+          approved_by: string | null
+          change_summary: string | null
+          changed_by: string
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          document_id: string
+          version_no: number
+          title: string
+          content: string
+          issue_date?: string | null
+          revision_date?: string | null
+          compiled_by?: string | null
+          approved_by?: string | null
+          change_summary?: string | null
+          changed_by: string
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          document_id?: string
+          version_no?: number
+          title?: string
+          content?: string
+          issue_date?: string | null
+          revision_date?: string | null
+          compiled_by?: string | null
+          approved_by?: string | null
+          change_summary?: string | null
+          changed_by?: string
+          created_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fms_quality_document_revisions_document_id_fkey"
+            columns: ["document_id"]
+            isOneToOne: false
+            referencedRelation: "fms_quality_documents"
+            referencedColumns: ["id"]
+          }
+        ]
+      }
+      fms_quality_records: {
+        Row: {
+          id: string
+          document_id: string
+          record_number: string | null
+          title: string
+          form_data: Json
+          status: string
+          created_by: string
+          updated_by: string | null
+          submitted_at: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          document_id: string
+          record_number?: string | null
+          title: string
+          form_data?: Json
+          status?: string
+          created_by: string
+          updated_by?: string | null
+          submitted_at?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          document_id?: string
+          record_number?: string | null
+          title?: string
+          form_data?: Json
+          status?: string
+          created_by?: string
+          updated_by?: string | null
+          submitted_at?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "fms_quality_records_document_id_fkey"
+            columns: ["document_id"]
+            isOneToOne: false
+            referencedRelation: "fms_quality_documents"
+            referencedColumns: ["id"]
+          }
+        ]
+      }
+
     Views: {
       product_ratings: {
         Row: {
@@ -3691,6 +3853,9 @@ export type Database = {
         | "dispatch_user"
         | "qa_viewer"
         | "hr_user"
+        | "quality_user"
+        | "bdm_user"
+        | "marketing_user"
     }
     CompositeTypes: {
       [_ in never]: never

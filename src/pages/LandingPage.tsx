@@ -41,7 +41,7 @@ const Landing: React.FC = () => {
   icon: Package,
   color: 'red',
   available: true,
-  action: () => {},
+  action: () => navigate('/quality-system/dashboard'),
 },
 {
   title: 'Business Development Management',

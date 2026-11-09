@@ -1,292 +1,237 @@
 
 import React, { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { useFMSAuth } from '@/context/FMSAuthContext';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
-import { Save, Printer, ArrowLeft } from 'lucide-react';
+import {
+  ArrowLeft,
+  Save,
+  Printer,
+  Edit3,
+  History,
+  ShieldCheck,
+} from 'lucide-react';
 
-interface QualityNCRFormProps {
-  documentId: string;
-  recordId?: string;
+import QualityNCRForm from './QualityNCRForm';
+import QualityNCRLogbook from './QualityNCRLogbook';
+import QualityQuarantineTag from './QualityQuarantineTag';
+import QualityQuarantineRegister from './QualityQuarantineRegister';
+import QualityConcessionForm from './QualityConcessionForm';
+import QualityConcessionRegister from './QualityConcessionRegister';
+
+interface QualityDocument {
+  id: string;
+  document_no: string;
+  title: string;
+  category: string;
+  document_type: string;
+  version_no: number;
+  issue_date: string | null;
+  revision_date: string | null;
+  compiled_by: string | null;
+  approved_by: string | null;
+  content: string | null;
+  status: string;
 }
 
-const initialForm = {
-  originatorName: '',
-  productDescription: '',
-  contractorSupplier: '',
-  batchNumber: '',
-  quantity: '',
-  ncrNumber: '',
-  foundDuring: '',
-  otherActivity: '',
-  problemDescription: '',
-  immediateAction: '',
-  occurrenceDate: '',
-  reportingSignature: '',
-  reportingSignatureDate: '',
-  criticalityLevel: '',
-  retestingResult: '',
-  disposition: '',
-  otherDisposition: '',
-  requiredAction: '',
-  owner: '',
-  dateAssigned: '',
-  investigationDueDate: '',
-  productionManagerSignature: '',
-  documentControllerSignature: '',
-  capaApproval: '',
-  capaRcaNumber: '',
-  ownerName: '',
-  ownerDate: '',
-  ownerSignature: '',
-  qualityDesignee: '',
-  dispositionCompleted: '',
-  newNcrNumber: '',
-  qualitySignature: '',
-  qualityDate: '',
+interface QualityRevision {
+  id: string;
+  version_no: number;
+  title: string;
+  created_at: string;
+  compiled_by: string | null;
+  change_summary: string | null;
+}
+
+const customForms: Record<string, React.ComponentType<any>> = {
+  'MSRQ2-FRM-1': QualityNCRForm,
+  'MSRQ2-LOG-1': QualityNCRLogbook,
+  'MSRQ2-FRM-2': QualityQuarantineTag,
+  'MSRQ2-LOG-2': QualityQuarantineRegister,
+  'MSRQ2-FRM-3': QualityConcessionForm,
+  'MSRQ2-LOG-3': QualityConcessionRegister,
 };
 
-type NCRFormData = typeof initialForm;
+const displayDate = (date: string | null) => {
+  if (!date) return 'N/A';
 
-const inputClass =
-  'w-full rounded-md border border-input bg-background px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-60';
+  return new Date(date).toLocaleDateString('en-ZA');
+};
 
-const labelClass = 'mb-1 block text-sm font-medium';
-
-const sectionClass =
-  'space-y-5 rounded-lg border bg-card p-5 print:break-inside-avoid';
-
-const QualityNCRForm = ({
-  documentId,
-  recordId,
-}: QualityNCRFormProps) => {
+const QualityDocumentEditor = () => {
   const navigate = useNavigate();
+  const { documentId } = useParams<{ documentId: string }>();
+  const [searchParams] = useSearchParams();
+  const recordId = searchParams.get('recordId');
+
   const { user, fmsUser } = useFMSAuth();
-
-  const [form, setForm] = useState<NCRFormData>(initialForm);
-  const [saving, setSaving] = useState(false);
-  const [loading, setLoading] = useState(!!recordId);
-  const [savedRecordId, setSavedRecordId] = useState<string | null>(
-    recordId || null
-  );
-  const [status, setStatus] = useState('draft');
-
   const isAdmin = fmsUser?.role === 'system_admin';
-  const isReadOnly = status === 'submitted' || status === 'closed';
 
-  useEffect(() => {
-    if (!recordId) {
-      setForm(initialForm);
-      setSavedRecordId(null);
-      setStatus('draft');
+  const [document, setDocument] = useState<QualityDocument | null>(null);
+  const [revisionHistory, setRevisionHistory] = useState<QualityRevision[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  const [title, setTitle] = useState('');
+  const [versionNo, setVersionNo] = useState(0);
+  const [issueDate, setIssueDate] = useState('');
+  const [revisionDate, setRevisionDate] = useState('');
+  const [compiledBy, setCompiledBy] = useState('');
+  const [approvedBy, setApprovedBy] = useState('');
+  const [content, setContent] = useState('');
+
+  const loadDocument = async () => {
+    if (!documentId) {
+      toast.error('Document number is missing.');
       setLoading(false);
       return;
     }
 
-    let cancelled = false;
-
-    const loadRecord = async () => {
-      setLoading(true);
-
-      try {
-        const { data, error } = await supabase
-          .from('fms_quality_records')
-          .select('id, document_id, form_data, status')
-          .eq('id', recordId)
-          .eq('document_id', documentId)
-          .single();
-
-        if (error) throw error;
-
-        if (cancelled) return;
-
-        setForm({
-          ...initialForm,
-          ...(data.form_data || {}),
-        });
-
-        setSavedRecordId(data.id);
-        setStatus(data.status || 'draft');
-      } catch (error: any) {
-        console.error('Error loading NCR:', error);
-        toast.error(error.message || 'Unable to load this NCR.');
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    };
-
-    loadRecord();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [recordId, documentId]);
-
-  const update = (field: keyof NCRFormData, value: string) => {
-    setForm((previous) => ({
-      ...previous,
-      [field]: value,
-    }));
-  };
-
-  const field = (
-    label: string,
-    name: keyof NCRFormData,
-    type = 'text'
-  ) => (
-    <div>
-      <label className={labelClass}>{label}</label>
-      <input
-        type={type}
-        className={inputClass}
-        value={form[name]}
-        disabled={isReadOnly}
-        onChange={(e) => update(name, e.target.value)}
-      />
-    </div>
-  );
-
-  const area = (
-    label: string,
-    name: keyof NCRFormData,
-    rows = 4
-  ) => (
-    <div>
-      <label className={labelClass}>{label}</label>
-      <textarea
-        rows={rows}
-        className={inputClass}
-        value={form[name]}
-        disabled={isReadOnly}
-        onChange={(e) => update(name, e.target.value)}
-      />
-    </div>
-  );
-
-  const choice = (
-    label: string,
-    name: keyof NCRFormData,
-    options: string[]
-  ) => (
-    <div>
-      <label className={labelClass}>{label}</label>
-      <select
-        className={inputClass}
-        value={form[name]}
-        disabled={isReadOnly}
-        onChange={(e) => update(name, e.target.value)}
-      >
-        <option value="">Select an option</option>
-        {options.map((option) => (
-          <option key={option} value={option}>
-            {option}
-          </option>
-        ))}
-      </select>
-    </div>
-  );
-
-  const validateForm = () => {
-    if (!user?.id) {
-      toast.error('You must be logged in to save an NCR.');
-      return false;
-    }
-
-    if (!form.originatorName.trim() || !form.problemDescription.trim()) {
-      toast.error(
-        'Please enter the Originator Name and Problem Description.'
-      );
-      return false;
-    }
-
-    if (!form.ncrNumber.trim()) {
-      toast.error('Please enter an NCR Number before saving.');
-      return false;
-    }
-
-    return true;
-  };
-
-  const persistRecord = async (
-    nextStatus: 'draft' | 'submitted'
-  ) => {
-    console.log('DOCUMENT ID BEING SAVED:', documentId);
-console.log('DOCUMENT ID TYPE:', typeof documentId);
-
-if (!documentId) {
-  toast.error('Document ID is missing. Cannot save this NCR.');
-  return;
-}
-
-if (!validateForm()) return;
-
-setSaving(true);
+    setLoading(true);
 
     try {
-      const recordData: Record<string, any> = {
-        document_id: documentId,
-        record_number: form.ncrNumber.trim(),
-        title: `Non-Conformance Report ${form.ncrNumber.trim()}`,
-        form_data: form,
-        status: nextStatus,
-        updated_by: user!.id,
-        ...(nextStatus === 'submitted'
-          ? { submitted_at: new Date().toISOString() }
-          : {}),
-      };
+      const documentNumber = decodeURIComponent(documentId);
 
-      let savedId = savedRecordId;
+const isUuid =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+    documentNumber
+  );
 
-      if (savedRecordId) {
-        let updateQuery = supabase
-          .from('fms_quality_records')
-          .update(recordData)
-          .eq('id', savedRecordId)
-          .eq('document_id', documentId);
+const { data, error } = isUuid
+  ? await supabase
+      .from('fms_quality_documents')
+      .select('*')
+      .eq('id', documentNumber)
+      .single()
+  : await supabase
+      .from('fms_quality_documents')
+      .select('*')
+      .eq('document_no', documentNumber)
+      .single();
 
-        // Quality users can update their own records.
-        // System administrators can update records belonging to others.
-        if (!isAdmin) {
-          updateQuery = updateQuery.eq('created_by', user!.id);
-        }
+      if (error) throw error;
 
-        const { data, error } = await updateQuery
-          .select('id')
-          .single();
+      setDocument(data);
 
-        if (error) throw error;
+      setTitle(data.title || '');
+      setVersionNo(Number(data.version_no) || 0);
+      setIssueDate(data.issue_date || '');
+      setRevisionDate(data.revision_date || '');
+      setCompiledBy(data.compiled_by || '');
+      setApprovedBy(data.approved_by || '');
+      setContent(data.content || '');
 
-        savedId = data.id;
-      } else {
-        const { data, error } = await supabase
-          .from('fms_quality_records')
-          .insert({
-            ...recordData,
-            created_by: user!.id,
-          })
-          .select('id')
-          .single();
+      const { data: revisions, error: revisionError } = await supabase
+        .from('fms_quality_document_revisions')
+        .select('*')
+        .eq('document_id', data.id)
+        .order('created_at', { ascending: false });
 
-        if (error) throw error;
+      if (revisionError) throw revisionError;
 
-        savedId = data.id;
-      }
-
-      setSavedRecordId(savedId);
-      setStatus(nextStatus);
-
-      if (nextStatus === 'submitted') {
-        toast.success('NCR submitted successfully.');
-      } else {
-        toast.success('NCR draft saved successfully.');
-      }
+      setRevisionHistory(revisions || []);
     } catch (error: any) {
-      console.error('Error saving NCR:', error);
-      toast.error(
-        error.message || 'Unable to save the NCR. Check your permissions.'
-      );
+      console.error('Error loading Quality document:', error);
+      toast.error(error.message || 'Unable to load this document.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadDocument();
+  }, [documentId]);
+
+  const cancelEditing = () => {
+    if (!document) return;
+
+    setTitle(document.title || '');
+    setVersionNo(Number(document.version_no) || 0);
+    setIssueDate(document.issue_date || '');
+    setRevisionDate(document.revision_date || '');
+    setCompiledBy(document.compiled_by || '');
+    setApprovedBy(document.approved_by || '');
+    setContent(document.content || '');
+
+    setEditing(false);
+  };
+
+  const handleSave = async () => {
+    if (!isAdmin) {
+      toast.error('Only system administrators can edit master documents.');
+      return;
+    }
+
+    if (!user?.id || !document) {
+      toast.error('Document or user information is missing.');
+      return;
+    }
+
+    if (!title.trim()) {
+      toast.error('Please enter a document title.');
+      return;
+    }
+
+    setSaving(true);
+
+    try {
+      // Archive the current version before updating the master.
+      const { error: revisionError } = await supabase
+        .from('fms_quality_document_revisions')
+        .insert({
+          document_id: document.id,
+          version_no: document.version_no,
+          title: document.title,
+          content: document.content,
+          issue_date: document.issue_date,
+          revision_date: document.revision_date,
+          compiled_by: document.compiled_by,
+          approved_by: document.approved_by,
+          change_summary: 'Previous version archived before master document update.',
+          changed_by: user.id,
+        });
+
+      if (revisionError) throw revisionError;
+
+      const today = new Date().toISOString().slice(0, 10);
+
+      const { data, error } = await supabase
+        .from('fms_quality_documents')
+        .update({
+          title: title.trim(),
+          version_no: String(
+            Math.max(Number(document.version_no) || 0, versionNo) + 1
+          ),
+          issue_date: issueDate || null,
+          revision_date: today,
+          compiled_by: compiledBy,
+          approved_by: approvedBy,
+          content,
+          updated_by: user.id,
+        })
+        .eq('id', document.id)
+        .select('*')
+        .single();
+
+      if (error) throw error;
+
+      setDocument(data);
+      setVersionNo(Number(data.version_no) || 0);
+      setRevisionDate(data.revision_date || '');
+      setEditing(false);
+
+      toast.success('Master document updated successfully.');
+
+      await loadDocument();
+    } catch (error: any) {
+      console.error('Error saving Quality document:', error);
+      toast.error(error.message || 'Unable to save the master document.');
     } finally {
       setSaving(false);
     }
@@ -294,292 +239,221 @@ setSaving(true);
 
   if (loading) {
     return (
-      <div className="py-12 text-center text-muted-foreground">
-        Loading NCR record...
+      <div className="p-10 text-center text-muted-foreground">
+        Loading Quality document...
       </div>
     );
   }
 
+  if (!document) {
+    return (
+      <div className="space-y-4 p-8">
+        <Button variant="outline" onClick={() => navigate('/quality-system/documents')}>
+          <ArrowLeft className="mr-2 h-4 w-4" />
+          Back to Documents
+        </Button>
+        <p className="text-destructive">The requested document could not be found.</p>
+      </div>
+    );
+  }
+
+  const CustomForm = customForms[document.document_no];
+
   return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-3 print:hidden">
-        <div>
-          <h2 className="text-xl font-semibold">
-            Non-Conformance Report Form
-          </h2>
-          <p className="text-sm text-muted-foreground">
-            Complete the relevant sections and save or submit the report.
-          </p>
+    <div className="space-y-6 p-8 sm:p-12 md:p-16">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => navigate('/quality-system/documents')}
+        >
+          <ArrowLeft className="mr-2 h-4 w-4" />
+          Back to Documents
+        </Button>
+
+        <Badge variant="secondary">{document.status}</Badge>
+      </div>
+
+      <div className="rounded-lg border bg-card p-6">
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-center gap-4">
+            <img
+              src="/images/mslogo.png"
+              alt="Maharaja's Spices"
+              className="h-16 w-auto object-contain"
+            />
+
+            <div>
+              <h1 className="text-2xl font-bold">{document.title}</h1>
+              <p className="text-sm text-muted-foreground">
+                Maharaja's Spices Quality Management System
+              </p>
+              <p className="mt-1 text-sm font-semibold">
+                {document.document_no}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap gap-2 print:hidden">
+            <Button variant="outline" onClick={() => window.print()}>
+              <Printer className="mr-2 h-4 w-4" />
+              Print / PDF
+            </Button>
+
+            {isAdmin && !editing && (
+              <Button onClick={() => setEditing(true)}>
+                <Edit3 className="mr-2 h-4 w-4" />
+                Edit Master
+              </Button>
+            )}
+          </div>
         </div>
 
-        <div className="flex flex-wrap gap-2">
-          {recordId && (
-            <Button
-              variant="outline"
-              onClick={() =>
-                navigate('/quality-system/documents/MSRQ2-LOG-1')
-              }
-            >
-              <ArrowLeft className="mr-2 h-4 w-4" />
-              Back to Logbook
-            </Button>
-          )}
+        <div className="mt-6 grid gap-4 border-t pt-5 sm:grid-cols-2 md:grid-cols-3">
+          <div>
+            <p className="text-xs text-muted-foreground">Issue Date</p>
+            <p className="font-medium">{displayDate(document.issue_date)}</p>
+          </div>
 
-          <Button variant="outline" onClick={() => window.print()}>
-            <Printer className="mr-2 h-4 w-4" />
-            Print / PDF
-          </Button>
+          <div>
+            <p className="text-xs text-muted-foreground">Version Number</p>
+            <p className="font-medium">{document.version_no}</p>
+          </div>
 
-          {!isReadOnly && (
-            <>
-              <Button
-                variant="outline"
-                onClick={() => persistRecord('draft')}
-                disabled={saving}
-              >
-                <Save className="mr-2 h-4 w-4" />
-                {saving ? 'Saving...' : 'Save Draft'}
-              </Button>
+          <div>
+            <p className="text-xs text-muted-foreground">Revision Date</p>
+            <p className="font-medium">{displayDate(document.revision_date)}</p>
+          </div>
 
-              <Button
-                onClick={() => {
-                  if (
-                    window.confirm(
-                      'Are you sure you want to submit this NCR? Submitted reports will become read-only.'
-                    )
-                  ) {
-                    persistRecord('submitted');
-                  }
-                }}
-                disabled={saving}
-              >
-                {saving ? 'Processing...' : 'Submit NCR'}
-              </Button>
-            </>
-          )}
+          <div>
+            <p className="text-xs text-muted-foreground">Compiled By</p>
+            <p className="font-medium">{document.compiled_by || 'N/A'}</p>
+          </div>
+
+          <div>
+            <p className="text-xs text-muted-foreground">Approved By</p>
+            <p className="font-medium">{document.approved_by || 'N/A'}</p>
+          </div>
+
+          <div>
+            <p className="text-xs text-muted-foreground">Category</p>
+            <p className="font-medium">{document.category || 'N/A'}</p>
+          </div>
         </div>
       </div>
 
-      {savedRecordId && (
-        <div className="rounded-lg border p-3 text-sm">
-          <strong>Record status:</strong>{' '}
-          <span className="capitalize">{status}</span>
-          {status === 'submitted' &&
-            ' – This report has been submitted and is read-only.'}
+      {editing && isAdmin ? (
+        <div className="space-y-5 rounded-lg border bg-card p-6 print:hidden">
+          <div className="flex items-center gap-2">
+            <ShieldCheck className="h-5 w-5" />
+            <h2 className="text-lg font-semibold">Edit Master Document</h2>
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <label className="mb-1 block text-sm font-medium">Document Title</label>
+              <Input value={title} onChange={(e) => setTitle(e.target.value)} />
+            </div>
+
+            <div>
+              <label className="mb-1 block text-sm font-medium">Version Number</label>
+              <Input
+                type="number"
+                value={versionNo}
+                onChange={(e) => setVersionNo(Number(e.target.value))}
+              />
+            </div>
+
+            <div>
+              <label className="mb-1 block text-sm font-medium">Issue Date</label>
+              <Input
+                type="date"
+                value={issueDate}
+                onChange={(e) => setIssueDate(e.target.value)}
+              />
+            </div>
+
+            <div>
+              <label className="mb-1 block text-sm font-medium">Compiled By</label>
+              <Input value={compiledBy} onChange={(e) => setCompiledBy(e.target.value)} />
+            </div>
+
+            <div>
+              <label className="mb-1 block text-sm font-medium">Approved By</label>
+              <Input value={approvedBy} onChange={(e) => setApprovedBy(e.target.value)} />
+            </div>
+          </div>
+
+          <div>
+            <label className="mb-1 block text-sm font-medium">Document Content</label>
+            <Textarea
+              rows={18}
+              value={content}
+              onChange={(e) => setContent(e.target.value)}
+              className="font-mono text-sm"
+            />
+          </div>
+
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={cancelEditing} disabled={saving}>
+              Cancel
+            </Button>
+            <Button onClick={handleSave} disabled={saving}>
+              <Save className="mr-2 h-4 w-4" />
+              {saving ? 'Saving...' : 'Save Master Document'}
+            </Button>
+          </div>
+        </div>
+      ) : CustomForm ? (
+        <CustomForm
+          documentId={document.id}
+          {...(document.document_no === 'MSRQ2-FRM-1' && recordId
+            ? { recordId }
+            : {})}
+        />
+      ) : (
+        <div className="rounded-lg border bg-card p-6">
+          <h2 className="mb-4 text-xl font-semibold">{document.title}</h2>
+          <div className="whitespace-pre-wrap leading-7">
+            {document.content || 'No document content has been added yet.'}
+          </div>
         </div>
       )}
 
-      <div className="rounded-lg border bg-card p-5">
-        <div className="mb-5 text-center">
-          <h1 className="text-2xl font-bold">
-            Non-Conformance Report Form
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            Maharaja's Spices
-          </p>
-        </div>
-
-        <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-4">
-          <div>
-            <p className="text-xs text-muted-foreground">Doc No.</p>
-            <p className="font-semibold">MSRQ2-FRM-1</p>
+      {revisionHistory.length > 0 && (
+        <div className="space-y-4 rounded-lg border bg-card p-6">
+          <div className="flex items-center gap-2">
+            <History className="h-5 w-5" />
+            <h2 className="text-lg font-semibold">Revision History</h2>
           </div>
-          <div>
-            <p className="text-xs text-muted-foreground">Issue Date</p>
-            <p className="font-semibold">01/05/2026</p>
-          </div>
-          <div>
-            <p className="text-xs text-muted-foreground">Version No.</p>
-            <p className="font-semibold">0</p>
-          </div>
-          <div>
-            <p className="text-xs text-muted-foreground">Rev Date</p>
-            <p className="font-semibold">N/A</p>
-          </div>
-          <div>
-            <p className="text-xs text-muted-foreground">Compiled By</p>
-            <p className="font-semibold">Tania Naicker</p>
-          </div>
-          <div>
-            <p className="text-xs text-muted-foreground">Approved By</p>
-            <p className="font-semibold">Bradley Pillay</p>
-          </div>
-        </div>
-      </div>
 
-      <section className={sectionClass}>
-        <h2 className="text-lg font-bold">
-          SECTION 1: To be completed by Reporting Party
-        </h2>
+          {revisionHistory.map((revision) => (
+            <div
+              key={revision.id}
+              className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-muted/40 p-3"
+            >
+              <div>
+                <p className="font-medium">
+                  Version {revision.version_no} – {revision.title}
+                </p>
+                <p className="text-sm text-muted-foreground">
+                  Archived: {displayDate(revision.created_at)}
+                  {revision.compiled_by
+                    ? ` · Compiled by ${revision.compiled_by}`
+                    : ''}
+                </p>
+                {revision.change_summary && (
+                  <p className="mt-1 text-sm">{revision.change_summary}</p>
+                )}
+              </div>
 
-        <div className="grid gap-4 sm:grid-cols-2">
-          {field('Originator Name', 'originatorName')}
-          {field('Product Description', 'productDescription')}
-          {field('Contractor / Supplier', 'contractorSupplier')}
-          {field('Batch Number', 'batchNumber')}
-          {field('Quantity', 'quantity')}
-          {field('NCR Number', 'ncrNumber')}
-        </div>
-
-        <div>
-          <p className={labelClass}>FOUND DURING WHAT ACTIVITY:</p>
-          <div className="grid gap-3 sm:grid-cols-2">
-            {choice('Activity', 'foundDuring', [
-              'Incoming Inspection',
-              'Final Inspection',
-              'In-process Inspection',
-              'Other',
-            ])}
-            {form.foundDuring === 'Other' &&
-              field('Specify Other Activity', 'otherActivity')}
-          </div>
-        </div>
-
-        {area(
-          'PROBLEM DESCRIPTION (attach any supporting documents):',
-          'problemDescription',
-          5
-        )}
-
-        {area('IMMEDIATE ACTION TAKEN:', 'immediateAction', 4)}
-
-        <div className="grid gap-4 sm:grid-cols-2">
-          {field('Date of Occurrence', 'occurrenceDate', 'date')}
-          {field('Signature', 'reportingSignature')}
-          {field('Signature Date', 'reportingSignatureDate', 'date')}
-        </div>
-      </section>
-
-      <section className={sectionClass}>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <h2 className="text-lg font-bold">
-            SECTION 2: Production Manager
-          </h2>
-          <h2 className="text-lg font-bold">
-            Document Controller
-          </h2>
-        </div>
-
-        {choice('CRITICALITY LEVEL', 'criticalityLevel', [
-          'High',
-          'Medium / Moderate',
-          'Low',
-        ])}
-
-        {area('RETESTING OF PRODUCT RESULT:', 'retestingResult', 3)}
-
-        <div>
-          <p className={labelClass}>DISPOSITION</p>
-          {choice('Disposition', 'disposition', [
-            'Use-as-is',
-            'Rework',
-            'Return to supplier',
-            'Repair',
-            'Reject',
-            'Other',
-          ])}
-          {form.disposition === 'Other' && (
-            <div className="mt-3">
-              {field('Specify Other Disposition', 'otherDisposition')}
+              <Badge variant="outline">Archived</Badge>
             </div>
-          )}
-        </div>
-
-        {area('REQUIRED ACTION:', 'requiredAction', 4)}
-
-        <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-3">
-          {field('Owner', 'owner')}
-          {field('Date Assigned', 'dateAssigned', 'date')}
-          {field('Investigation Due Date', 'investigationDueDate', 'date')}
-        </div>
-
-        <div className="grid gap-4 sm:grid-cols-2">
-          {field('Production Manager Signature', 'productionManagerSignature')}
-          {field('Document Controller Signature', 'documentControllerSignature')}
-        </div>
-      </section>
-
-      <section className={sectionClass}>
-        <h2 className="text-lg font-bold">
-          SECTION 3: To be completed by Owner and returned to Production
-          Manager for review prior to due date
-        </h2>
-
-        {choice(
-          'Approval of Corrective / Preventative Action',
-          'capaApproval',
-          ['Yes', 'No']
-        )}
-
-        {field('CAPA & RCA Form No. Issued', 'capaRcaNumber')}
-
-        <div className="grid gap-4 sm:grid-cols-3">
-          {field('Name', 'ownerName')}
-          {field('Date', 'ownerDate', 'date')}
-          {field('Signature', 'ownerSignature')}
-        </div>
-      </section>
-
-      <section className={sectionClass}>
-        <h2 className="text-lg font-bold">
-          SECTION 4: Quality Designee or Other (Specify)
-        </h2>
-
-        {field('Quality Designee / Other (Specify)', 'qualityDesignee')}
-
-        <h3 className="font-semibold">
-          CLOSING THE NON-CONFORMANCE
-        </h3>
-
-        <p className="text-sm">
-          Planned Disposition has been completed and Corrective Action has
-          been initiated. Attach proof of completion where possible.
-        </p>
-
-        {choice(
-          'Has the planned disposition been completed and corrective action initiated?',
-          'dispositionCompleted',
-          ['Yes', 'No']
-        )}
-
-        {form.dispositionCompleted === 'No' &&
-          field('New NCR Number', 'newNcrNumber')}
-
-        <div className="grid gap-4 sm:grid-cols-2">
-          {field('Quality Designee Signature', 'qualitySignature')}
-          {field('Date', 'qualityDate', 'date')}
-        </div>
-      </section>
-
-      {!isReadOnly && (
-        <div className="flex flex-wrap justify-end gap-2 print:hidden">
-          <Button
-            variant="outline"
-            onClick={() => persistRecord('draft')}
-            disabled={saving}
-          >
-            <Save className="mr-2 h-4 w-4" />
-            Save Draft
-          </Button>
-
-          <Button
-            onClick={() => {
-              if (
-                window.confirm(
-                  'Are you sure you want to submit this NCR? Submitted reports will become read-only.'
-                )
-              ) {
-                persistRecord('submitted');
-              }
-            }}
-            disabled={saving}
-          >
-            {saving ? 'Processing...' : 'Submit NCR'}
-          </Button>
+          ))}
         </div>
       )}
     </div>
   );
 };
 
-export default QualityNCRForm;
+export default QualityDocumentEditor;

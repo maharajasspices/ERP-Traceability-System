@@ -1,5 +1,11 @@
-
-import React, { useMemo, useState } from "react";
+import { supabase } from "@/integrations/supabase/client";
+import { toast } from "sonner";
+import React, {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   ArrowLeft,
   FileText,
@@ -13,13 +19,17 @@ import {
   ClipboardList,
   Calendar,
   User,
+  Upload,
+  Download,
+  ExternalLink,
+  Loader2,
 } from "lucide-react";
 
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from "react-router-dom";
 
 type QualityDocument = {
   id: string;
@@ -42,84 +52,112 @@ type DocumentCategory = {
   folders: string[];
 };
 
+type UploadedQualityDocument = {
+  id: string;
+  document_name: string;
+  document_number: string | null;
+  category: string;
+  subcategory: string;
+  file_path: string;
+  file_type: string | null;
+  file_size: number | null;
+  description: string | null;
+  uploaded_by: string;
+  created_at: string;
+};
+
 const documentCategories: DocumentCategory[] = [
   {
     name: "Standard Operating Procedures – Rockwood",
-    description: "Rockwood operating procedures",
+    description: "Controlled operating procedures for the Rockwood factory.",
     folders: [],
   },
   {
     name: "Standard Operating Procedures – Nguni",
-    description: "Nguni operating procedures",
+    description: "Controlled operating procedures for the Nguni factory.",
     folders: [],
   },
   {
-    name: "Quality Management Procedures",
-    description: "Quality management system procedures",
-    folders: [],
-  },
-  {
-    name: "Forms & Records",
-    description: "Controlled quality forms, registers and records",
-    folders: [],
-  },
-  {
-    name: "Appointment Letters",
-    description: "Staff appointment letters",
-    folders: [],
-  },
-  {
-    name: "Job Descriptions & Organograms",
-    description: "Roles, responsibilities and structures",
+    name: "Working Instructions",
+    description: "Departmental and operational working instructions.",
     folders: [],
   },
   {
     name: "Policies",
-    description: "Company policies and procedures",
+    description: "Company policies and quality management policies.",
     folders: [],
   },
   {
-    name: "Floor Plan",
-    description: "Factory and facility floor plans",
+    name: "Raw materials",
+    description: "Specifications for raw materials.",
+    folders: [],
+  },
+  {
+    name: "Packaging materials",
+    description: "Specifications for packaging materials.",
+    folders: [],
+  },
+  {
+    name: "Finished goods",
+    description: "Specifications for finished products.",
+    folders: [],
+  },
+  {
+    name: "Cleaning Chemicals",
+    description: "Specifications and documents for cleaning chemicals.",
     folders: [],
   },
   {
     name: "Process Flow Diagrams",
-    description: "Production and process flow diagrams",
+    description: "Factory and production process flow diagrams.",
     folders: [],
   },
   {
-    name: "Specifications",
-    description: "Product and material specifications",
-    folders: [
-      "Raw Materials",
-      "Packaging Materials",
-      "Finished Goods",
-      "Cleaning Chemicals",
-    ],
-  },
-  {
-    name: "Working Instructions",
-    description: "Departmental working instructions",
+    name: "Floor Plan",
+    description: "Factory and facility floor plans.",
     folders: [],
   },
   {
-    name: "External Reports & Certifications",
-    description: "External reports and compliance certificates",
-    folders: [
-      "Lab Results",
-      "Calibration Certificates",
-      "Halaal Certification",
-      "R638 Certificate",
-      "Food Quality & Safety Certificate",
-    ],
+    name: "Lab results",
+    description: "External laboratory results and reports.",
+    folders: [],
+  },
+  {
+    name: "Calibration certificates",
+    description: "Equipment and instrument calibration certificates.",
+    folders: [],
+  },
+  {
+    name: "Halaal Certification",
+    description: "Halaal certificates and supporting documents.",
+    folders: [],
+  },
+  {
+    name: "R638 Certificate",
+    description: "R638 compliance certificates.",
+    folders: [],
+  },
+  {
+    name: "Food Quality & Safety Certificate",
+    description: "Food quality and food safety certificates.",
+    folders: [],
+  },
+  {
+    name: "Appointment letters",
+    description: "Employee appointment letters.",
+    folders: [],
+  },
+  {
+    name: "Job Descriptions & Organograms",
+    description: "Job descriptions, responsibilities and organisational structures.",
+    folders: [],
   },
   {
     name: "Training Presentations",
-    description: "Staff training and presentations",
+    description: "Employee training presentations and materials.",
     folders: [],
   },
-];
+]
 
 const qualityDocuments: QualityDocument[] = [
   {
@@ -206,15 +244,182 @@ const qualityDocuments: QualityDocument[] = [
 ];
 
 const QualityDocuments: React.FC = () => {
+  const [searchParams] = useSearchParams();
+  const requestedCategory = searchParams.get("category");
+
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<string | null>(
-    null
-  );
-  const [selectedFolder, setSelectedFolder] = useState<string | null>(null);
+  requestedCategory
+);
+const [selectedFolder, setSelectedFolder] = useState<string | null>(null);
   const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(
     null
   );
 const navigate = useNavigate();
+const fileInputRef = useRef<HTMLInputElement>(null);
+
+const [uploadedDocuments, setUploadedDocuments] = useState<
+  UploadedQualityDocument[]
+>([]);
+
+const [loadingUploads, setLoadingUploads] = useState(false);
+const [uploading, setUploading] = useState(false);
+
+const [uploadForm, setUploadForm] = useState({
+  documentName: "",
+  documentNumber: "",
+  description: "",
+});
+
+const [selectedFile, setSelectedFile] = useState<File | null>(null);
+const loadUploadedDocuments = async () => {
+  setLoadingUploads(true);
+
+  try {
+    const { data, error } = await (supabase as any)
+      .from("fms_quality_uploaded_documents")
+      .select("*")
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      throw error;
+    }
+
+    setUploadedDocuments(data || []);
+  } catch (error: any) {
+    console.error("Error loading Quality documents:", error);
+    toast.error("Could not load uploaded documents.");
+  } finally {
+    setLoadingUploads(false);
+  }
+};
+
+useEffect(() => {
+  loadUploadedDocuments();
+}, []);
+
+const handleUploadDocument = async () => {
+  if (!selectedCategory) {
+    toast.error("Please select a document category.");
+    return;
+  }
+
+  if (!uploadForm.documentName.trim()) {
+    toast.error("Please enter a document name.");
+    return;
+  }
+
+  if (!selectedFile) {
+    toast.error("Please select a file to upload.");
+    return;
+  }
+
+  if (selectedFile.size > 50 * 1024 * 1024) {
+    toast.error("The maximum file size is 50 MB.");
+    return;
+  }
+
+  const parentCategories: Record<string, string> = {
+    "Standard Operating Procedures – Rockwood": "Controlled Documents",
+    "Standard Operating Procedures – Nguni": "Controlled Documents",
+    "Working Instructions": "Controlled Documents",
+    Policies: "Controlled Documents",
+
+    "Raw materials": "Specifications & Technical Documents",
+    "Packaging materials": "Specifications & Technical Documents",
+    "Finished goods": "Specifications & Technical Documents",
+    "Cleaning Chemicals": "Specifications & Technical Documents",
+    "Process Flow Diagrams": "Specifications & Technical Documents",
+    "Floor Plan": "Specifications & Technical Documents",
+
+    "Lab results": "Compliance & Certifications",
+    "Calibration certificates": "Compliance & Certifications",
+    "Halaal Certification": "Compliance & Certifications",
+    "R638 Certificate": "Compliance & Certifications",
+    "Food Quality & Safety Certificate": "Compliance & Certifications",
+
+    "Appointment letters": "HR & Training Documents",
+    "Job Descriptions & Organograms": "HR & Training Documents",
+    "Training Presentations": "HR & Training Documents",
+  };
+
+  const safeFileName = selectedFile.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+  const safeCategory = selectedCategory.replace(/[^a-zA-Z0-9_-]/g, "_");
+
+  const filePath = `${safeCategory}/${Date.now()}-${safeFileName}`;
+
+  setUploading(true);
+
+  try {
+    // Upload the actual file to private Supabase Storage.
+    const { error: storageError } = await supabase.storage
+      .from("quality-documents")
+      .upload(filePath, selectedFile, {
+        cacheControl: "3600",
+        upsert: false,
+        contentType: selectedFile.type || undefined,
+      });
+
+    if (storageError) {
+      throw storageError;
+    }
+
+    // Save the document details in the database.
+    const { error: databaseError } = await (supabase as any)
+      .from("fms_quality_uploaded_documents")
+      .insert({
+        document_name: uploadForm.documentName.trim(),
+        document_number: uploadForm.documentNumber.trim() || null,
+        category: parentCategories[selectedCategory] || "Other",
+        subcategory: selectedCategory,
+        file_path: filePath,
+        file_type: selectedFile.type || null,
+        file_size: selectedFile.size,
+        description: uploadForm.description.trim() || null,
+      });
+
+    if (databaseError) {
+      console.error("Document metadata save error:", databaseError);
+      throw new Error(
+        "The file was uploaded, but its document details could not be saved. Please contact your administrator."
+      );
+    }
+
+    toast.success("Document uploaded successfully!");
+
+    setUploadForm({
+      documentName: "",
+      documentNumber: "",
+      description: "",
+    });
+
+    setSelectedFile(null);
+
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+
+    await loadUploadedDocuments();
+  } catch (error: any) {
+    console.error("Quality document upload error:", error);
+    toast.error(error.message || "Document upload failed.");
+  } finally {
+    setUploading(false);
+  }
+};
+useEffect(() => {
+  if (
+    requestedCategory &&
+    documentCategories.some(
+      (category) => category.name === requestedCategory
+    )
+  ) {
+    setSelectedCategory(requestedCategory);
+    setSelectedFolder(null);
+    setSelectedDocumentId(null);
+    setSearchTerm("");
+  }
+}, [requestedCategory]);
   const currentCategory = documentCategories.find(
     (category) => category.name === selectedCategory
   );
@@ -394,9 +599,13 @@ const navigate = useNavigate();
 
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
             {filteredCategories.map((category) => {
-              const count = qualityDocuments.filter(
-                (document) => document.category === category.name
-              ).length;
+             const count =
+  qualityDocuments.filter(
+    (document) => document.category === category.name
+  ).length +
+  uploadedDocuments.filter(
+    (document) => document.subcategory === category.name
+  ).length;
 
               return (
                 <Card
@@ -601,6 +810,224 @@ const navigate = useNavigate();
               Back
             </Button>
           </div>
+{/* Upload Document */}
+<Card>
+  <CardContent className="space-y-4 p-5">
+    <div className="flex items-center gap-3">
+      <div className="rounded-lg bg-primary/10 p-2">
+        <Upload className="h-5 w-5 text-primary" />
+      </div>
+
+      <div>
+        <h3 className="font-semibold">Upload Document</h3>
+        <p className="text-sm text-muted-foreground">
+          Upload a document into {currentCategory.name}.
+        </p>
+      </div>
+    </div>
+
+    <div className="grid gap-4 sm:grid-cols-2">
+      <div className="space-y-2">
+        <label className="text-sm font-medium">Document Name *</label>
+        <Input
+          placeholder="Enter document name"
+          value={uploadForm.documentName}
+          onChange={(event) =>
+            setUploadForm({
+              ...uploadForm,
+              documentName: event.target.value,
+            })
+          }
+        />
+      </div>
+
+      <div className="space-y-2">
+        <label className="text-sm font-medium">Document Number</label>
+        <Input
+          placeholder="Optional document number"
+          value={uploadForm.documentNumber}
+          onChange={(event) =>
+            setUploadForm({
+              ...uploadForm,
+              documentNumber: event.target.value,
+            })
+          }
+        />
+      </div>
+    </div>
+
+    <div className="space-y-2">
+      <label className="text-sm font-medium">Description</label>
+      <Input
+        placeholder="Optional description"
+        value={uploadForm.description}
+        onChange={(event) =>
+          setUploadForm({
+            ...uploadForm,
+            description: event.target.value,
+          })
+        }
+      />
+    </div>
+
+    <div className="space-y-2">
+      <label className="text-sm font-medium">Select File *</label>
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.jpg,.jpeg,.png"
+        onChange={(event) =>
+          setSelectedFile(event.target.files?.[0] || null)
+        }
+        className="block w-full rounded-md border p-2 text-sm"
+      />
+      <p className="text-xs text-muted-foreground">
+        PDF, Word, Excel, PowerPoint, text and image files. Maximum 50 MB.
+      </p>
+    </div>
+
+    {selectedFile && (
+      <p className="text-sm text-muted-foreground">
+        Selected: {selectedFile.name}
+      </p>
+    )}
+
+    <Button
+      onClick={handleUploadDocument}
+      disabled={uploading}
+    >
+      {uploading ? (
+        <>
+          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+          Uploading...
+        </>
+      ) : (
+        <>
+          <Upload className="mr-2 h-4 w-4" />
+          Upload Document
+        </>
+      )}
+    </Button>
+  </CardContent>
+</Card>
+{/* Uploaded Documents */}
+<Card>
+  <CardContent className="space-y-4 p-5">
+    <div className="flex items-center justify-between gap-3">
+      <div>
+        <h3 className="font-semibold">Uploaded Documents</h3>
+        <p className="text-sm text-muted-foreground">
+          Documents stored in this category.
+        </p>
+      </div>
+
+      <Badge variant="secondary">
+        {
+          uploadedDocuments.filter(
+            (document) => document.subcategory === selectedCategory
+          ).length
+        } Documents
+      </Badge>
+    </div>
+
+    {loadingUploads ? (
+      <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
+        <Loader2 className="h-4 w-4 animate-spin" />
+        Loading uploaded documents...
+      </div>
+    ) : uploadedDocuments.filter(
+        (document) => document.subcategory === selectedCategory
+      ).length === 0 ? (
+      <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
+        No uploaded documents in this category yet.
+      </p>
+    ) : (
+      <div className="space-y-2">
+        {uploadedDocuments
+          .filter(
+            (document) => document.subcategory === selectedCategory
+          )
+          .map((document) => (
+            <div
+              key={document.id}
+              className="flex flex-col gap-3 rounded-lg border p-4 sm:flex-row sm:items-center"
+            >
+              <div className="rounded-lg bg-primary/10 p-2">
+                <FileText className="h-5 w-5 text-primary" />
+              </div>
+
+              <div className="min-w-0 flex-1">
+                <h4 className="font-medium">{document.document_name}</h4>
+
+                {document.document_number && (
+                  <p className="text-xs text-muted-foreground">
+                    {document.document_number}
+                  </p>
+                )}
+
+                {document.description && (
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    {document.description}
+                  </p>
+                )}
+
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Uploaded {new Date(document.created_at).toLocaleDateString()}
+                </p>
+              </div>
+
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={async () => {
+                    const { data, error } = await supabase.storage
+                      .from("quality-documents")
+                      .createSignedUrl(document.file_path, 60);
+
+                    if (error) {
+                      toast.error("Could not open this document.");
+                      return;
+                    }
+
+                    window.open(data.signedUrl, "_blank", "noopener,noreferrer");
+                  }}
+                >
+                  <ExternalLink className="mr-2 h-4 w-4" />
+                  View
+                </Button>
+
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={async () => {
+                    const { data, error } = await supabase.storage
+                      .from("quality-documents")
+                      .download(document.file_path);
+
+                    if (error || !data) {
+                      toast.error("Could not download this document.");
+                      return;
+                    }
+
+                    const url = URL.createObjectURL(data);
+                    const link = window.document.createElement("a");
+                    link.href = url;
+                    link.download = document.document_name;
+                    link.click();
+                    URL.revokeObjectURL(url);
+                  }}
+                >
+                  <Download className="mr-2 h-4 w-4" />
+                  Download
+                </Button>
+              </div>
+            </div>
+          ))}
+      </div>
+    )}
+  </CardContent>
+</Card>
 
           {/* Documents in category */}
           {categoryDocuments.filter((document) => {

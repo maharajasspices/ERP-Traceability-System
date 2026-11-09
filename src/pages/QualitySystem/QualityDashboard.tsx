@@ -1,5 +1,6 @@
 
 import React from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   ClipboardCheck,
   AlertTriangle,
@@ -10,6 +11,7 @@ import {
   CheckCircle2,
   FileText,
   ArrowUpRight,
+  FolderOpen,
 } from 'lucide-react';
 
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -51,7 +53,54 @@ const stats = [
   },
 ];
 
+const ncrDocuments = [
+  {
+    title: 'Control of Non-Conformance Procedure',
+    documentNumber: 'MSNQ2-SOP-1',
+    description:
+      'Procedure for identifying, reporting, investigating and controlling non-conforming products and materials.',
+    type: 'Procedure',
+  },
+  {
+    title: 'Non-Conformance Record Form',
+    documentNumber: 'MSRQ2-FRM-1',
+    description:
+      'Capture non-conformance details, investigation findings, criticality and corrective measures.',
+    type: 'Form',
+  },
+  {
+    title: 'Quarantine Tag',
+    documentNumber: 'MSRQ2-FRM-2',
+    description:
+      'Identify and label non-conforming products or materials placed in quarantine.',
+    type: 'Form',
+  },
+  {
+    title: 'Concession Record',
+    documentNumber: 'MSRQ2-FRM-3',
+    description:
+      'Record and authorise the use or sale of non-conforming products under an approved concession.',
+    type: 'Form',
+  },
+  {
+    title: 'Non-Conformance Report Logbook',
+    documentNumber: 'MSRQ2-LOG-1',
+    description:
+      'View and track reported non-conformances and their progress towards closure.',
+    type: 'Register',
+  },
+  {
+    title: 'Quarantine Register',
+    documentNumber: 'MSRQ2-LOG-2',
+    description:
+      'Track quarantined products and materials, including their identification and final disposition.',
+    type: 'Register',
+  },
+];
+
 const QualityDashboard: React.FC = () => {
+  const navigate = useNavigate();
+
   return (
     <div className="space-y-6">
 
@@ -101,6 +150,76 @@ const QualityDashboard: React.FC = () => {
         ))}
       </div>
 
+      {/* NCR Forms and Registers */}
+      <Card>
+        <CardHeader>
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center gap-3">
+              <div className="rounded-lg bg-amber-500/10 p-2">
+                <FolderOpen className="h-6 w-6 text-amber-600" />
+              </div>
+
+              <div>
+                <CardTitle>NCR Forms & Registers</CardTitle>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Non-conformance procedures, forms and registers.
+                </p>
+              </div>
+            </div>
+
+            <Badge variant="secondary">
+              {ncrDocuments.length} Documents
+            </Badge>
+          </div>
+        </CardHeader>
+
+        <CardContent>
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            {ncrDocuments.map((document) => (
+              <div
+                key={document.documentNumber}
+                className="flex flex-col justify-between rounded-lg border p-4 transition-colors hover:border-primary/50 hover:bg-muted/30"
+              >
+                <div>
+                  <div className="mb-3 flex items-start justify-between gap-2">
+                    <FileText className="h-6 w-6 shrink-0 text-primary" />
+                    <Badge variant="outline">{document.type}</Badge>
+                  </div>
+
+                  <h3 className="font-semibold leading-snug">
+                    {document.title}
+                  </h3>
+
+                  <p className="mt-1 text-xs font-medium text-muted-foreground">
+                    {document.documentNumber}
+                  </p>
+
+                  <p className="mt-3 text-sm text-muted-foreground">
+                    {document.description}
+                  </p>
+                </div>
+
+                <Button
+                  variant="outline"
+                  className="mt-4 w-full"
+                  onClick={() =>
+                    navigate(
+                      `/quality-system/documents/${encodeURIComponent(
+                        document.documentNumber
+                      )}`
+                    )
+                  }
+                >
+                  <FileText className="mr-2 h-4 w-4" />
+                  Open Document
+                  <ArrowUpRight className="ml-auto h-4 w-4" />
+                </Button>
+              </div>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+
       {/* Main Dashboard Sections */}
       <div className="grid gap-6 lg:grid-cols-3">
 
@@ -142,7 +261,9 @@ const QualityDashboard: React.FC = () => {
 
             <div className="mt-6 flex min-h-[180px] flex-col items-center justify-center rounded-lg border border-dashed text-center">
               <TrendingUp className="mb-3 h-10 w-10 text-muted-foreground/50" />
-              <p className="font-medium">Quality performance data will appear here</p>
+              <p className="font-medium">
+                Quality performance data will appear here
+              </p>
               <p className="mt-1 text-sm text-muted-foreground">
                 Records will populate this section as quality activities are captured.
               </p>

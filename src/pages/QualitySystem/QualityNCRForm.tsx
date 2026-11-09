@@ -1,14 +1,10 @@
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useFMSAuth } from '@/context/FMSAuthContext';
 import { Button } from '@/components/ui/button';
 import { toast } from 'sonner';
 import { Save, Printer } from 'lucide-react';
-
-interface QualityNCRFormProps {
-  documentId: string;
-}
 
 const initialForm = {
   originatorName: '',
@@ -24,7 +20,6 @@ const initialForm = {
   occurrenceDate: '',
   reportingSignature: '',
   reportingSignatureDate: '',
-
   criticalityLevel: '',
   retestingResult: '',
   disposition: '',
@@ -35,13 +30,11 @@ const initialForm = {
   investigationDueDate: '',
   productionManagerSignature: '',
   documentControllerSignature: '',
-
   capaApproval: '',
   capaRcaNumber: '',
   ownerName: '',
   ownerDate: '',
   ownerSignature: '',
-
   qualityDesignee: '',
   dispositionCompleted: '',
   newNcrNumber: '',
@@ -57,21 +50,69 @@ const labelClass = 'mb-1 block text-sm font-medium';
 const sectionClass =
   'space-y-5 rounded-lg border bg-card p-5 print:break-inside-avoid';
 
-const QualityNCRForm = ({ documentId }: QualityNCRFormProps) => {
+interface QualityNCRFormProps {
+  documentId: string;
+  recordId?: string | null;
+}
+
+const QualityNCRForm = ({ documentId, recordId }: QualityNCRFormProps) => {
   const { user } = useFMSAuth();
 
   const [form, setForm] = useState(initialForm);
   const [saving, setSaving] = useState(false);
-  const [savedRecordId, setSavedRecordId] = useState<string | null>(null);
+ const [loadingDocument, setLoadingDocument] = useState(false);
+const [masterDocumentId, setMasterDocumentId] = useState<string | null>(
+  documentId || null
+);
+const [savedRecordId, setSavedRecordId] = useState<string | null>(
+  recordId || null
+);
 
-  const update = (field: keyof typeof initialForm, value: string) => {
-    setForm((previous) => ({
-      ...previous,
-      [field]: value,
-    }));
+const [recordStatus, setRecordStatus] = useState<string>('draft');
 
-    setSavedRecordId(null);
+useEffect(() => {
+  if (!recordId || !masterDocumentId) return;
+
+  const loadRecord = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('fms_quality_records')
+        .select('id, form_data, status')
+        .eq('id', recordId)
+        .eq('document_id', masterDocumentId)
+        .single();
+
+      if (error) throw error;
+
+      if (!data) {
+        throw new Error('NCR record not found.');
+      }
+
+      setForm({
+        ...initialForm,
+        ...(data.form_data as Partial<typeof initialForm>),
+      });
+
+      setSavedRecordId(data.id);
+      setRecordStatus(data.status);
+    } catch (error: any) {
+      console.error('Error loading NCR record:', error);
+      toast.error(error.message || 'Unable to load this NCR.');
+    }
   };
+
+  loadRecord();
+}, [recordId, masterDocumentId]);
+
+useEffect(() => {
+  setMasterDocumentId(documentId || null);
+}, [documentId]);
+
+  const update = (key: keyof typeof initialForm, value: string) => {
+  if (recordStatus !== 'draft') return;
+
+  setForm((prev) => ({ ...prev, [key]: value }));
+};
 
   const field = (
     label: string,
@@ -127,59 +168,84 @@ const QualityNCRForm = ({ documentId }: QualityNCRFormProps) => {
     </div>
   );
 
-  const saveRecord = async () => {
-    if (!user?.id) {
-      toast.error('You must be logged in to save an NCR.');
-      return;
-    }
+  
+const saveRecord = async () => {
+  if (!user?.id) {
+    toast.error('You must be logged in to save an NCR.');
+    return;
+  }
 
-    if (!form.originatorName.trim() || !form.problemDescription.trim()) {
-      toast.error('Please enter the Originator Name and Problem Description.');
-      return;
-    }
+  if (!masterDocumentId) {
+    toast.error('The NCR master document is not loaded. Please refresh.');
+    return;
+  }
 
-    if (!form.ncrNumber.trim()) {
-      toast.error('Please enter an NCR Number before saving.');
-      return;
-    }
+  if (recordStatus !== 'draft') {
+    toast.error('Only draft NCR records can be edited.');
+    return;
+  }
 
-   console.log('NCR documentId:', documentId);
-console.log('NCR documentId type:', typeof documentId);
+  if (!form.originatorName.trim() || !form.problemDescription.trim()) {
+    toast.error('Please enter the Originator Name and Problem Description.');
+    return;
+  }
 
-if (!documentId) {
-  toast.error('NCR document ID is missing. Please refresh and try again.');
-  return;
-}
+  if (!form.ncrNumber.trim()) {
+    toast.error('Please enter an NCR Number before saving.');
+    return;
+  }
 
-setSaving(true);
+  setSaving(true);
 
-try {
-      const { data, error } = await supabase
+  try {
+    const recordData = {
+      document_id: masterDocumentId,
+      record_number: form.ncrNumber.trim(),
+      title: `Non-Conformance Report ${form.ncrNumber.trim()}`,
+      form_data: form,
+      updated_by: user.id,
+    };
+
+    let data;
+    let error;
+
+    if (savedRecordId) {
+      const result = await supabase
+        .from('fms_quality_records')
+        .update(recordData)
+        .eq('id', savedRecordId)
+        .eq('document_id', masterDocumentId)
+        .select('id')
+        .single();
+
+      data = result.data;
+      error = result.error;
+    } else {
+      const result = await supabase
         .from('fms_quality_records')
         .insert({
-          document_id: documentId,
-          record_number: form.ncrNumber.trim(),
-          title: `Non-Conformance Report ${form.ncrNumber.trim()}`,
-          form_data: form,
+          ...recordData,
           status: 'draft',
           created_by: user.id,
-          updated_by: user.id,
         })
         .select('id')
         .single();
 
-      if (error) throw error;
-
-      setSavedRecordId(data.id);
-      toast.success('Non-Conformance Report saved successfully.');
-    } catch (error: any) {
-      console.error('Error saving NCR:', error);
-      toast.error(error.message || 'Unable to save the NCR.');
-    } finally {
-      setSaving(false);
+      data = result.data;
+      error = result.error;
     }
-  };
 
+    if (error) throw error;
+
+    setSavedRecordId(data.id);
+    toast.success('Non-Conformance Report saved successfully.');
+  } catch (error: any) {
+    console.error('Error saving NCR:', error);
+    toast.error(error.message || 'Unable to save the NCR.');
+  } finally {
+    setSaving(false);
+  }
+};
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3 print:hidden">
@@ -198,21 +264,23 @@ try {
             Print / PDF
           </Button>
 
-          <Button onClick={saveRecord} disabled={saving}>
+          <Button
+            onClick={saveRecord}
+            disabled={saving || loadingDocument || !masterDocumentId}
+          >
             <Save className="mr-2 h-4 w-4" />
-            {saving ? 'Saving...' : 'Save NCR'}
+            {loadingDocument ? 'Loading...' : saving ? 'Saving...' : 'Save NCR'}
           </Button>
         </div>
       </div>
 
       {savedRecordId && (
         <p className="text-sm text-green-700 print:hidden">
-          This NCR has been saved. You can still print it or make further
-          changes and save another version as a separate record.
+          This NCR has been saved successfully. You can print it or continue
+          completing the form.
         </p>
       )}
 
-      {/* Document heading */}
       <div className="rounded-lg border bg-card p-5">
         <div className="mb-5 text-center">
           <h1 className="text-2xl font-bold">
@@ -251,7 +319,6 @@ try {
         </div>
       </div>
 
-      {/* SECTION 1 */}
       <section className={sectionClass}>
         <h2 className="text-lg font-bold">
           SECTION 1: To be completed by Reporting Party
@@ -295,15 +362,10 @@ try {
         </div>
       </section>
 
-      {/* SECTION 2 */}
       <section className={sectionClass}>
         <div className="grid gap-3 sm:grid-cols-2">
-          <h2 className="text-lg font-bold">
-            SECTION 2: Production Manager
-          </h2>
-          <h2 className="text-lg font-bold">
-            Document Controller
-          </h2>
+          <h2 className="text-lg font-bold">SECTION 2: Production Manager</h2>
+          <h2 className="text-lg font-bold">Document Controller</h2>
         </div>
 
         {choice('CRITICALITY LEVEL', 'criticalityLevel', [
@@ -324,10 +386,11 @@ try {
             'Reject',
             'Other',
           ])}
-          {form.disposition === 'Other' &&
+          {form.disposition === 'Other' && (
             <div className="mt-3">
               {field('Specify Other Disposition', 'otherDisposition')}
-            </div>}
+            </div>
+          )}
         </div>
 
         {area('REQUIRED ACTION:', 'requiredAction', 4)}
@@ -344,18 +407,16 @@ try {
         </div>
       </section>
 
-      {/* SECTION 3 */}
       <section className={sectionClass}>
         <h2 className="text-lg font-bold">
           SECTION 3: To be completed by Owner and returned to Production
           Manager for review prior to due date
         </h2>
 
-        {choice(
-          'Approval of Corrective / Preventative Action',
-          'capaApproval',
-          ['Yes', 'No']
-        )}
+        {choice('Approval of Corrective / Preventative Action', 'capaApproval', [
+          'Yes',
+          'No',
+        ])}
 
         {field('CAPA & RCA Form No. Issued', 'capaRcaNumber')}
 
@@ -366,7 +427,6 @@ try {
         </div>
       </section>
 
-      {/* SECTION 4 */}
       <section className={sectionClass}>
         <h2 className="text-lg font-bold">
           SECTION 4: Quality Designee or Other (Specify)
@@ -374,9 +434,7 @@ try {
 
         {field('Quality Designee / Other (Specify)', 'qualityDesignee')}
 
-        <h3 className="font-semibold">
-          CLOSING THE NON-CONFORMANCE
-        </h3>
+        <h3 className="font-semibold">CLOSING THE NON-CONFORMANCE</h3>
 
         <p className="text-sm">
           Planned Disposition has been completed and Corrective Action has
@@ -399,10 +457,17 @@ try {
       </section>
 
       <div className="flex justify-end print:hidden">
-        <Button onClick={saveRecord} disabled={saving}>
-          <Save className="mr-2 h-4 w-4" />
-          {saving ? 'Saving...' : 'Save NCR'}
-        </Button>
+        <Button
+            onClick={saveRecord}
+            disabled={saving || recordStatus !== 'draft'}
+          >
+            <Save className="mr-2 h-4 w-4" />
+            {saving
+              ? 'Saving...'
+              : recordStatus !== 'draft'
+                ? 'Record Locked'
+                : 'Save NCR'}
+          </Button>      
       </div>
     </div>
   );
