@@ -57,7 +57,7 @@ const Landing: React.FC = () => {
   icon: ClipboardList,
   color: 'amber',
   available: true,
-  action: () => {},
+  action: () => navigate('/marketing-login')
 },
   ];
 

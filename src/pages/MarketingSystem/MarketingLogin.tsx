@@ -15,7 +15,7 @@ import {
 } from '@/components/ui/card';
 import {
   Loader2,
-  Megaphone,
+  ShieldCheck,
   ShieldAlert,
   AlertTriangle,
 } from 'lucide-react';
@@ -35,12 +35,14 @@ const MarketingLogin: React.FC = () => {
   const { checkPassword, isChecking } = usePasswordBreachCheck();
 
   const [isLoading, setIsLoading] = useState(false);
+
   const [loginForm, setLoginForm] = useState({
     email: '',
     password: '',
   });
 
   const [accessDenied, setAccessDenied] = useState(false);
+
   const [passwordBreached, setPasswordBreached] = useState<{
     isBreached: boolean;
     count: number;
@@ -58,7 +60,7 @@ const MarketingLogin: React.FC = () => {
       fmsUser.role === 'marketing_user' ||
       fmsUser.role === 'system_admin'
     ) {
-      navigate('/marketing-dashboard', { replace: true });
+      navigate('/marketing-system/dashboard', { replace: true });
     } else {
       setAccessDenied(true);
     }
@@ -85,6 +87,9 @@ const MarketingLogin: React.FC = () => {
       }
 
       await signIn(loginForm.email, loginForm.password);
+    } catch (error) {
+      console.error('Marketing login error:', error);
+      toast.error('Unable to sign in. Please check your login details.');
     } finally {
       setIsLoading(false);
     }
@@ -100,6 +105,8 @@ const MarketingLogin: React.FC = () => {
 
   return (
     <div className="flex min-h-screen flex-col items-center justify-center bg-gradient-to-br from-background via-background to-muted/30 p-4">
+
+      {/* Branding */}
       <div className="mb-8 flex flex-col items-center gap-3">
         <img
           src={logo}
@@ -108,29 +115,35 @@ const MarketingLogin: React.FC = () => {
         />
 
         <div className="flex items-center gap-2">
-          <Megaphone className="h-6 w-6 text-primary" />
+          <ShieldCheck className="h-6 w-6 text-primary" />
+
           <h1 className="text-xl font-bold text-foreground">
             Marketing System
           </h1>
         </div>
 
         <p className="text-sm text-muted-foreground">
-          Marketing & Business Development
+          Marketing & Brand Management
         </p>
       </div>
 
+      {/* Login Card */}
       <Card className="w-full max-w-md">
         <CardHeader className="text-center">
           <CardTitle>Staff Login</CardTitle>
-          <CardDescription>
-            Sign in with your authorized ERP account to access Marketing
-          </CardDescription>
+
+         <CardDescription>
+          Sign in with your authorized ERP account to access the Marketing System.
+        </CardDescription>
         </CardHeader>
 
         <CardContent>
+
+          {/* Password Warning */}
           {passwordBreached?.isBreached && (
             <div className="mb-4 flex items-center gap-2 rounded-lg border border-warning/50 bg-warning/10 p-3 text-sm text-warning">
               <AlertTriangle className="h-5 w-5 flex-shrink-0" />
+
               <p>
                 Warning: This password was found in{' '}
                 {passwordBreached.count.toLocaleString()} data breaches.
@@ -139,9 +152,11 @@ const MarketingLogin: React.FC = () => {
             </div>
           )}
 
+          {/* Access Denied */}
           {accessDenied && (
             <div className="mb-4 flex items-center gap-2 rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
               <ShieldAlert className="h-5 w-5 flex-shrink-0" />
+
               <p>
                 Access denied. Your account is not authorized for the
                 Marketing System. Please contact your administrator.
@@ -150,8 +165,10 @@ const MarketingLogin: React.FC = () => {
           )}
 
           <form onSubmit={handleLogin} className="space-y-4">
+
+            {/* Email */}
             <div className="space-y-2">
-              <Label htmlFor="marketing-email">Email</Label>
+              <Label htmlFor="quality-email">Email</Label>
 
               <Input
                 id="marketing-email"
@@ -169,9 +186,12 @@ const MarketingLogin: React.FC = () => {
               />
             </div>
 
+            {/* Password */}
             <div className="space-y-2">
               <div className="flex items-center justify-between">
-                <Label htmlFor="marketing-password">Password</Label>
+                <Label htmlFor="marketing-password">
+                  Password
+                </Label>
 
                 <button
                   type="button"
@@ -198,6 +218,7 @@ const MarketingLogin: React.FC = () => {
               />
             </div>
 
+            {/* Submit */}
             <Button
               type="submit"
               className="w-full"
@@ -212,10 +233,12 @@ const MarketingLogin: React.FC = () => {
                 'Sign In'
               )}
             </Button>
+
           </form>
         </CardContent>
       </Card>
 
+      {/* Footer */}
       <p className="mt-6 text-center text-xs text-muted-foreground">
         Maharaja's Spices Marketing System
         <br />

@@ -12,7 +12,7 @@ import { MainLayout } from "@/components/layout/MainLayout";
 import { HRLayout } from "@/components/layout/HRLayout";
 import { Loader2, ShieldX, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
-
+import MarketingLogin from '@/pages/MarketingSystem/MarketingLogin';
 import { QLayout } from '@/components/layout/QLayout'
 
 // ============================================================
@@ -27,7 +27,7 @@ const BatchSheet = lazy(() => import("./pages/BatchSheet"));
 const PickleProduction = lazy(() => import("./pages/PickleProduction"));
 const StockTracking = lazy(() => import("./pages/StockTracking"));
 const Dispatch = lazy(() => import("./pages/Dispatch"));
-const QualityDashboard = lazy(() => import("./pages/QualityDashboard"));
+
 const Traceability = lazy(() => import("./pages/Traceability"));
 const Suppliers = lazy(() => import("./pages/Suppliers"));
 const Settings = lazy(() => import("./pages/Settings"));
@@ -62,9 +62,10 @@ const Documents = lazy(() => import("./pages/HR/Documents"));
 const Warnings = lazy(() => import("./pages/HR/Warnings"));
 
 //Marketing Pages
-const MarketingDashboard = lazy(
-  () => import("./pages/MarketingSystem/MarketingDashboard")
-);
+
+import MarketingDashboard from '@/pages/MarketingSystem/MarketingDashboard'
+import MarketingFolders from '@/pages/MarketingSystem/MarketingFolders';
+import MarketingFolderContents from './pages/MarketingSystem/MarketingFolderContents';
 
 
 //Quality System Pages
@@ -79,6 +80,9 @@ const QualityDocuments = lazy(
 const QualityDocumentEditor = lazy(
   () => import('./pages/QualitySystem/QualityDocumentEditor')
 );
+
+
+
 // ============================================================
 // Employee leave portal
 // ============================================================
@@ -468,11 +472,6 @@ const App = () => (
                 />
 
                 <Route
-                  path="/quality"
-                  element={<QualityDashboard />}
-                />
-
-                <Route
                   path="/traceability"
                   element={<Traceability />}
                 />
@@ -498,18 +497,41 @@ const App = () => (
                   element={<ReconPreview />}
                 />
               </Route>
-              {/* ==================================================
-                  MARKETING SYSTEM
-              ================================================== */}
 
+
+             {/* MARKETING SYSTEM */}
               <Route
-                path="/marketing-dashboard"
+                path="/marketing-login"
+                element={<MarketingLogin />}
+              />
+              <Route
+                path="/marketing-system/dashboard"
                 element={
-                  <MarketingRouteGuard>
+                  <ProtectedRoute>
                     <MarketingDashboard />
-                  </MarketingRouteGuard>
+                  </ProtectedRoute>
                 }
               />
+
+              <Route
+                path="/marketing-system/folders"
+                element={
+                  <ProtectedRoute>
+                    <MarketingFolders />
+                  </ProtectedRoute>
+                }
+              />
+
+              <Route
+                path="/marketing-system/folder/:id"
+                element={
+                  <ProtectedRoute>
+                    <MarketingFolderContents />
+                  </ProtectedRoute>
+                }
+              />
+              
+
 
               {/* ==================================================
                   404
@@ -548,10 +570,16 @@ const App = () => (
                   />
               </Route>
               <Route
-    path="/quality-system/documents/:documentId"
-    element={<QualityDocumentEditor />}
-  />
+                path="/quality-system/documents/:documentId"
+                element={<QualityDocumentEditor />}
+              />
+
+             
+            
+
             </Routes>
+
+  
           </Suspense>
         </BrowserRouter>
       </TooltipProvider>
