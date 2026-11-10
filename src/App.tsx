@@ -4,7 +4,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { FMSAuthProvider, useFMSAuth } from "@/context/FMSAuthContext";
 import { ProtectedRoute } from "@/components/layout/ProtectedRoute";
 import { QaViewerGuard } from "@/components/layout/QaViewerGuard";
@@ -62,7 +62,6 @@ const Documents = lazy(() => import("./pages/HR/Documents"));
 const Warnings = lazy(() => import("./pages/HR/Warnings"));
 
 //Marketing Pages
-
 import MarketingDashboard from '@/pages/MarketingSystem/MarketingDashboard'
 import MarketingFolders from '@/pages/MarketingSystem/MarketingFolders';
 import MarketingFolderContents from './pages/MarketingSystem/MarketingFolderContents';
@@ -82,7 +81,26 @@ const QualityDocumentEditor = lazy(
 );
 
 
+// Business Development Management Pages
+const BDMLogin = lazy(
+  () => import("./pages/BusinessDevelopment/BDMLogin")
+);
 
+const BDMLayout = lazy(
+  () => import("./pages/BusinessDevelopment/BDMLayout")
+);
+const BDMDashboard = lazy(
+  () => import("./pages/BusinessDevelopment/BDMDashboard")
+);
+const BDMRetailPricing = lazy(
+  () => import('./pages/BusinessDevelopment/BDMRetailPricing')
+);
+const BDMProductDevelopement = lazy (
+  () => import ('./pages/BusinessDevelopment/BDMProductDevelopment') 
+)
+const BDMRecipes = lazy(
+  () => import('./pages/BusinessDevelopment/BDMRecipes')
+)
 // ============================================================
 // Employee leave portal
 // ============================================================
@@ -211,10 +229,53 @@ const MarketingRouteGuard: React.FC<{ children: React.ReactNode }> = ({
   return <>{children}</>;
 };
 
+
 // ============================================================
-// Quality Route Guard
+// Business Development Management Route Guard
 // ============================================================
-// ============================================================
+const BDMRouteGuard: React.FC<{ children: React.ReactNode }> = ({
+  children,
+}) => {
+  const { user, fmsUser, loading, signOut } = useFMSAuth();
+  const location = useLocation();
+
+  if (loading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin" />
+      </div>
+    );
+  }
+
+  if (!user) {
+    return <Navigate to="/bdm-login" replace />;
+  }
+
+  if (!fmsUser || !fmsUser.is_active) {
+    return <Navigate to="/bdm-login" replace />;
+  }
+
+  const role = fmsUser.role;
+
+  // Retail users may only access Retail Pricing
+  if (role === 'retail_user') {
+    if (location.pathname !== '/bdm-system/pricing') {
+      return <Navigate to="/bdm-system/pricing" replace />;
+    }
+
+    return <>{children}</>;
+  }
+
+  // BDM users and system administrators
+  if (role === 'bdm_user' || role === 'system_admin') {
+    return <>{children}</>;
+  }
+
+  return <Navigate to="/bdm-login" replace />;
+};
+
+
+
 // Quality Route Guard
 // ========================================================
 
@@ -574,8 +635,47 @@ const App = () => (
                 element={<QualityDocumentEditor />}
               />
 
-             
-            
+         
+                {/* ==================================================
+                    BUSINESS DEVELOPMENT MANAGEMENT
+                ================================================== */}
+
+                <Route
+                  path="/bdm-login"
+                  element={<BDMLogin />}
+                />
+
+                <Route
+                  element={
+                    <BDMRouteGuard>
+                      <BDMLayout />
+                    </BDMRouteGuard>
+                  }
+                >
+                  <Route
+                    path="/bdm/dashboard"
+                    element={<BDMDashboard />}
+                  />
+              
+                <Route
+                  path="/bdm/pricing"
+                  element={<BDMRetailPricing />}
+                />
+                <Route
+                  path="/bdm/developments"
+                  element={<BDMProductDevelopement />}
+                />
+
+                <Route path="/bdm/product-development"
+                element={<BDMProductDevelopement/>}
+                />
+
+                <Route
+                path="/bdm/recipe-management"
+                element={<BDMRecipes/>}
+                />
+      
+             </Route>
 
             </Routes>
 

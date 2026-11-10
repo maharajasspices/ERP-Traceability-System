@@ -49,7 +49,7 @@ const Landing: React.FC = () => {
   icon: Boxes,
   color: 'green',
   available: true,
-  action: () => {},
+  action: () => navigate('/bdm-login')
 },
 {
   title: 'Marketing System',

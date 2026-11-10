@@ -3641,6 +3641,63 @@ export type Database = {
         ]
       }
 
+      
+fms_bdm_resources: {
+  Row: {
+    id: string
+    resource_type: string
+    title: string
+    description: string | null
+    product_code: string | null
+    category: string | null
+    pack_size: string | null
+    file_name: string | null
+    file_path: string | null
+    file_type: string | null
+    file_size: number | null
+    status: string
+    uploaded_by: string | null
+    created_at: string | null
+    updated_at: string | null
+  }
+  Insert: {
+    id?: string
+    resource_type: string
+    title: string
+    description?: string | null
+    product_code?: string | null
+    category?: string | null
+    pack_size?: string | null
+    file_name?: string | null
+    file_path?: string | null
+    file_type?: string | null
+    file_size?: number | null
+    status?: string
+    uploaded_by?: string | null
+    created_at?: string | null
+    updated_at?: string | null
+  }
+  Update: {
+    id?: string
+    resource_type?: string
+    title?: string
+    description?: string | null
+    product_code?: string | null
+    category?: string | null
+    pack_size?: string | null
+    file_name?: string | null
+    file_path?: string | null
+    file_type?: string | null
+    file_size?: number | null
+    status?: string
+    uploaded_by?: string | null
+    created_at?: string | null
+    updated_at?: string | null
+  }
+  Relationships: []
+},
+
+
     Views: {
       product_ratings: {
         Row: {

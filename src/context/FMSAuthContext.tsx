@@ -15,6 +15,7 @@ type FMSRole = 'system_admin'
 | 'marketing_user'
 | 'bdm_user'
 | 'quality_user'
+| 'retail_user'
 ;
 
 interface FMSUser {
