@@ -35,50 +35,73 @@ interface QSidebarProps {
   onToggle: () => void;
 }
 
+
 const documentGroups = [
   {
     title: 'Controlled Documents',
     icon: BookOpen,
     children: [
-      'Standard Operating Procedures – Rockwood',
-      'Standard Operating Procedures – Nguni',
-      'Working Instructions',
-      'Policies',
+      {
+        label: 'Standard Operating Procedures – Rockwood',
+        path: '/quality-system/rockwood',
+      },
+      {
+        label: 'Standard Operating Procedures – Nguni',
+        path: '/quality-system/nguni',
+      },
+      {
+        label: 'Working Instructions',
+        category: 'Working Instructions',
+      },
+      {
+        label: 'Policies',
+        category: 'Policies',
+      },
     ],
   },
   {
     title: 'Specifications & Technical Documents',
     icon: Package,
     children: [
-      'Raw materials',
-      'Packaging materials',
-      'Finished goods',
-      'Cleaning Chemicals',
-      'Process Flow Diagrams',
-      'Floor Plan',
+      { label: 'Raw materials', category: 'Raw materials' },
+      { label: 'Packaging materials', category: 'Packaging materials' },
+      { label: 'Finished goods', category: 'Finished goods' },
+      { label: 'Cleaning Chemicals', category: 'Cleaning Chemicals' },
+      { label: 'Process Flow Diagrams', category: 'Process Flow Diagrams' },
+      { label: 'Floor Plan', category: 'Floor Plan' },
     ],
   },
   {
     title: 'Compliance & Certifications',
     icon: ShieldCheck,
     children: [
-      'Lab results',
-      'Calibration certificates',
-      'Halaal Certification',
-      'R638 Certificate',
-      'Food Quality & Safety Certificate',
+      { label: 'Lab results', category: 'Lab results' },
+      { label: 'Calibration certificates', category: 'Calibration certificates' },
+      { label: 'Halaal Certification', category: 'Halaal Certification' },
+      { label: 'R638 Certificate', category: 'R638 Certificate' },
+      {
+        label: 'Food Quality & Safety Certificate',
+        category: 'Food Quality & Safety Certificate',
+      },
     ],
   },
   {
     title: 'HR & Training Documents',
     icon: Users,
     children: [
-      'Appointment letters',
-      'Job Descriptions & Organograms',
-      'Training Presentations',
+      { label: 'Appointment letters', category: 'Appointment letters' },
+      {
+        label: 'Job Descriptions & Organograms',
+        category: 'Job Descriptions & Organograms',
+      },
+      {
+        label: 'Training Presentations',
+        category: 'Training Presentations',
+      },
     ],
   },
 ];
+
 
 const SidebarContent: React.FC<{
   collapsed: boolean;
@@ -97,6 +120,9 @@ const SidebarContent: React.FC<{
     'Quality User';
 
   const selectedCategory = new URLSearchParams(location.search).get('category');
+
+const isRockwoodPage = location.pathname === '/quality-system/rockwood';
+const isNguniPage = location.pathname === '/quality-system/nguni';
 
   const toggleCategory = (title: string) => {
     setExpandedCategories((previous) =>
@@ -177,7 +203,11 @@ const SidebarContent: React.FC<{
           const Icon = group.icon;
           const isExpanded = expandedCategories.includes(group.title);
 
-          const isActive = group.children.includes(selectedCategory || '');
+          const isActive = group.children.some((child) => {
+  if (child.path === '/quality-system/rockwood') return isRockwoodPage;
+  if (child.path === '/quality-system/nguni') return isNguniPage;
+  return child.category === selectedCategory;
+});
 
           return (
             <div key={group.title}>
@@ -214,26 +244,32 @@ const SidebarContent: React.FC<{
 
               {!collapsed && isExpanded && (
                 <div className="ml-5 mt-1 space-y-1 border-l border-sidebar-border pl-3">
-                  {group.children.map((child) => {
-                    const childActive = selectedCategory === child;
+                  
+{group.children.map((child) => {
+  const childActive = child.path
+    ? location.pathname === child.path
+    : selectedCategory === child.category;
 
-                    return (
-                      <Link
-                        key={child}
-                        to={categoryLink(child)}
-                        onClick={onItemClick}
-                        className={cn(
-                          'block rounded-md px-3 py-2 text-xs transition-colors',
-                          'hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
-                          childActive
-                            ? 'bg-sidebar-primary text-sidebar-primary-foreground'
-                            : 'text-sidebar-foreground/70'
-                        )}
-                      >
-                        {child}
-                      </Link>
-                    );
-                  })}
+  const childLink = child.path || categoryLink(child.category!);
+
+  return (
+    <Link
+      key={child.label}
+      to={childLink}
+      onClick={onItemClick}
+      className={cn(
+        'block rounded-md px-3 py-2 text-xs transition-colors',
+        'hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
+        childActive
+          ? 'bg-sidebar-primary text-sidebar-primary-foreground'
+          : 'text-sidebar-foreground/70'
+      )}
+    >
+      {child.label}
+    </Link>
+  );
+})}
+
                 </div>
               )}
             </div>

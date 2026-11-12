@@ -79,6 +79,7 @@ const QualityDocuments = lazy(
 const QualityDocumentEditor = lazy(
   () => import('./pages/QualitySystem/QualityDocumentEditor')
 );
+import FactoryDocumentLibrary from "@/pages/QualitySystem/FactoryDocumentLibrary";
 
 
 // Business Development Management Pages
@@ -629,13 +630,23 @@ const App = () => (
                     path="/quality-system/documents"
                     element={<QualityDocuments />}
                   />
-              </Route>
+              
               <Route
                 path="/quality-system/documents/:documentId"
                 element={<QualityDocumentEditor />}
               />
 
-         
+              <Route
+                path="/quality-system/rockwood"
+                element={<FactoryDocumentLibrary factory="rockwood" />}
+              />
+
+              <Route
+                path="/quality-system/nguni"
+                element={<FactoryDocumentLibrary factory="nguni" />}
+              />
+
+         </Route>
                 {/* ==================================================
                     BUSINESS DEVELOPMENT MANAGEMENT
                 ================================================== */}
@@ -674,12 +685,9 @@ const App = () => (
                 path="/bdm/recipe-management"
                 element={<BDMRecipes/>}
                 />
-      
+
              </Route>
-
             </Routes>
-
-  
           </Suspense>
         </BrowserRouter>
       </TooltipProvider>

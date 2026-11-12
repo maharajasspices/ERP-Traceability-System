@@ -53,6 +53,7 @@ const roleLabels: Record<string, string> = {
   qa_viewer: 'QA Viewer',
   hr_user: 'HR User',
   hr_admin: 'HR Admin',
+  receiving_user: 'Receiving User',
 };
 
 const roleOptions = Object.keys(roleLabels);

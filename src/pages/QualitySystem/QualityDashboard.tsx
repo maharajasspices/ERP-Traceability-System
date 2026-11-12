@@ -150,75 +150,8 @@ const QualityDashboard: React.FC = () => {
         ))}
       </div>
 
-      {/* NCR Forms and Registers */}
-      <Card>
-        <CardHeader>
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex items-center gap-3">
-              <div className="rounded-lg bg-amber-500/10 p-2">
-                <FolderOpen className="h-6 w-6 text-amber-600" />
-              </div>
 
-              <div>
-                <CardTitle>NCR Forms & Registers</CardTitle>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  Non-conformance procedures, forms and registers.
-                </p>
-              </div>
-            </div>
-
-            <Badge variant="secondary">
-              {ncrDocuments.length} Documents
-            </Badge>
-          </div>
-        </CardHeader>
-
-        <CardContent>
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-            {ncrDocuments.map((document) => (
-              <div
-                key={document.documentNumber}
-                className="flex flex-col justify-between rounded-lg border p-4 transition-colors hover:border-primary/50 hover:bg-muted/30"
-              >
-                <div>
-                  <div className="mb-3 flex items-start justify-between gap-2">
-                    <FileText className="h-6 w-6 shrink-0 text-primary" />
-                    <Badge variant="outline">{document.type}</Badge>
-                  </div>
-
-                  <h3 className="font-semibold leading-snug">
-                    {document.title}
-                  </h3>
-
-                  <p className="mt-1 text-xs font-medium text-muted-foreground">
-                    {document.documentNumber}
-                  </p>
-
-                  <p className="mt-3 text-sm text-muted-foreground">
-                    {document.description}
-                  </p>
-                </div>
-
-                <Button
-                  variant="outline"
-                  className="mt-4 w-full"
-                  onClick={() =>
-                    navigate(
-                      `/quality-system/documents/${encodeURIComponent(
-                        document.documentNumber
-                      )}`
-                    )
-                  }
-                >
-                  <FileText className="mr-2 h-4 w-4" />
-                  Open Document
-                  <ArrowUpRight className="ml-auto h-4 w-4" />
-                </Button>
-              </div>
-            ))}
-          </div>
-        </CardContent>
-      </Card>
+      
 
       {/* Main Dashboard Sections */}
       <div className="grid gap-6 lg:grid-cols-3">
@@ -330,6 +263,6 @@ const QualityDashboard: React.FC = () => {
 
     </div>
   );
-};
+}
 
-export default QualityDashboard;
+export default QualityDashboard

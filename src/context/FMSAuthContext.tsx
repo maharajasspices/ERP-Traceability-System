@@ -16,6 +16,7 @@ type FMSRole = 'system_admin'
 | 'bdm_user'
 | 'quality_user'
 | 'retail_user'
+| 'receiving_user';
 ;
 
 interface FMSUser {
@@ -35,12 +36,16 @@ export const MODULE_ROLES: Record<FMSModule, FMSModuleConfig> = {
   quality: {
     roles: ['quality_user', 'system_admin'],
   },
+
   marketing: {
     roles: ['marketing_user', 'system_admin'],
   },
   bdm: {
     roles: ['bdm_user', 'system_admin']
-  }
+  },
+  receiving: {
+    roles: ['receiving_user', 'stores_operator', 'system_admin'],
+  },
 };
 
 

@@ -2,6 +2,7 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
+import QualityDocumentControlSOP from './QualityDocumentControlSOP';
 import { useFMSAuth } from '@/context/FMSAuthContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -17,12 +18,6 @@ import {
   ShieldCheck,
 } from 'lucide-react';
 
-import QualityNCRForm from './QualityNCRForm';
-import QualityNCRLogbook from './QualityNCRLogbook';
-import QualityQuarantineTag from './QualityQuarantineTag';
-import QualityQuarantineRegister from './QualityQuarantineRegister';
-import QualityConcessionForm from './QualityConcessionForm';
-import QualityConcessionRegister from './QualityConcessionRegister';
 
 interface QualityDocument {
   id: string;
@@ -48,14 +43,6 @@ interface QualityRevision {
   change_summary: string | null;
 }
 
-const customForms: Record<string, React.ComponentType<any>> = {
-  'MSRQ2-FRM-1': QualityNCRForm,
-  'MSRQ2-LOG-1': QualityNCRLogbook,
-  'MSRQ2-FRM-2': QualityQuarantineTag,
-  'MSRQ2-LOG-2': QualityQuarantineRegister,
-  'MSRQ2-FRM-3': QualityConcessionForm,
-  'MSRQ2-LOG-3': QualityConcessionRegister,
-};
 
 const displayDate = (date: string | null) => {
   if (!date) return 'N/A';
@@ -67,7 +54,13 @@ const QualityDocumentEditor = () => {
   const navigate = useNavigate();
   const { documentId } = useParams<{ documentId: string }>();
   const [searchParams] = useSearchParams();
-  const recordId = searchParams.get('recordId');
+  
+
+  const isNewDocument = documentId === 'new';
+  const factory = searchParams.get('factory');
+
+  const isRockwood = factory === 'rockwood';
+  const isNguni = factory === 'nguni';
 
   const { user, fmsUser } = useFMSAuth();
   const isAdmin = fmsUser?.role === 'system_admin';
@@ -78,6 +71,8 @@ const QualityDocumentEditor = () => {
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
 
+  
+  const [documentNo, setDocumentNo] = useState('');
   const [title, setTitle] = useState('');
   const [versionNo, setVersionNo] = useState(0);
   const [issueDate, setIssueDate] = useState('');
@@ -87,6 +82,38 @@ const QualityDocumentEditor = () => {
   const [content, setContent] = useState('');
 
   const loadDocument = async () => {
+    if (isNewDocument) {
+      setDocument({
+        id: '',
+        document_no: '',
+        title: '',
+        category: isRockwood
+          ? 'Standard Operating Procedures – Rockwood'
+          : 'Standard Operating Procedures – Nguni',
+        document_type: 'Procedure',
+        version_no: 0,
+        issue_date: null,
+        revision_date: null,
+        compiled_by: null,
+        approved_by: null,
+        content: '',
+        status: 'Active',
+      });
+
+      setDocumentNo('');
+      setTitle('');
+      setVersionNo(0);
+      setIssueDate(new Date().toISOString().slice(0, 10));
+      setRevisionDate('');
+      setCompiledBy('');
+      setApprovedBy('');
+      setContent('');
+      setEditing(true);
+      setRevisionHistory([]);
+      setLoading(false);
+      return;
+    }
+
     if (!documentId) {
       toast.error('Document number is missing.');
       setLoading(false);
@@ -118,6 +145,7 @@ const { data, error } = isUuid
       if (error) throw error;
 
       setDocument(data);
+      setDocumentNo(data.document_no || '');
 
       setTitle(data.title || '');
       setVersionNo(Number(data.version_no) || 0);
@@ -152,6 +180,7 @@ const { data, error } = isUuid
     if (!document) return;
 
     setTitle(document.title || '');
+    setDocumentNo(document.document_no || '');
     setVersionNo(Number(document.version_no) || 0);
     setIssueDate(document.issue_date || '');
     setRevisionDate(document.revision_date || '');
@@ -180,8 +209,56 @@ const { data, error } = isUuid
 
     setSaving(true);
 
-    try {
-      // Archive the current version before updating the master.
+   try {
+  // Create a new SOP
+  if (isNewDocument) {
+    if (!documentNo.trim()) {
+      toast.error('Please enter a document number.');
+      setSaving(false);
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from('fms_quality_documents')
+      .insert({
+        document_no: documentNo.trim(),
+        title: title.trim(),
+        category: isRockwood
+          ? 'Standard Operating Procedures – Rockwood'
+          : 'Standard Operating Procedures – Nguni',
+        document_type: 'Procedure',
+        version_no: 0,
+        issue_date: issueDate || null,
+        revision_date: null,
+        compiled_by: compiledBy || null,
+        approved_by: approvedBy || null,
+        content,
+        status: 'Active',
+        rockwood: isRockwood,
+        nguni: isNguni,
+        updated_by: user.id,
+      })
+      .select('*')
+      .single();
+
+    if (error) throw error;
+
+    setDocument(data);
+    setDocumentNo(data.document_no);
+    setVersionNo(Number(data.version_no) || 0);
+    setEditing(false);
+
+    toast.success('SOP created successfully.');
+
+    navigate(
+      `/quality-system/documents/${encodeURIComponent(data.id)}`,
+      { replace: true }
+    );
+
+    return;
+  }
+
+  // Archive the current version before updating the master.
       const { error: revisionError } = await supabase
         .from('fms_quality_document_revisions')
         .insert({
@@ -256,8 +333,6 @@ const { data, error } = isUuid
       </div>
     );
   }
-
-  const CustomForm = customForms[document.document_no];
 
   return (
     <div className="space-y-6 p-8 sm:p-12 md:p-16">
@@ -351,6 +426,17 @@ const { data, error } = isUuid
 
           <div className="grid gap-4 sm:grid-cols-2">
             <div>
+              <label className="mb-1 block text-sm font-medium">
+                Document Number
+              </label>
+              <Input
+                value={documentNo}
+                onChange={(e) => setDocumentNo(e.target.value)}
+                placeholder="e.g. MSRW-SOP-001"
+                disabled={!isNewDocument}
+              />
+            </div>
+          <div>
               <label className="mb-1 block text-sm font-medium">Document Title</label>
               <Input value={title} onChange={(e) => setTitle(e.target.value)} />
             </div>
@@ -384,15 +470,25 @@ const { data, error } = isUuid
             </div>
           </div>
 
-          <div>
-            <label className="mb-1 block text-sm font-medium">Document Content</label>
-            <Textarea
-              rows={18}
-              value={content}
-              onChange={(e) => setContent(e.target.value)}
-              className="font-mono text-sm"
-            />
-          </div>
+          {documentNo === 'MS SOP Q001' ? (
+  <QualityDocumentControlSOP
+    content={content}
+    editing={true}
+    onChange={setContent}
+  />
+) : (
+  <div>
+    <label className="mb-1 block text-sm font-medium">
+      Document Content
+    </label>
+    <Textarea
+      rows={18}
+      value={content}
+      onChange={(e) => setContent(e.target.value)}
+      className="font-mono text-sm"
+    />
+  </div>
+)}
 
           <div className="flex justify-end gap-2">
             <Button variant="outline" onClick={cancelEditing} disabled={saving}>
@@ -400,24 +496,31 @@ const { data, error } = isUuid
             </Button>
             <Button onClick={handleSave} disabled={saving}>
               <Save className="mr-2 h-4 w-4" />
-              {saving ? 'Saving...' : 'Save Master Document'}
+              {saving
+                ? 'Saving...'
+                : isNewDocument
+                  ? 'Create SOP'
+                  : 'Save Master Document'
+              }
             </Button>
           </div>
         </div>
-      ) : CustomForm ? (
-        <CustomForm
-          documentId={document.id}
-          {...(document.document_no === 'MSRQ2-FRM-1' && recordId
-            ? { recordId }
-            : {})}
-        />
       ) : (
         <div className="rounded-lg border bg-card p-6">
-          <h2 className="mb-4 text-xl font-semibold">{document.title}</h2>
-          <div className="whitespace-pre-wrap leading-7">
-            {document.content || 'No document content has been added yet.'}
-          </div>
-        </div>
+  <h2 className="mb-6 text-xl font-semibold">{document.title}</h2>
+
+  {document.document_no === 'MS SOP Q001' ? (
+    <QualityDocumentControlSOP
+      content={content}
+      editing={false}
+      onChange={setContent}
+    />
+  ) : (
+    <div className="whitespace-pre-wrap leading-7">
+      {document.content || 'No document content has been added yet.'}
+    </div>
+  )}
+</div>
       )}
 
       {revisionHistory.length > 0 && (

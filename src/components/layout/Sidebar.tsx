@@ -75,14 +75,6 @@ const navItems: NavItem[] = [
     description: 'Outbound tracking',
   },
   {
-    title: 'Quality',
-    href: '/quality',
-    icon: Target,
-    description: 'Quality inspections',
-  },
-  
- 
-  {
     title: 'Traceability',
     href: '/traceability',
     icon: Search,
@@ -122,11 +114,18 @@ interface SidebarProps {
 const SidebarContent: React.FC<{ collapsed: boolean; onItemClick?: () => void }> = ({ collapsed, onItemClick }) => {
   const location = useLocation();
   const { fmsUser, signOut, canAccessModule } = useFMSAuth();
+
   const isQaViewer = fmsUser?.role === 'qa_viewer';
   const isAdmin = fmsUser?.role === 'system_admin';
+  const isReceivingUser = fmsUser?.role === 'receiving_user';
 
   const allowedForViewer = new Set(['/', '/receiving', '/bom', '/batch-sheet', '/traceability', '/suppliers']);
-  const visibleMain = isQaViewer ? navItems.filter((i) => allowedForViewer.has(i.href)) : navItems;
+
+  const visibleMain = isReceivingUser
+    ? navItems.filter((i) => ['/dashboard', '/receiving'].includes(i.href))
+    : isQaViewer
+      ? navItems.filter((i) => allowedForViewer.has(i.href))
+      : navItems;
 
   // Filter out nav items for modules the user doesn't have access to
   const mainWithModuleAccess = visibleMain.filter((item) => {
@@ -134,7 +133,12 @@ const SidebarContent: React.FC<{ collapsed: boolean; onItemClick?: () => void }>
     return true;
   });
 
-  const visibleSecondary = isQaViewer ? secondaryNavItems.filter((i) => allowedForViewer.has(i.href)) : secondaryNavItems;
+
+  const visibleSecondary = isReceivingUser
+  ? []
+  : isQaViewer
+    ? secondaryNavItems.filter((i) => allowedForViewer.has(i.href))
+    : secondaryNavItems;
 
   // Admin-only navigation items (only visible to system_admin)
   const allSecondary = [...visibleSecondary, ...(isAdmin ? adminNavItems : [])];
@@ -228,6 +232,7 @@ const SidebarContent: React.FC<{ collapsed: boolean; onItemClick?: () => void }>
         })}
       </nav>
 <div className="space-y-1">
+  {!isReceivingUser && (
           <Link
             to="/"
             onClick={onItemClick}
@@ -237,6 +242,7 @@ const SidebarContent: React.FC<{ collapsed: boolean; onItemClick?: () => void }>
             <ArrowLeft className="h-4 w-4 shrink-0" />
             {!collapsed && <span>Back to Portal</span>}
           </Link>
+          )}
           <button
             onClick={signOut}
             className={cn("flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium text-sidebar-foreground transition-colors hover:bg-destructive/20 hover:text-destructive", collapsed && "justify-center px-2")}

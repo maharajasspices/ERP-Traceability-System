@@ -264,12 +264,49 @@ const [uploadedDocuments, setUploadedDocuments] = useState<
 
 const [loadingUploads, setLoadingUploads] = useState(false);
 const [uploading, setUploading] = useState(false);
+const [factorySops, setFactorySops] = useState<any[]>([]);
+const [loadingFactorySops, setLoadingFactorySops] = useState(false);
 
 const [uploadForm, setUploadForm] = useState({
   documentName: "",
   documentNumber: "",
   description: "",
 });
+
+const loadFactorySops = async () => {
+  const isRockwood =
+    selectedCategory === 'Standard Operating Procedures – Rockwood';
+
+  const isNguni =
+    selectedCategory === 'Standard Operating Procedures – Nguni';
+
+  if (!isRockwood && !isNguni) {
+    setFactorySops([]);
+    return;
+  }
+
+  setLoadingFactorySops(true);
+
+  try {
+    const { data, error } = await supabase
+      .from('fms_quality_documents')
+      .select('*')
+      .eq(isRockwood ? 'rockwood' : 'nguni', true)
+      .order('document_no', { ascending: true });
+
+    if (error) throw error;
+
+    setFactorySops(data || []);
+  } catch (error: any) {
+    console.error('Error loading factory SOPs:', error);
+    toast.error('Unable to load factory SOPs.');
+  } finally {
+    setLoadingFactorySops(false);
+  }
+};
+useEffect(() => {
+  loadFactorySops();
+}, [selectedCategory]);
 
 const [selectedFile, setSelectedFile] = useState<File | null>(null);
 const loadUploadedDocuments = async () => {

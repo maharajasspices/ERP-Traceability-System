@@ -3551,10 +3551,20 @@ const getExportFilteredRecords = () => {
 )}
                     </td>
                     <td className="flex gap-1">
-                      <Button variant="ghost" size="icon" onClick={() => handleViewRecord(rec)} title="View details"><Eye className="h-4 w-4" /></Button>
-                      <Button variant="ghost" size="icon" onClick={() => handleViewRecord(rec)} title="Edit stock code / quantity"><Pencil className="h-4 w-4" /></Button>
+
+                      <Button variant="ghost" size="icon" onClick={() => handleViewRecord(rec)} title="View details"><Eye className="h-4 w-4" />
+                      </Button>
+
+                      <Button variant="ghost" size="icon" onClick={() => handleViewRecord(rec)} title="Edit stock code / quantity">
+                        
+                        <Pencil className="h-4 w-4" />
+                      </Button>
+
                       <Button variant="ghost" size="icon" onClick={() => handlePrintQRCode(rec)} title="Print QR labels" className="hidden sm:inline-flex"><QrCode className="h-4 w-4" /></Button>
-                      <Button variant="ghost" size="icon" onClick={() => handleDownloadQRCode(rec)} title="Download QR" className="hidden sm:inline-flex"><Download className="h-4 w-4" /></Button>
+                      <Button variant="ghost" size="icon" onClick={() => handleDownloadQRCode(rec)} title="Download QR" className="hidden sm:inline-flex">
+                        <Download className="h-4 w-4" />
+                      
+                      </Button>
                       {canDelete && (
                         <AlertDialog>
                           <AlertDialogTrigger asChild>
