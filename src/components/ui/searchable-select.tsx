@@ -18,6 +18,8 @@ interface SearchableSelectProps {
   placeholder?: string;
   disabled?: boolean;
   className?: string;
+  serverSearch?: boolean;
+  onSearchChange?: (query: string) => void
 }
 
 export const SearchableSelect: React.FC<SearchableSelectProps> = ({
@@ -27,6 +29,8 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
   placeholder = 'Search...',
   disabled = false,
   className,
+    serverSearch = false,
+  onSearchChange,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -39,12 +43,15 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
   );
 
   const filteredOptions = useMemo(() => {
+    if (serverSearch && !searchQuery.trim()) return [];
+
     if (!searchQuery) return options.slice(0, 50);
+
     return options.filter(opt =>
       opt.label.toLowerCase().includes(searchQuery.toLowerCase()) ||
       opt.sublabel?.toLowerCase().includes(searchQuery.toLowerCase())
     ).slice(0, 50);
-  }, [options, searchQuery]);
+  }, [options, searchQuery, serverSearch]);
 
   // Close on outside click
   useEffect(() => {
@@ -52,23 +59,26 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
       if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
         setIsOpen(false);
         setSearchQuery('');
+        onSearchChange?.('');
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const handleSelect = (optionValue: string) => {
-    onValueChange(optionValue);
-    setIsOpen(false);
-    setSearchQuery('');
-  };
+ const handleSelect = (optionValue: string) => {
+  onValueChange(optionValue);
+  setIsOpen(false);
+  setSearchQuery('');
+  onSearchChange?.('');
+};
 
-  const handleClear = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    onValueChange('');
-    setSearchQuery('');
-  };
+const handleClear = (e: React.MouseEvent) => {
+  e.stopPropagation();
+  onValueChange('');
+  setSearchQuery('');
+  onSearchChange?.('');
+};
 
   return (
     <div ref={containerRef} className={cn("relative", className)}>
@@ -84,7 +94,10 @@ export const SearchableSelect: React.FC<SearchableSelectProps> = ({
           <Input
             ref={inputRef}
             value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
+            onChange={(e) => {
+  setSearchQuery(e.target.value);
+  onSearchChange?.(e.target.value);
+}}
             placeholder={placeholder}
             className="border-0 p-0 h-auto focus-visible:ring-0 focus-visible:ring-offset-0"
             autoFocus
@@ -226,7 +239,10 @@ export const SearchableMultiSelect: React.FC<SearchableMultiSelectProps> = ({
         {isOpen ? (
           <Input
             value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
+            onChange={(e) => {
+  setSearchQuery(e.target.value);
+  onSearchChange?.(e.target.value);
+}}
             placeholder={placeholder}
             className="border-0 p-0 h-auto focus-visible:ring-0 focus-visible:ring-offset-0"
             autoFocus

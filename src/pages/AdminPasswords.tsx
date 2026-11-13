@@ -54,6 +54,10 @@ const roleLabels: Record<string, string> = {
   hr_user: 'HR User',
   hr_admin: 'HR Admin',
   receiving_user: 'Receiving User',
+  marketing_user: 'Marketing User',
+  quality_user: 'Quality System user',
+  bdm_user: 'Business Management User '
+  
 };
 
 const roleOptions = Object.keys(roleLabels);

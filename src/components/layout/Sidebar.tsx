@@ -115,17 +115,30 @@ const SidebarContent: React.FC<{ collapsed: boolean; onItemClick?: () => void }>
   const location = useLocation();
   const { fmsUser, signOut, canAccessModule } = useFMSAuth();
 
-  const isQaViewer = fmsUser?.role === 'qa_viewer';
-  const isAdmin = fmsUser?.role === 'system_admin';
-  const isReceivingUser = fmsUser?.role === 'receiving_user';
+  
+ 
+const isQaViewer = fmsUser?.role === 'qa_viewer';
+const isAdmin = fmsUser?.role === 'system_admin';
+const isReceivingUser = fmsUser?.role === 'receiving_user';
+const isBatchOperator = fmsUser?.role === 'batch_operator';
 
-  const allowedForViewer = new Set(['/', '/receiving', '/bom', '/batch-sheet', '/traceability', '/suppliers']);
+const allowedForViewer = new Set([
+  '/',
+  '/receiving',
+  '/bom',
+  '/batch-sheet',
+  '/traceability',
+  '/suppliers'
+]);
 
-  const visibleMain = isReceivingUser
+const visibleMain = isBatchOperator
+  ? navItems.filter((i) => i.href === '/batch-sheet')
+  : isReceivingUser
     ? navItems.filter((i) => ['/dashboard', '/receiving'].includes(i.href))
     : isQaViewer
       ? navItems.filter((i) => allowedForViewer.has(i.href))
       : navItems;
+
 
   // Filter out nav items for modules the user doesn't have access to
   const mainWithModuleAccess = visibleMain.filter((item) => {
@@ -134,7 +147,7 @@ const SidebarContent: React.FC<{ collapsed: boolean; onItemClick?: () => void }>
   });
 
 
-  const visibleSecondary = isReceivingUser
+  const visibleSecondary = (isReceivingUser || isBatchOperator)
   ? []
   : isQaViewer
     ? secondaryNavItems.filter((i) => allowedForViewer.has(i.href))
@@ -232,7 +245,7 @@ const SidebarContent: React.FC<{ collapsed: boolean; onItemClick?: () => void }>
         })}
       </nav>
 <div className="space-y-1">
-  {!isReceivingUser && (
+  {!isReceivingUser && !isBatchOperator &&(
           <Link
             to="/"
             onClick={onItemClick}

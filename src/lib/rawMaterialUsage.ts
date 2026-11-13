@@ -132,7 +132,18 @@ export const aggregateRawMaterialUsage = (
 
     for (const row of rows) {
       const materialId = row.material_id ?? null;
-      const resolved = resolveQuantity(row, recipeFor?.(batch.id, materialId) ?? null);
+      // First use the actual pre-weigh quantities.
+// Only calculate the BOM fallback when no recorded quantity exists.
+let resolved = resolveQuantity(row, null);
+
+if (!resolved) {
+  resolved = resolveQuantity(
+    row,
+    recipeFor?.(batch.id, materialId) ?? null
+  );
+}
+
+if (!resolved) continue;
       if (!resolved) continue;
 
       const sc = materialId ? lookup.stockCode(materialId) : undefined;

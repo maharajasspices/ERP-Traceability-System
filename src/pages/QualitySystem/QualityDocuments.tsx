@@ -29,7 +29,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 
 type QualityDocument = {
   id: string;
@@ -52,19 +52,7 @@ type DocumentCategory = {
   folders: string[];
 };
 
-type UploadedQualityDocument = {
-  id: string;
-  document_name: string;
-  document_number: string | null;
-  category: string;
-  subcategory: string;
-  file_path: string;
-  file_type: string | null;
-  file_size: number | null;
-  description: string | null;
-  uploaded_by: string;
-  created_at: string;
-};
+
 
 const documentCategories: DocumentCategory[] = [
   {
@@ -159,7 +147,7 @@ const documentCategories: DocumentCategory[] = [
   },
 ]
 
-const qualityDocuments: QualityDocument[] = [
+const defaultQualityDocuments: QualityDocument[] = [
   {
     id: "non-conformance-procedure",
     title: "Control of Non-Conformance Procedure",
@@ -243,13 +231,50 @@ const qualityDocuments: QualityDocument[] = [
   },
 ];
 
+type UploadedQualityDocument = {
+  id: string;
+  document_name: string;
+  document_number: string | null;
+  category: string;
+  subcategory: string;
+  file_path: string;
+  file_type: string | null;
+  file_size: number | null;
+  description: string | null;
+  uploaded_by: string;
+  created_at: string;
+  factory: "rockwood" | "nguni" | null;
+  document_mode: "normal" | "fillable_form";
+  digital_template: Record<string, any>;
+};
+
 const QualityDocuments: React.FC = () => {
   const [searchParams] = useSearchParams();
   const requestedCategory = searchParams.get("category");
 
+  const location = useLocation();
+
+const isRockwood = location.pathname === "/quality-system/rockwood";
+const isNguni = location.pathname === "/quality-system/nguni";
+
+const currentFactory = isRockwood
+  ? "rockwood"
+  : isNguni
+    ? "nguni"
+    : null;
+
+  const [qualityDocuments, setQualityDocuments] = useState<QualityDocument[]>(
+    defaultQualityDocuments
+  );
+  const [loadingQualityDocuments, setLoadingQualityDocuments] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<string | null>(
-  requestedCategory
+  requestedCategory ||
+    (currentFactory === "rockwood"
+      ? "Standard Operating Procedures – Rockwood"
+      : currentFactory === "nguni"
+        ? "Standard Operating Procedures – Nguni"
+        : null)
 );
 const [selectedFolder, setSelectedFolder] = useState<string | null>(null);
   const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(
@@ -272,6 +297,84 @@ const [uploadForm, setUploadForm] = useState({
   documentNumber: "",
   description: "",
 });
+const [uploadMode, setUploadMode] = useState<
+  "normal" | "fillable_form"
+>("normal");
+
+const loadQualityDocuments = async () => {
+  setLoadingQualityDocuments(true);
+
+  try {
+      let query = (supabase as any)
+  .from("fms_quality_documents")
+  .select(`
+    id,
+    document_no,
+    title,
+    category,
+    document_type,
+    version_no,
+    issue_date,
+    compiled_by,
+    approved_by,
+    status,
+    content,
+    rockwood,
+    nguni
+  `);
+
+if (currentFactory === "rockwood") {
+  query = query.eq("rockwood", true);
+} else if (currentFactory === "nguni") {
+  query = query.eq("nguni", true);
+}
+
+const { data, error } = await query.order("document_no");
+        
+  if (error) throw error;
+
+    const documents: QualityDocument[] = (data || []).map((doc) => {
+      let category = doc.category || "Forms & Records";
+
+if (doc.document_type === "SOP" && doc.rockwood) {
+  category = "Standard Operating Procedures – Rockwood";
+} else if (doc.document_type === "SOP" && doc.nguni) {
+  category = "Standard Operating Procedures – Nguni";
+}
+
+      return {
+        id: doc.id,
+        title: doc.title,
+        documentNumber: doc.document_no,
+        category,
+        description: doc.content || "",
+        type:
+          doc.document_type === "Form"
+            ? "Form"
+            : doc.document_type === "Register"
+              ? "Register"
+              : "Procedure",
+        version: String(doc.version_no || "0"),
+        issueDate: doc.issue_date
+          ? new Date(`${doc.issue_date}T00:00:00`).toLocaleDateString("en-GB")
+          : "Not yet configured",
+        compiledBy: doc.compiled_by || undefined,
+        approvedBy: doc.approved_by || undefined,
+        status: doc.status || "Draft",
+      };
+    });
+
+    setQualityDocuments(documents);
+  } catch (error) {
+    console.error("Error loading quality documents:", error);
+    toast.error("Could not load quality documents.");
+  } finally {
+    setLoadingQualityDocuments(false);
+  }
+};
+useEffect(() => {
+  loadQualityDocuments();
+}, []);
 
 const loadFactorySops = async () => {
   const isRockwood =
@@ -288,7 +391,7 @@ const loadFactorySops = async () => {
   setLoadingFactorySops(true);
 
   try {
-    const { data, error } = await supabase
+    const { data, error } = await (supabase as any)
       .from('fms_quality_documents')
       .select('*')
       .eq(isRockwood ? 'rockwood' : 'nguni', true)
@@ -309,18 +412,25 @@ useEffect(() => {
 }, [selectedCategory]);
 
 const [selectedFile, setSelectedFile] = useState<File | null>(null);
+
 const loadUploadedDocuments = async () => {
   setLoadingUploads(true);
 
   try {
-    const { data, error } = await (supabase as any)
+    let query = (supabase as any)
       .from("fms_quality_uploaded_documents")
-      .select("*")
-      .order("created_at", { ascending: false });
+      .select("*");
 
-    if (error) {
-      throw error;
+    // Only show documents belonging to the selected factory.
+    if (currentFactory) {
+      query = query.eq("factory", currentFactory);
     }
+
+    const { data, error } = await query.order("created_at", {
+      ascending: false,
+    });
+
+    if (error) throw error;
 
     setUploadedDocuments(data || []);
   } catch (error: any) {
@@ -333,7 +443,7 @@ const loadUploadedDocuments = async () => {
 
 useEffect(() => {
   loadUploadedDocuments();
-}, []);
+}, [currentFactory]);
 
 const handleUploadDocument = async () => {
   if (!selectedCategory) {
@@ -403,17 +513,20 @@ const handleUploadDocument = async () => {
 
     // Save the document details in the database.
     const { error: databaseError } = await (supabase as any)
-      .from("fms_quality_uploaded_documents")
-      .insert({
-        document_name: uploadForm.documentName.trim(),
-        document_number: uploadForm.documentNumber.trim() || null,
-        category: parentCategories[selectedCategory] || "Other",
-        subcategory: selectedCategory,
-        file_path: filePath,
-        file_type: selectedFile.type || null,
-        file_size: selectedFile.size,
-        description: uploadForm.description.trim() || null,
-      });
+  .from("fms_quality_uploaded_documents")
+  .insert({
+    document_name: uploadForm.documentName.trim(),
+    document_number: uploadForm.documentNumber.trim() || null,
+    category: parentCategories[selectedCategory] || "Other",
+    subcategory: selectedCategory,
+    file_path: filePath,
+    file_type: selectedFile.type || null,
+    file_size: selectedFile.size,
+    description: uploadForm.description.trim() || null,
+    factory: currentFactory,
+    document_mode: uploadMode,
+    digital_template: {},
+  });
 
     if (databaseError) {
       console.error("Document metadata save error:", databaseError);
@@ -596,7 +709,11 @@ useEffect(() => {
             <>
               <button
                 onClick={() =>
-                navigate(`/quality-system/documents/${encodeURIComponent(document.id)}`)
+                navigate(
+  `/quality-system/documents/${encodeURIComponent(
+  selectedDocument?.documentNumber || ""
+)}`
+)
                 }
                 className="text-muted-foreground hover:text-foreground"
               >
@@ -862,7 +979,44 @@ useEffect(() => {
         </p>
       </div>
     </div>
+{/* Document Mode */}
+<div className="space-y-3">
+  <label className="text-sm font-medium">
+    Document Type *
+  </label>
 
+  <div className="grid gap-3 sm:grid-cols-2">
+    <Button
+      type="button"
+      variant={uploadMode === "normal" ? "default" : "outline"}
+      className="h-auto justify-start whitespace-normal p-4"
+      onClick={() => setUploadMode("normal")}
+    >
+      <div className="text-left">
+        <div className="font-semibold">Normal Document</div>
+        <p className="mt-1 text-xs font-normal opacity-80">
+          Upload SOPs, policies, certificates and reports
+          for viewing or downloading.
+        </p>
+      </div>
+    </Button>
+
+    <Button
+      type="button"
+      variant={uploadMode === "fillable_form" ? "default" : "outline"}
+      className="h-auto justify-start whitespace-normal p-4"
+      onClick={() => setUploadMode("fillable_form")}
+    >
+      <div className="text-left">
+        <div className="font-semibold">Fillable Form</div>
+        <p className="mt-1 text-xs font-normal opacity-80">
+          Upload a blank master sheet to convert into
+          an editable digital form.
+        </p>
+      </div>
+    </Button>
+  </div>
+</div>
     <div className="grid gap-4 sm:grid-cols-2">
       <div className="space-y-2">
         <label className="text-sm font-medium">Document Name *</label>

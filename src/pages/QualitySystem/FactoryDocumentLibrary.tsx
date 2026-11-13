@@ -50,13 +50,270 @@ type UploadedDocument = {
   description: string | null;
   factory: "rockwood" | "nguni";
   folder_id: string;
+  document_mode: "normal" | "fillable_form";
+  digital_template: Record<string, any>;
   created_at: string;
+  quality_document_id: string | null;
 };
+
+
+type DigitalFormFieldType =
+  | "text"
+  | "textarea"
+  | "number"
+  | "date"
+  | "select"
+  | "checkbox"
+  | "radio"
+  | "signature";
+
+type DigitalFormField = {
+  id: string;
+  name: string;
+  label: string;
+  type: DigitalFormFieldType;
+  required: boolean;
+  placeholder?: string;
+  options?: string[];
+  width: "full" | "half" | "third";
+};
+
+type DigitalFormSection = {
+  id: string;
+  title: string;
+  description?: string;
+  columns: 1 | 2 | 3;
+  fields: DigitalFormField[];
+};
+
+type DigitalRegisterColumn = {
+  id: string;
+  fieldName: string;
+  label: string;
+  visible: boolean;
+  source: 'form' | 'system';
+};
+
+type DigitalFormTemplate = {
+  templateKey: string;
+  version: number;
+  title: string;
+  documentNumber: string;
+  sections: DigitalFormSection[];
+  registerColumns: DigitalRegisterColumn[];
+};
+
+
+const defaultNCRTemplate: DigitalFormTemplate = {
+  templateKey: "ncr-report",
+  version: 1,
+  title: "Non-Conformance Report Form",
+  documentNumber: "MS Q002 FORM 1",
+  sections: [
+    {
+      id: "section-1",
+      title: "SECTION 1: Reporting Party",
+      description: "To be completed by Reporting Party",
+      columns: 2,
+      fields: [
+        { id: "originator", name: "originatorName", label: "Originator Name", type: "text", required: true, width: "half" },
+        { id: "product", name: "productDescription", label: "Product Description", type: "text", required: true, width: "half" },
+        { id: "supplier", name: "contractorSupplier", label: "Contractor/Supplier", type: "text", required: false, width: "half" },
+        { id: "batch", name: "batchNumber", label: "Batch Number", type: "text", required: false, width: "half" },
+        { id: "quantity", name: "quantity", label: "Qty", type: "number", required: false, width: "half" },
+        { id: "ncr", name: "ncrNumber", label: "NCR Number", type: "text", required: true, width: "half" },
+        { id: "activity", name: "foundDuring", label: "Found During What Activity", type: "select", required: true, options: ["Incoming Inspection", "In-process Inspection", "Final Inspection", "Other"], width: "full" },
+        { id: "problem", name: "problemDescription", label: "Problem Description", type: "textarea", required: true, width: "full" },
+        { id: "immediate", name: "immediateAction", label: "Immediate Action Taken", type: "textarea", required: false, width: "full" },
+        { id: "occurrence", name: "dateOfOccurrence", label: "Date of Occurrence", type: "date", required: true, width: "half" },
+        { id: "signature", name: "reportingSignature", label: "Signature", type: "signature", required: true, width: "half" },
+        { id: "reportDate", name: "reportDate", label: "Date", type: "date", required: true, width: "half" },
+      ],
+    },
+    {
+      id: "section-2",
+      title: "SECTION 2: Production Manager",
+      description: "To be completed by Production Manager",
+      columns: 2,
+      fields: [
+        { id: "criticality", name: "criticalityLevel", label: "Criticality Level", type: "select", required: true, options: ["High", "Medium/Moderate", "Low"], width: "full" },
+        { id: "retesting", name: "retestingResult", label: "Retesting of Product Result", type: "textarea", required: false, width: "full" },
+        { id: "disposition", name: "disposition", label: "Disposition", type: "select", required: true, options: ["Use-as-is", "Rework", "Return to supplier", "Repair", "Reject", "Other"], width: "full" },
+        { id: "requiredAction", name: "requiredAction", label: "Required Action", type: "textarea", required: true, width: "full" },
+        { id: "owner", name: "owner", label: "Owner", type: "text", required: true, width: "third" },
+        { id: "assignedDate", name: "dateAssigned", label: "Date Assigned", type: "date", required: true, width: "third" },
+        { id: "dueDate", name: "investigationDueDate", label: "Investigation Due Date", type: "date", required: true, width: "third" },
+      ],
+    },
+    {
+      id: "section-3",
+      title: "SECTION 3: Corrective and Preventative Action",
+      description: "To be completed by Owner and returned to Production Manager for review prior to due date",
+      columns: 2,
+      fields: [
+        { id: "capaApproval", name: "capaApproval", label: "Approval of Corrective/Preventative Action", type: "select", required: true, options: ["Yes", "No"], width: "full" },
+        { id: "capaNumber", name: "capaRcaFormNumber", label: "CAPA & RCA Form No. Issued", type: "text", required: false, width: "full" },
+        { id: "ownerName", name: "ownerName", label: "Name", type: "text", required: true, width: "third" },
+        { id: "ownerDate", name: "ownerDate", label: "Date", type: "date", required: true, width: "third" },
+        { id: "ownerSignature", name: "ownerSignature", label: "Signature", type: "signature", required: true, width: "third" },
+      ],
+    },
+    {
+      id: "section-4",
+      title: "SECTION 4: Closing the Non-Conformance",
+      description: "To be completed by Quality Designee or Other (Specify)",
+      columns: 2,
+      fields: [
+        { id: "correctiveCompleted", name: "correctiveActionCompleted", label: "Planned Disposition completed and Corrective Action initiated", type: "select", required: true, options: ["Yes", "No"], width: "full" },
+        { id: "newNcr", name: "newNcrNumber", label: "New NCR Number (if No)", type: "text", required: false, width: "half" },
+        { id: "qualitySignature", name: "qualityDesigneeSignature", label: "Quality Designee Signature", type: "signature", required: true, width: "half" },
+        { id: "closingDate", name: "closingDate", label: "Date", type: "date", required: true, width: "half" },
+      ],
+    },
+  ],
+  registerColumns: [
+  { id: "reg-ncr", fieldName: "ncrNumber", label: "NCR Number", visible: true, source: "form" },
+  { id: "reg-date", fieldName: "dateOfOccurrence", label: "Date Reported", visible: true, source: "form" },
+  { id: "reg-product", fieldName: "productDescription", label: "Product", visible: true, source: "form" },
+  { id: "reg-batch", fieldName: "batchNumber", label: "Batch Number", visible: true, source: "form" },
+  { id: "reg-criticality", fieldName: "criticalityLevel", label: "Criticality", visible: true, source: "form" },
+  { id: "reg-owner", fieldName: "owner", label: "Owner", visible: true, source: "form" },
+  { id: "reg-disposition", fieldName: "disposition", label: "Disposition", visible: true, source: "form" },
+  { id: "reg-status", fieldName: "status", label: "Status", visible: true, source: "system" },
+],
+};
+
 
 const FactoryDocumentLibrary: React.FC<FactoryDocumentLibraryProps> = ({
   factory,
+  
 }) => {
+  
   const { fmsUser } = useFMSAuth();
+
+  const saveDigitalTemplate = async (
+  template: DigitalFormTemplate
+) => {
+  if (!isAdmin) {
+    toast.error("Only system administrators can edit master forms.");
+    return null;
+  }
+
+  try {
+    const { data: existingTemplate, error: findError } = await (supabase as any)
+      .from("fms_quality_uploaded_documents")
+      .select("id, digital_template")
+      .eq("document_number", template.documentNumber)
+      .eq("document_mode", "fillable_form")
+      .eq("factory", "rockwood")
+      .maybeSingle();
+
+    if (findError) throw findError;
+
+    const nextTemplate = {
+      ...template,
+      version: existingTemplate?.digital_template?.version
+        ? existingTemplate.digital_template.version + 1
+        : 1,
+    };
+
+    if (existingTemplate) {
+      const { error } = await ( supabase as any)
+        .from("fms_quality_uploaded_documents")
+        .update({
+          document_name: nextTemplate.title,
+          digital_template: nextTemplate,
+          description: "Shared digital NCR master form",
+        })
+        .eq("id", existingTemplate.id);
+
+      if (error) throw error;
+    } else {
+      const { error } = await (supabase as any)
+        .from("fms_quality_uploaded_documents")
+        .insert({
+          document_name: nextTemplate.title,
+          document_number: nextTemplate.documentNumber,
+          category: "Quality Forms",
+          subcategory: "Non-Conformance",
+          file_path: "digital-templates/ncr-report",
+          file_type: "digital",
+          description: "Shared digital NCR master form",
+          factory: "rockwood",
+          folder_id: null,
+          document_mode: "fillable_form",
+          digital_template: nextTemplate,
+        });
+
+      if (error) throw error;
+    }
+
+    toast.success("NCR master template saved successfully.");
+    return nextTemplate;
+  } catch (error) {
+    console.error("Error saving NCR template:", error);
+    toast.error("Could not save the NCR master template.");
+    return null;
+  }
+};
+
+
+const loadNCRRecords = async () => {
+  setLoadingNCRRecords(true);
+
+  try {
+    const { data, error } = await (supabase as any)
+      .from("fms_quality_records")
+      .select("*")
+      .eq("factory", factory)
+      .eq("uploaded_document_id", selectedDigitalDocument?.id)
+      .order("created_at", { ascending: false });
+
+    if (error) throw error;
+
+    setNcrRecords(data || []);
+  } catch (error: any) {
+    console.error("Error loading NCR records:", error);
+    toast.error("Could not load the NCR Master Sheet.");
+  } finally {
+    setLoadingNCRRecords(false);
+  }
+};
+
+const handleOpenMasterSheet = async () => {
+  setShowMasterSheet(true);
+  await loadNCRRecords();
+};
+
+
+
+const loadDigitalTemplate = async (): Promise<DigitalFormTemplate> => {
+  try {
+    const { data, error } = await (supabase as any)
+      .from("fms_quality_uploaded_documents")
+      .select("digital_template")
+      .eq("document_number", defaultNCRTemplate.documentNumber)
+      .eq("document_mode", "fillable_form")
+      .eq("factory", "rockwood")
+      .maybeSingle();
+
+    if (error) throw error;
+
+    if (
+      data?.digital_template &&
+      (data.digital_template as any).templateKey === "ncr-report"
+    ) {
+      return data.digital_template as DigitalFormTemplate;
+    }
+
+    return defaultNCRTemplate;
+  } catch (error) {
+    console.error("Error loading NCR template:", error);
+    toast.error("Could not load the saved NCR template.");
+    return defaultNCRTemplate;
+  }
+};
+
 
   const isAdmin = fmsUser?.role === "system_admin";
 
@@ -66,9 +323,30 @@ const FactoryDocumentLibrary: React.FC<FactoryDocumentLibraryProps> = ({
   const [folders, setFolders] = useState<QualityFolder[]>([]);
   const [documents, setDocuments] = useState<UploadedDocument[]>([]);
 
+  const [digitalTemplate, setDigitalTemplate] =
+  useState<DigitalFormTemplate>(defaultNCRTemplate);
+  const [loadingDigitalTemplate, setLoadingDigitalTemplate] =
+  useState(false);
+
   const [loading, setLoading] = useState(true);
   const [documentsLoading, setDocumentsLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
+
+  const [savingNCR, setSavingNCR] = useState(false);
+
+  const [selectedDigitalDocument, setSelectedDigitalDocument] =
+  useState<UploadedDocument | null>(null);
+
+  const [ncrRecords, setNcrRecords] = useState<any[]>([]);
+const [loadingNCRRecords, setLoadingNCRRecords] = useState(false);
+const [showMasterSheet, setShowMasterSheet] = useState(false);
+
+ const [ncrFormValues, setNcrFormValues] = useState<Record<string, any>>({});
+
+  const [uploadMode, setUploadMode] = useState<
+  "normal" | "fillable_form"
+>("normal");
+
   const [deletingDocumentId, setDeletingDocumentId] = useState<string | null>(
     null
   );
@@ -140,6 +418,26 @@ const FactoryDocumentLibrary: React.FC<FactoryDocumentLibraryProps> = ({
     loadDocuments();
   }, [factory, currentFolderId]);
 
+  useEffect(() => {
+  let isMounted = true;
+
+  const fetchTemplate = async () => {
+    setLoadingDigitalTemplate(true);
+
+    const template = await loadDigitalTemplate();
+
+    if (isMounted) {
+      setDigitalTemplate(template);
+      setLoadingDigitalTemplate(false);
+    }
+  };
+
+  void fetchTemplate();
+
+  return () => {
+    isMounted = false;
+  };
+}, [factory]);
   // Find the folder currently being viewed
   const currentFolder = folders.find(
     (folder) => folder.id === currentFolderId
@@ -172,10 +470,10 @@ const FactoryDocumentLibrary: React.FC<FactoryDocumentLibraryProps> = ({
       const { error } = await (supabase as any)
         .from("fms_quality_folders")
         .insert({
-          folder_name: folderName.trim(),
-          factory,
-          parent_folder_id: currentFolderId,
-        });
+  folder_name: folderName.trim(),
+  factory,
+  parent_folder_id: currentFolderId,
+});
 
       if (error) throw error;
 
@@ -190,8 +488,9 @@ const FactoryDocumentLibrary: React.FC<FactoryDocumentLibraryProps> = ({
     }
   };
 
+
   // Upload documents into the currently opened folder
-  const handleUpload = async (files: FileList | null) => {
+  const handleUpload = async (files: File[] | FileList | null) => {
     if (!files || files.length === 0) return;
 
     if (!currentFolderId || !currentFolder) {
@@ -244,6 +543,8 @@ const FactoryDocumentLibrary: React.FC<FactoryDocumentLibraryProps> = ({
               description: null,
               factory,
               folder_id: currentFolderId,
+              document_mode: uploadMode,
+              digital_template: {},
             });
 
           if (insertError) {
@@ -282,20 +583,90 @@ const FactoryDocumentLibrary: React.FC<FactoryDocumentLibraryProps> = ({
   };
 
   // View a document
-  const handleViewDocument = async (document: UploadedDocument) => {
-    try {
-      const { data, error } = await supabase.storage
-        .from("quality-documents")
-        .createSignedUrl(document.file_path, 300);
 
-      if (error) throw error;
+const handleViewDocument = async (document: UploadedDocument) => {
+  try {
+    if (document.document_mode === "fillable_form") {
+      const template = await loadDigitalTemplate();
 
-      window.open(data.signedUrl, "_blank", "noopener,noreferrer");
-    } catch (error: any) {
-      console.error("Error opening document:", error);
-      toast.error(error.message || "Could not open document.");
+      setDigitalTemplate(template);
+      setSelectedDigitalDocument(document);
+
+      return;
     }
-  };
+
+    const { data, error } = await supabase.storage
+      .from("quality-documents")
+      .createSignedUrl(document.file_path, 300);
+
+    if (error) throw error;
+
+    window.open(data.signedUrl, "_blank", "noopener,noreferrer");
+  } catch (error: any) {
+    console.error("Error opening document:", error);
+    toast.error(error.message || "Could not open document.");
+  }
+};
+
+
+const handleSaveNCR = async () => {
+  if (!selectedDigitalDocument) return;
+
+  const requiredFields = digitalTemplate.sections.flatMap((section) =>
+    section.fields.filter((field) => field.required)
+  );
+
+  const missingFields = requiredFields.filter((field) => {
+    const value = ncrFormValues[field.name];
+    return value === undefined || value === null || String(value).trim() === "";
+  });
+
+  if (missingFields.length > 0) {
+    toast.error(
+      `Please complete the required fields: ${missingFields
+        .map((field) => field.label)
+        .join(", ")}`
+    );
+    return;
+  }
+
+  setSavingNCR(true);
+
+  try {
+    const { error } = await (supabase as any)
+      .from("fms_quality_records")
+      .insert({
+        document_id: null,
+        uploaded_document_id: selectedDigitalDocument.id,
+        record_number: ncrFormValues.ncrNumber || null,
+        title: `Non-Conformance Report - ${
+          ncrFormValues.ncrNumber || "New NCR"
+        }`,
+        form_data: {
+          ...ncrFormValues,
+          template_snapshot: digitalTemplate,
+        },
+        status: "submitted",
+        created_by: (await supabase.auth.getUser()).data.user?.id,
+        updated_by: (await supabase.auth.getUser()).data.user?.id,
+        submitted_at: new Date().toISOString(),
+        factory,
+      });
+
+    if (error) throw error;
+
+    toast.success("NCR submitted successfully!");
+
+    setNcrFormValues({});
+    setSelectedDigitalDocument(null);
+  } catch (error: any) {
+    console.error("NCR submission failed:", error);
+    toast.error(error.message || "Could not save NCR.");
+  } finally {
+    setSavingNCR(false);
+  }
+};
+
 
   // Download a document
   const handleDownloadDocument = async (document: UploadedDocument) => {
@@ -324,6 +695,12 @@ const FactoryDocumentLibrary: React.FC<FactoryDocumentLibraryProps> = ({
 
   // Delete a document (administrators only)
   const handleDeleteDocument = async (document: UploadedDocument) => {
+    if (document.document_mode === "fillable_form") {
+  toast.error(
+    "This is a master digital form and cannot be deleted because it may have saved records linked to it."
+  );
+  return;
+}
     const confirmed = window.confirm(
       `Are you sure you want to delete "${document.document_name}"?`
     );
@@ -432,7 +809,124 @@ const FactoryDocumentLibrary: React.FC<FactoryDocumentLibraryProps> = ({
             </button>
           </React.Fragment>
         ))}
+
+        {/* Master Sheet */}
+<div
+  onClick={handleOpenMasterSheet}
+  className="flex cursor-pointer items-center gap-3 rounded-lg border border-green-200 bg-green-50 p-4 transition hover:bg-green-100 dark:border-green-900 dark:bg-green-950/30"
+>
+  <div className="rounded-lg bg-green-100 p-3 dark:bg-green-900">
+    <FileText className="h-6 w-6 text-green-700 dark:text-green-300" />
+  </div>
+
+  <div className="flex-1">
+    <p className="font-semibold text-green-900 dark:text-green-100">
+      Master Sheet
+    </p>
+    <p className="text-sm text-green-700 dark:text-green-300">
+      NCR Register – {factoryName}
+    </p>
+  </div>
+
+  <Badge className="bg-green-600 text-white">
+    Register
+  </Badge>
+</div>
       </div>
+
+      
+{/* NCR MASTER SHEET */}
+{showMasterSheet && (
+  <div className="fixed inset-0 z-50 overflow-y-auto bg-background">
+    <div className="mx-auto max-w-7xl space-y-6 p-4 sm:p-6">
+
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <h2 className="text-2xl font-bold">Master Sheet</h2>
+          <p className="text-sm text-muted-foreground">
+            Non-Conformance Register – {factoryName}
+          </p>
+        </div>
+
+        <Button
+          variant="outline"
+          onClick={() => setShowMasterSheet(false)}
+        >
+          <ArrowLeft className="mr-2 h-4 w-4" />
+          Back to Folders
+        </Button>
+      </div>
+
+      <Card>
+        <CardContent className="p-0">
+          {loadingNCRRecords ? (
+            <div className="flex items-center justify-center gap-2 p-10">
+              <Loader2 className="h-5 w-5 animate-spin" />
+              Loading Master Sheet...
+            </div>
+          ) : ncrRecords.length === 0 ? (
+            <div className="p-10 text-center text-muted-foreground">
+              No NCR records have been submitted for this factory yet.
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-muted">
+                  <tr>
+                    {digitalTemplate.registerColumns
+                      .filter(column => column.visible)
+                      .map(column => (
+                        <th
+                          key={column.id}
+                          className="whitespace-nowrap px-4 py-3 text-left font-semibold"
+                        >
+                          {column.label}
+                        </th>
+                      ))}
+                  </tr>
+                </thead>
+
+                <tbody>
+                  {ncrRecords.map(record => (
+                    <tr
+                      key={record.id}
+                      className="border-t hover:bg-muted/50"
+                    >
+                      {digitalTemplate.registerColumns
+                        .filter(column => column.visible)
+                        .map(column => {
+                          const value =
+                            column.source === "system"
+                              ? record[column.fieldName]
+                              : record.form_data?.[column.fieldName];
+
+                          return (
+                            <td
+                              key={column.id}
+                              className="whitespace-nowrap px-4 py-3"
+                            >
+                              {column.fieldName === "created_at" ||
+                              column.fieldName === "dateOfOccurrence"
+                                ? value
+                                  ? new Date(value).toLocaleDateString("en-ZA")
+                                  : "—"
+                                : value || "—"}
+                            </td>
+                          );
+                        })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+    </div>
+  </div>
+)}
+
 
       {/* Folder management */}
       {isAdmin && (
@@ -513,7 +1007,7 @@ const FactoryDocumentLibrary: React.FC<FactoryDocumentLibraryProps> = ({
       {/* Upload documents - only inside an opened folder */}
       {currentFolderId && isAdmin && (
         <Card>
-          <CardContent className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between">
+          <CardContent className="flex flex-col gap-4 p-5">
             <div className="flex items-center gap-3">
               <div className="rounded-lg bg-primary/10 p-3">
                 <Upload className="h-5 w-5 text-primary" />
@@ -533,11 +1027,11 @@ const FactoryDocumentLibrary: React.FC<FactoryDocumentLibraryProps> = ({
               multiple
               className="hidden"
               onChange={(event) => {
-                const selectedFiles = event.target.files;
-                event.target.value = "";
-                void handleUpload(selectedFiles);
-              }}
-            />
+  const selectedFiles = Array.from(event.target.files || []);
+  event.target.value = "";
+  void handleUpload(selectedFiles);
+}}
+/>
 
             <Button
               onClick={() => fileInputRef.current?.click()}
@@ -551,7 +1045,38 @@ const FactoryDocumentLibrary: React.FC<FactoryDocumentLibraryProps> = ({
               )}
               {uploading ? "Uploading..." : "Select Files to Upload"}
             </Button>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+  <Button
+    type="button"
+    variant={uploadMode === "normal" ? "default" : "outline"}
+    className="h-auto justify-start whitespace-normal p-4"
+    onClick={() => setUploadMode("normal")}
+  >
+    <div className="text-left">
+      <div className="font-semibold">Normal Document</div>
+      <p className="mt-1 text-xs font-normal opacity-80">
+        Upload documents for viewing and downloading.
+      </p>
+    </div>
+  </Button>
+
+  <Button
+    type="button"
+    variant={uploadMode === "fillable_form" ? "default" : "outline"}
+    className="h-auto justify-start whitespace-normal p-4"
+    onClick={() => setUploadMode("fillable_form")}
+  >
+    <div className="text-left">
+      <div className="font-semibold">Fillable Form</div>
+      <p className="mt-1 text-xs font-normal opacity-80">
+        Upload a blank master document to create an editable digital form.
+      </p>
+    </div>
+  </Button>
+</div>
           </CardContent>
+
         </Card>
       )}
 
@@ -659,10 +1184,19 @@ const FactoryDocumentLibrary: React.FC<FactoryDocumentLibraryProps> = ({
                     </div>
 
                     <div className="min-w-0 flex-1">
-                      <h3 className="break-words font-medium">
-                        {document.document_name}
-                      </h3>
+                      <div className="flex flex-wrap items-center gap-2">
+  <h3 className="break-words font-medium">
+    {document.document_name}
+  </h3>
 
+  <Badge
+    variant={document.document_mode === "fillable_form" ? "default" : "secondary"}
+  >
+    {document.document_mode === "fillable_form"
+      ? "Fillable Form"
+      : "Normal Document"}
+  </Badge>
+</div>FactoryDocumentLibrary
                       <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                         <span>{formatFileSize(document.file_size)}</span>
                         <span>•</span>
@@ -719,6 +1253,208 @@ const FactoryDocumentLibrary: React.FC<FactoryDocumentLibraryProps> = ({
           )}
         </div>
       )}
+      
+      {/* Digital NCR Form */}
+      {selectedDigitalDocument && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-background">
+          <div className="mx-auto max-w-5xl space-y-6 p-4 sm:p-6">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b pb-4">
+              <div>
+                <h1 className="text-2xl font-bold">
+                  {digitalTemplate.title}
+                </h1>
+                <p className="text-sm text-muted-foreground">
+                  {digitalTemplate.documentNumber} · {factoryName}
+                </p>
+              </div>
+
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setSelectedDigitalDocument(null);
+                  setNcrFormValues({});
+                }}
+              >
+                <ArrowLeft className="mr-2 h-4 w-4" />
+                Back to Documents
+              </Button>
+            </div>
+
+            {loadingDigitalTemplate ? (
+              <div className="flex items-center justify-center py-12">
+                <Loader2 className="h-6 w-6 animate-spin" />
+                <span className="ml-2">Loading form...</span>
+              </div>
+            ) : (
+              <>
+                {digitalTemplate.sections.map((section) => (
+                  <Card key={section.id}>
+                    <CardContent className="space-y-5 p-5">
+                      <div>
+                        <h2 className="text-lg font-semibold">
+                          {section.title}
+                        </h2>
+
+                        {section.description && (
+                          <p className="text-sm text-muted-foreground">
+                            {section.description}
+                          </p>
+                        )}
+                      </div>
+
+                      <div
+                        className="grid gap-4"
+                        style={{
+                          gridTemplateColumns: `repeat(${section.columns}, minmax(0, 1fr))`,
+                        }}
+                      >
+                        {section.fields.map((field) => (
+                          <div
+                            key={field.id}
+                            className={
+                              field.width === "full"
+                                ? "col-span-full space-y-2"
+                                : field.width === "half"
+                                  ? "col-span-1 space-y-2"
+                                  : "col-span-1 space-y-2"
+                            }
+                          >
+                            <label className="text-sm font-medium">
+                              {field.label}
+                              {field.required && (
+                                <span className="ml-1 text-destructive">*</span>
+                              )}
+                            </label>
+
+                            {field.type === "textarea" ? (
+                              <textarea
+                                className="min-h-24 w-full rounded-md border bg-background px-3 py-2 text-sm"
+                                placeholder={field.placeholder || ""}
+                                value={ncrFormValues[field.name] || ""}
+                                onChange={(event) =>
+                                  setNcrFormValues((previous) => ({
+                                    ...previous,
+                                    [field.name]: event.target.value,
+                                  }))
+                                }
+                              />
+                            ) : field.type === "select" ? (
+                              <select
+                                className="h-10 w-full rounded-md border bg-background px-3 text-sm"
+                                value={ncrFormValues[field.name] || ""}
+                                onChange={(event) =>
+                                  setNcrFormValues((previous) => ({
+                                    ...previous,
+                                    [field.name]: event.target.value,
+                                  }))
+                                }
+                              >
+                                <option value="">Select an option</option>
+                                {(field.options || []).map((option) => (
+                                  <option key={option} value={option}>
+                                    {option}
+                                  </option>
+                                ))}
+                              </select>
+                            ) : field.type === "checkbox" ? (
+                              <label className="flex items-center gap-2">
+                                <input
+                                  type="checkbox"
+                                  checked={Boolean(ncrFormValues[field.name])}
+                                  onChange={(event) =>
+                                    setNcrFormValues((previous) => ({
+                                      ...previous,
+                                      [field.name]: event.target.checked,
+                                    }))
+                                  }
+                                />
+                                <span className="text-sm">
+                                  {field.placeholder || field.label}
+                                </span>
+                              </label>
+                            ) : field.type === "radio" ? (
+                              <div className="flex flex-wrap gap-4">
+                                {(field.options || []).map((option) => (
+                                  <label
+                                    key={option}
+                                    className="flex items-center gap-2 text-sm"
+                                  >
+                                    <input
+                                      type="radio"
+                                      name={field.name}
+                                      value={option}
+                                      checked={
+                                        ncrFormValues[field.name] === option
+                                      }
+                                      onChange={() =>
+                                        setNcrFormValues((previous) => ({
+                                          ...previous,
+                                          [field.name]: option,
+                                        }))
+                                      }
+                                    />
+                                    {option}
+                                  </label>
+                                ))}
+                              </div>
+                            ) : (
+                              <Input
+                                type={
+                                  field.type === "signature"
+                                    ? "text"
+                                    : field.type
+                                }
+                                placeholder={
+                                  field.placeholder ||
+                                  (field.type === "signature"
+                                    ? "Enter name as signature"
+                                    : "")
+                                }
+                                value={ncrFormValues[field.name] || ""}
+                                onChange={(event) =>
+                                  setNcrFormValues((previous) => ({
+                                    ...previous,
+                                    [field.name]: event.target.value,
+                                  }))
+                                }
+                              />
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}              
+                <div className="flex justify-end gap-3 pb-8">
+                  <Button
+                    variant="outline"
+                    onClick={() => setNcrFormValues({})}
+                    disabled={savingNCR}
+                  >
+                    Clear Form
+                  </Button>
+
+                  <Button
+                    onClick={handleSaveNCR}
+                    disabled={savingNCR}
+                  >
+                    {savingNCR ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Saving NCR...
+                      </>
+                    ) : (
+                      "Submit NCR"
+                    )}
+                  </Button>
+                </div>
+
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
     </div>
   );
 };

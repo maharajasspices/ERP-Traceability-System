@@ -81,9 +81,9 @@ const Production: React.FC = () => {
     const { stockCodes, boms, receivingRecords, productionBatches, loading, addProductionBatch,updateProductionBatch, getStockCodeById, getBOMByFinishedGoodId, refreshData, deductStockForBatch, stockLevels, fifoAllocateLots, recordLotUsage, stockReservations, reserveStockForBatch, releaseBatchReservations, consumeBatchReservations, getReservationsForBatch, getReceivingById } = useFMSData();
 
   const getBOMById = (bomId: string | null | undefined) => {
-  if (!bomId) return null;
-  return boms.find(bom => bom.id === bomId) || null;
-};
+    if (!bomId) return null;
+    return boms.find(bom => bom.id === bomId) || null;
+  };
 
 
   // Helper to get BOM by ID
@@ -122,18 +122,48 @@ const Production: React.FC = () => {
   );
 
   // Raw materials used across all active BOMs — for filtering batches by material
-  const materialOptions: SearchableSelectOption[] = useMemo(() => {
-    const uniqueIds = new Set<string>();
-    boms.forEach(bom => {
-      if (bom.status !== 'active') return;
-      (bom.components || []).forEach(c => uniqueIds.add(c.material_stock_code_id));
-    });
-    return Array.from(uniqueIds)
-      .map(id => getStockCodeById(id))
-      .filter((sc): sc is NonNullable<typeof sc> => !!sc)
-      .map(sc => ({ value: sc.id, label: sc.stock_code, sublabel: sc.description }));
-  }, [boms, getStockCodeById]);
+  
+const [materialSearch, setMaterialSearch] = useState('');
+const [materialOptions, setMaterialOptions] = useState<SearchableSelectOption[]>([]);
 
+useEffect(() => {
+  const search = materialSearch.trim();
+  let cancelled = false;
+
+  if (!search) {
+    setMaterialOptions([]);
+    return;
+  }
+
+  const timer = setTimeout(async () => {
+    try {
+      const { data, error } = await supabase
+        .from('fms_stock_codes')
+        .select('id, stock_code, description')
+        .or(`stock_code.ilike.%${search}%,description.ilike.%${search}%`)
+        .order('stock_code')
+        .limit(50);
+
+      if (error) throw error;
+
+      if (!cancelled) {
+        setMaterialOptions((data || []).map(sc => ({
+          value: sc.id,
+          label: sc.stock_code,
+          sublabel: sc.description,
+        })));
+      }
+    } catch (error) {
+      console.error('Material search failed:', error);
+      if (!cancelled) setMaterialOptions([]);
+    }
+  }, 300);
+
+  return () => {
+    cancelled = true;
+    clearTimeout(timer);
+  };
+}, [materialSearch]);
   // Finished products that actually appear on batch sheets — for filtering
   const finishedProductFilterOptions: SearchableSelectOption[] = useMemo(() => {
     const distinctIds = new Set(productionBatches.map(b => b.finished_good_id));
@@ -560,17 +590,6 @@ const Production: React.FC = () => {
           }
         }
 
-        let reserveResults: Awaited<ReturnType<typeof reserveStockForBatch>> = null;
-        if (reservations.length > 0) {
-          reserveResults = await reserveStockForBatch(result.id, result.batch_number, reservations);
-        }
-
-        if (reserveResults === null && reservations.length > 0) {
-          // Reservation could not be placed. Keep the batch sheet — it was
-          // explicitly allowed to be created with low/no stock — and only
-          // skip the reservation. Stock can be reserved once received.
-          lowStockWarnings.push(`${result.batch_number}: stock could not be reserved (insufficient net stock) — batch created without reservation.`);
-        }
         createdCount++;
       }
     }
@@ -591,74 +610,169 @@ const Production: React.FC = () => {
     return createdCount;
   };
 
-  const handleStartProduction = async (batchId: string) => {
-    const batch = productionBatches.find(b => b.id === batchId);
-    if (batch?.status === 'cancelled') {
-      toast.error('Cannot start a cancelled batch. Reactivate it first.');
-      return;
-    }
-    await updateProductionBatch(batchId, { 
-      status: 'pre_weighing',
-      production_start: new Date().toISOString(),
-    });
+  
+const handleStartProduction = async (batchId: string) => {
+  const batch = productionBatches.find(b => b.id === batchId);
 
-    // Starting production converts the Batch Sheet's reserved set-aside into
-    // actual consumption. This is what the reservation was for: the material
-    // was already set aside at CREATION time, so by the time the line starts,
-    // the stock is committed and leaves physical stock.
-    //
-    // Idempotent: fms_consume_batch_reservations only touches rows still in
-    // 'reserved', so a batch that was never reserved (or already consumed) is
-    // a no-op here rather than a double deduction.
-    const consumptionResults = await consumeBatchReservations(
-      batchId,
-      batch?.batch_number || '',
-    );
+  if (batch?.status === 'cancelled') {
+    toast.error('Cannot start a cancelled batch. Reactivate it first.');
+    return;
+  }
 
-    const startLowStockWarnings: string[] = [];
-    for (const cr of consumptionResults) {
-      if (cr.is_low) {
-        const sc = getStockCodeById(cr.stock_code_id);
-        startLowStockWarnings.push(
-          `${sc?.stock_code || cr.stock_code_id} (${cr.new_quantity_on_hand.toFixed(2)} remaining)`,
+  await updateProductionBatch(batchId, {
+    status: 'pre_weighing',
+    production_start: new Date().toISOString(),
+  });
+
+  // Reserve the required stock exactly once, when production starts.
+  // Batch sheets are created with on-hand stock and no reservation; the
+  // reservation is attached at START and consumed exactly once at CLOSE.
+  const lowStockWarnings: string[] = [];
+  const bom = getBOMByFinishedGoodId(batch.finished_good_id);
+  if (bom) {
+    const plannedQty = Number(batch.planned_batch_size) || 0;
+    const usesPercentageBom = (getStockCodeById(batch.finished_good_id) as any)?.bom_uses_percentage === true;
+    const requirementList: { stock_code_id: string; quantity: number }[] = usesPercentageBom
+      ? computeBatchMaterialRequirements(stockCodes, boms, batch.finished_good_id, plannedQty)
+      : bom.components.map((comp) => ({
+          stock_code_id: comp.material_stock_code_id,
+          quantity: comp.quantity_per_batch * plannedQty,
+        }));
+
+    const reservations: {
+      stock_code_id: string;
+      receiving_record_id: string | null;
+      internal_lot_number: string | null;
+      quantity: number;
+    }[] = [];
+
+    for (const req of requirementList) {
+      const requiredQty = Number(req.quantity) || 0;
+      if (requiredQty <= 0) continue;
+
+      const material = getStockCodeById(req.stock_code_id);
+      const uom = material?.unit_of_measure || '';
+
+      // Cap at what is actually free, so the all-or-nothing RPC
+      // (fms_reserve_batch_stock raises if ANY ingredient is short)
+      // cannot void the reservations of every other ingredient.
+      const stockLevel = stockLevels.find((sl) => sl.stock_code_id === req.stock_code_id);
+      const physical = stockLevel?.quantity_on_hand ?? 0;
+      const alreadyReserved = stockLevel?.reserved_quantity ?? 0;
+      const netAvailable = physical - alreadyReserved;
+      const toReserve = Math.min(requiredQty, Math.max(0, netAvailable));
+
+      if (toReserve <= 0) {
+        lowStockWarnings.push(
+          `${batch.batch_number}: ${material?.stock_code || req.stock_code_id} needs ${requiredQty.toFixed(2)}${uom ? ' ' + uom : ''} but none is available.`
+        );
+        continue;
+      }
+
+      let remainder = toReserve;
+      const allocatedLots = await fifoAllocateLots(req.stock_code_id, requiredQty);
+      if (allocatedLots.length > 0) {
+        for (const lot of allocatedLots) {
+          if (remainder <= 0) break;
+          const take = Math.min(Number(lot.quantity_to_use) || 0, remainder);
+          if (take <= 0) continue;
+          reservations.push({
+            stock_code_id: req.stock_code_id,
+            receiving_record_id: lot.receiving_record_id,
+            internal_lot_number: lot.internal_lot_number,
+            quantity: take,
+          });
+          remainder -= take;
+        }
+      }
+
+      // Any quantity not covered by a specific lot is still reserved at
+      // stock-code level so the hold is never lost.
+      if (remainder > 0) {
+        reservations.push({
+          stock_code_id: req.stock_code_id,
+          receiving_record_id: null,
+          internal_lot_number: null,
+          quantity: remainder,
+        });
+      }
+
+      if (toReserve < requiredQty) {
+        lowStockWarnings.push(
+          `${batch.batch_number}: ${material?.stock_code || req.stock_code_id} - reserved ${toReserve.toFixed(2)}${uom ? ' ' + uom : ''} of ${requiredQty.toFixed(2)}${uom ? ' ' + uom : ''} required (short ${(requiredQty - toReserve).toFixed(2)}).`
         );
       }
     }
-    // Pickle finished products: generate the pickle stage workflow from the
-    // product's BOM dependencies (idempotent). Non-pickle batches are unaffected.
-    // ensurePickleRunForBatch plans against freshly fetched BOMs internally, so
-    // a just-saved parent_finished_good_id link is honoured immediately.
-    if (batch && isPickleBatch(batch, getStockCodeById)) {
-      const runId = await ensurePickleRunForBatch({ batch, stockCodes, boms, userId: user?.id });
-      // Refresh the shared BOM/batch context so the workflow dialog (and any
-      // reopen) sees the same BOM headers the generator just planned against.
-      await refreshData().catch(() => undefined);
-      try {
-        const fresh = await fetchFreshBomsForPlan();
-        console.log('[PickleBatchPlan] post-start verification for', batch.batch_number, ':',
-          (fresh ?? boms).filter((b: any) => ['active', undefined, null].includes(b.status) || b.status !== 'obsolete').length,
-          'live BOMs; plan stages:',
-          (await import('@/components/pickle/PickleBatchWorkflow')).buildPickleBatchPlan(
-            stockCodes, fresh ?? boms, batch.finished_good_id, Number(batch.planned_batch_size) || 0,
-          ).map((s: any) => `${(stockCodes.find((sc: any) => sc.id === s.stockCodeId)?.stock_code) || s.stockCodeId}=${s.totalQty}`).join(', '));
-      } catch { /* verification log only */ }
-      // Open the batch detail immediately with the started status so the pickle
-      // stages show underneath the header (the local `batch` copy is stale).
-      setSelectedBatch({ ...batch, status: 'pre_weighing', production_start: new Date().toISOString() });
-      setViewDialogOpen(true);
-      if (runId) {
-        toast.success('Production started — pickle stages generated');
-      } else {
-        toast.error('Production started, but pickle stages could not be generated.');
+
+    if (reservations.length > 0) {
+      const reserveResults = await reserveStockForBatch(batch.id, batch.batch_number, reservations);
+      if (reserveResults === null) {
+        toast.error(`Stock could not be reserved for batch ${batch.batch_number}.`);
       }
-      return;
     }
-    toast.success('Production started');
-    if (startLowStockWarnings.length > 0) {
-      toast.warning(`⚠️ LOW STOCK: ${startLowStockWarnings.join(', ')}`, { duration: 8000 });
+  }
+
+  // Pickle finished products: generate the pickle stage workflow from the
+  // product's BOM dependencies (idempotent). Non-pickle batches are unaffected.
+  if (batch && isPickleBatch(batch, getStockCodeById)) {
+    const runId = await ensurePickleRunForBatch({
+      batch,
+      stockCodes,
+      boms,
+      userId: user?.id
+    });
+
+    await refreshData().catch(() => undefined);
+
+    try {
+      const fresh = await fetchFreshBomsForPlan();
+      console.log(
+        '[PickleBatchPlan] post-start verification for',
+        batch.batch_number,
+        ':',
+        (fresh ?? boms).filter(
+          (b: any) =>
+            ['active', undefined, null].includes(b.status) ||
+            b.status !== 'obsolete'
+        ).length,
+        'live BOMs; plan stages:',
+        (
+          await import('@/components/pickle/PickleBatchWorkflow')
+        ).buildPickleBatchPlan(
+          stockCodes,
+          fresh ?? boms,
+          batch.finished_good_id,
+          Number(batch.planned_batch_size) || 0,
+        ).map(
+          (s: any) =>
+            `${(stockCodes.find((sc: any) => sc.id === s.stockCodeId)?.stock_code) || s.stockCodeId}=${s.totalQty}`
+        ).join(', ')
+      );
+    } catch {
+      // Verification log only
     }
-    await refreshData();
-  };
+
+    setSelectedBatch({
+      ...batch,
+      status: 'pre_weighing',
+      production_start: new Date().toISOString()
+    });
+
+    setViewDialogOpen(true);
+
+    if (runId) {
+      toast.success('Production started — pickle stages generated');
+    } else {
+      toast.error('Production started, but pickle stages could not be generated.');
+    }
+
+    return;
+  }
+
+  toast.success('Production started');
+  await refreshData();
+};
+
 
   /**
    * Return stock that a STARTED batch had already consumed.
@@ -907,113 +1021,132 @@ const handleUpdateOrganolepticCheck = async (
   );
 };
 
-  const handleCloseBatch = async (batchId: string, finalData: {
-    actual_quantity: number;
-    product_size: number;
-    product_size_uom: string;
-    scrap_waste: number;
-    scrap_waste_uom: string;
-    waste_notes: string;
-    retention_sample_taken: boolean;
-    final_checks: FinalQualityChecks;
-  }) => {
-      const closedBatch = await updateProductionBatch(batchId, {
-      status: 'closed',
-      actual_quantity_produced: finalData.actual_quantity,
-      product_size: finalData.product_size,
-      scrap_waste: finalData.scrap_waste,
-      waste_notes: finalData.waste_notes,
-      retention_sample_taken: finalData.retention_sample_taken,
-      final_quality_checks: { ...finalData.final_checks, product_size_uom: finalData.product_size_uom, scrap_waste_uom: finalData.scrap_waste_uom },
-      production_end: new Date().toISOString(),
-      closed_at: new Date().toISOString(),
-      supervisor_id: user?.id,
-    });
-        if (!closedBatch || closedBatch.status !== 'closed') {
-      toast.error('Batch was not closed. Please check the error above and try again.');
-      return;
-    }
-    toast.success('Batch closed successfully');
+  
+const handleCloseBatch = async (batchId: string, finalData: {
+  actual_quantity: number;
+  product_size: number;
+  product_size_uom: string;
+  scrap_waste: number;
+  scrap_waste_uom: string;
+  waste_notes: string;
+  retention_sample_taken: boolean;
+  final_checks: FinalQualityChecks;
+}) => {
+  const batch = productionBatches.find(b => b.id === batchId);
 
-    // Credit the finished good produced by this batch into stock, exactly once.
-    // Standard batches only: pickle output stock is credited by the pickle stage
-    // workflow (completeStage) and is never touched here. The credit is posted
-    // through the existing fms_apply_stock_movement mechanism (movement_type
-    // 'receipt', positive quantity) wrapped in fms_credit_finished_good_production,
-    // which locks the batch row and honours the finished_good_stock_credited flag,
-    // so a repeated close or a retried request can never post the receipt twice.
-    // Previously closed batches are not credited automatically: the flag defaults
-    // to false and is only set by a close that runs after this change.
-    const batch = productionBatches.find(b => b.id === batchId);
-    const isPickle = batch != null && isPickleBatch(batch, getStockCodeById);
-    const alreadyCredited = batch?.finished_good_stock_credited === true;
-    if (!isPickle && !alreadyCredited && batch?.finished_good_id) {
-      try {
-        // The RPC reads actual_quantity_produced from the batch row itself;
-        // the client must not supply the quantity.
-        const { error: creditError } = await (supabase.rpc as any)(
-          'fms_credit_finished_good_production',
-          {
-            p_batch_id: batchId,
-          }
-        );
+  // STEP 1: Consume reserved raw materials before closing the batch.
+  let consumptionResults: {
+    stock_code_id: string;
+    new_quantity_on_hand: number;
+    is_low: boolean;
+  }[];
 
-        if (creditError) {
-          throw creditError;
+  try {
+    consumptionResults = await consumeBatchReservations(
+      batchId,
+      batch?.batch_number || ''
+    );
+  } catch (err) {
+    console.error(
+      '[BatchSheet] Stock consumption failed. Batch remains open:',
+      err
+    );
+    toast.error(
+      'Batch could not be finished because stock consumption failed. The batch remains open.'
+    );
+    return;
+  }
+
+  // STEP 2: Only close the batch after stock consumption succeeds.
+  const closedBatch = await updateProductionBatch(batchId, {
+    status: 'closed',
+    actual_quantity_produced: finalData.actual_quantity,
+    product_size: finalData.product_size,
+    scrap_waste: finalData.scrap_waste,
+    waste_notes: finalData.waste_notes,
+    retention_sample_taken: finalData.retention_sample_taken,
+    final_quality_checks: {
+      ...finalData.final_checks,
+      product_size_uom: finalData.product_size_uom,
+      scrap_waste_uom: finalData.scrap_waste_uom
+    },
+    production_end: new Date().toISOString(),
+    closed_at: new Date().toISOString(),
+    supervisor_id: user?.id,
+  });
+
+  if (!closedBatch || closedBatch.status !== 'closed') {
+    toast.error(
+      'Stock was consumed, but the batch could not be closed. Please retry closing the batch.'
+    );
+    return;
+  }
+
+  // STEP 3: Credit the finished good produced by this batch, exactly once.
+  // Pickle output is credited by the pickle stage workflow.
+  const isPickle = batch != null && isPickleBatch(batch, getStockCodeById);
+  const alreadyCredited = batch?.finished_good_stock_credited === true;
+
+  if (!isPickle && !alreadyCredited && batch?.finished_good_id) {
+    try {
+      const { error: creditError } = await (supabase.rpc as any)(
+        'fms_credit_finished_good_production',
+        {
+          p_batch_id: batchId,
         }
+      );
 
-        // RPC succeeded: stock was credited in the database and the
-        // finished_good_stock_credited flag is already true there. Update
-        // local application state to match, but do not treat a local-state
-        // update failure as a stock-credit failure — the database flag is
-        // authoritative and will prevent duplicate credits on any retry.
-        const localUpdated = await updateProductionBatch(batchId, {
-          finished_good_stock_credited: true,
-        });
-        if (!localUpdated) {
-          console.warn(
-            '[BatchSheet] Finished-good stock was credited, but local state could not be refreshed.'
-          );
-        }
-      } catch (err) {
-        console.error(
-          '[BatchSheet] Finished-good stock credit failed:',
-          err
-        );
-        toast.error(
-          'Batch closed, but finished-good stock could not be credited.'
-        );
+      if (creditError) {
+        throw creditError;
       }
-    }
 
-    // Consumption normally already happened at START (see handleStartProduction).
-    // This call is kept as an idempotent safety net: it only touches reservation
-    // rows still in 'reserved', so for a batch started after that change it is a
-    // no-op, and for a legacy batch that was started before it, it still
-    // converts the set-aside into real usage exactly once. Either way no
-    // reservation is left behind when the batch closes.
-    const consumptionResults = await consumeBatchReservations(batchId, batch?.batch_number || '');
-
-    // Collect low stock warnings from the material consumption
-    const closeLowStockWarnings: string[] = [];
-    for (const cr of consumptionResults) {
-      if (cr.is_low) {
-        const sc = getStockCodeById(cr.stock_code_id);
-        closeLowStockWarnings.push(`${sc?.stock_code || cr.stock_code_id} (${cr.new_quantity_on_hand.toFixed(2)} remaining)`);
-      }
-    }
-
-    toast.success('Batch closed successfully');
-    if (closeLowStockWarnings.length > 0) {
-      const uniqueWarnings = [...new Set(closeLowStockWarnings)];
-      toast.warning(`⚠️ LOW STOCK: ${uniqueWarnings.join(', ')}`, {
-        duration: 8000,
+      const localUpdated = await updateProductionBatch(batchId, {
+        finished_good_stock_credited: true,
       });
+
+      if (!localUpdated) {
+        console.warn(
+          '[BatchSheet] Finished-good stock was credited, but local state could not be refreshed.'
+        );
+      }
+    } catch (err) {
+      console.error(
+        '[BatchSheet] Finished-good stock credit failed:',
+        err
+      );
+      toast.error(
+        'Batch closed, but finished-good stock could not be credited.'
+      );
     }
-    // NOTE: consumeBatchReservations already performs a forced full data
-    // refresh (fetchData(true)) in its finally block, so no extra
-    // refreshData() call is needed here.
-  };
+  }
+
+  // STEP 4: Show low-stock warnings after successful consumption.
+  const closeLowStockWarnings: string[] = [];
+
+  for (const cr of consumptionResults) {
+    if (cr.is_low) {
+      const sc = getStockCodeById(cr.stock_code_id);
+
+      closeLowStockWarnings.push(
+        `${sc?.stock_code || cr.stock_code_id} (${cr.new_quantity_on_hand.toFixed(2)} remaining)`
+      );
+    }
+  }
+
+  toast.success('Batch closed successfully');
+
+  if (closeLowStockWarnings.length > 0) {
+    const uniqueWarnings = [...new Set(closeLowStockWarnings)];
+
+    toast.warning(
+      `⚠️ LOW STOCK: ${uniqueWarnings.join(', ')}`,
+      { duration: 8000 }
+    );
+  }
+
+  // consumeBatchReservations already refreshes stock data.
+};
+
 
   // HTML escape utility to prevent XSS
   const escapeHtml = (text: string): string => {
@@ -2008,11 +2141,13 @@ const filteredMaterialTotal = useMemo(() => {
           <div className="w-full sm:w-[260px]">
             <Label className="mb-1 block text-xs text-muted-foreground">Raw Material</Label>
             <SearchableSelect
-              options={[{ value: 'all', label: 'All Raw Materials' }, ...materialOptions]}
-              value={materialFilter}
-              onValueChange={setMaterialFilter}
-              placeholder="All raw materials"
-            />
+  options={[{ value: 'all', label: 'All Raw Materials' }, ...materialOptions]}
+  value={materialFilter}
+  onValueChange={setMaterialFilter}
+  placeholder="Search raw materials..."
+  serverSearch
+  onSearchChange={setMaterialSearch}
+/>
           </div>
           <div className="w-full sm:w-[260px]">
             <Label className="mb-1 block text-xs text-muted-foreground">Finished Product</Label>

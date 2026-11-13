@@ -1791,12 +1791,15 @@ const markTruckDeparted = async (
     return true;
   };
     // Helper functions
-  const getStockCodeById = (id: string) => stockCodes.find(sc => sc.id === id);
+  const getStockCodeById = useCallback((id: string) => stockCodes.find(sc => sc.id === id), [stockCodes]);
   const getSupplierById = (id: string) => suppliers.find(s => s.id === id);
   const getReceivingById = (id: string | null | undefined) =>
     id ? receivingRecords.find(r => r.id === id) : undefined;
-  const getBOMByFinishedGoodId = (finishedGoodId: string) => 
-    boms.find(b => b.finished_good_id === finishedGoodId && b.status === 'active');
+  const getBOMByFinishedGoodId = useCallback(
+    (finishedGoodId: string) =>
+      boms.find(b => b.finished_good_id === finishedGoodId && b.status === 'active'),
+    [boms]
+  );
 
   // Generate lot number
   const generateLotNumber = async (): Promise<string> => {
@@ -2030,45 +2033,60 @@ const markTruckDeparted = async (
     }
   };
 
-  // Consume reservations for a batch (production completed) - actual consumption.
-  // Returns { stock_code_id, new_quantity_on_hand, is_low }[] for low-stock warnings.
+  // Consume reservations for a batch when production is completed.
+  // Returns stock balances for low-stock warnings.
   const consumeBatchReservations = async (
     batchId: string,
     batchNumber: string
-    ): Promise<{ stock_code_id: string; new_quantity_on_hand: number; is_low: boolean }[]> => {
-    const results: { stock_code_id: string; new_quantity_on_hand: number; is_low: boolean }[] = [];
+  ): Promise<{
+    stock_code_id: string;
+    new_quantity_on_hand: number;
+    is_low: boolean;
+  }[]> => {
     try {
-      const { data, error } = await (supabase.rpc as any)('fms_consume_batch_reservations', {
-        p_batch_id: batchId,
-        p_batch_number: batchNumber,
-        p_created_by: user?.id || null,
-      });
+      const { data, error } = await (supabase.rpc as any)(
+        'fms_consume_batch_reservations',
+        {
+          p_batch_id: batchId,
+          p_batch_number: batchNumber,
+          p_created_by: user?.id || null,
+        }
+      );
 
-            if (error) {
+      if (error) {
         console.error('[FMS] Stock consumption error:', error);
         toast.error(`Stock consumption failed: ${error.message}`);
-        return results;
-      }
-      for (const row of (data || [])) {
-        results.push({
-          stock_code_id: row.stock_code_id,
-          new_quantity_on_hand: Number(row.new_quantity_on_hand),
-          is_low: Boolean(row.is_low),
-        });
+        throw new Error(`Stock consumption failed: ${error.message}`);
       }
 
+      const results = (data || []).map((row: any) => ({
+        stock_code_id: row.stock_code_id,
+        new_quantity_on_hand: Number(row.new_quantity_on_hand),
+        is_low: Boolean(row.is_low),
+      }));
+
       if (results.length === 0) {
-        toast.warning('No active reservations found for this batch — stock was not consumed. Check that reservations were created when the batch was made.');
+        toast.warning(
+          'No active reservations found for this batch. Stock was not consumed.'
+        );
       }
+
+      return results;
+
     } catch (err) {
-      console.error('[FMS] Stock consumption unexpected error:', err);
+      console.error('[FMS] Stock consumption failed:', err);
+      throw err;
+
     } finally {
-      // Always refresh so the UI reflects the current stock state,
-      // even when the RPC returns 0 rows (e.g. legacy batches).
-      await fetchData(true);
+      try {
+        await fetchData(true);
+      } catch (refreshError) {
+        console.error('[FMS] Stock refresh failed:', refreshError);
+      }
     }
-    return results;
   };
+
+  
 
   // Return the reservations for a given batch (for the view dialog traceability)
   const getReservationsForBatch = (batchId: string): FMSStockReservation[] =>

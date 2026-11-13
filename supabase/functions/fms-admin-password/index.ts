@@ -96,6 +96,20 @@ if (fmsError || (!isSystemAdmin && !isHRAdmin)) {
 
 const body = await req.json();
 const { operation, target_user_id, new_password, email, name, role, is_active } = body;
+const allowedRoles = [
+  'system_admin',
+  'production_supervisor',
+  'production_operator',
+  'stores_operator',
+  'dispatch_user',
+  'qa_viewer',
+  'receiving_user',
+  'hr_user',
+  'hr_admin',
+  'quality_user',
+  'marketing_user',
+  'bdm_user',
+];
 
 // ============================================================
 // HR USER MANAGEMENT
@@ -523,6 +537,12 @@ if (!isSystemAdmin) {
     // Add a new FMS user (create auth user + fms_users entry, or grant FMS access to existing auth user)
     if (operation === 'add_user') {
       if (!email || !name || !role) {
+        if (!allowedRoles.includes(role)) {
+  return new Response(
+    JSON.stringify({ error: 'Invalid user role selected' }),
+    { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+  );
+}
         return new Response(
           JSON.stringify({ error: 'email, name, and role are required' }),
           { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -642,6 +662,12 @@ if (!isSystemAdmin) {
     // Update an FMS user (name, role, is_active)
     if (operation === 'update_user') {
       if (!name || !role) {
+        if (!allowedRoles.includes(role)) {
+  return new Response(
+    JSON.stringify({ error: 'Invalid user role selected' }),
+    { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+  );
+}
         return new Response(
           JSON.stringify({ error: 'name and role are required' }),
           { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }

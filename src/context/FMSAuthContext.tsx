@@ -1,3 +1,4 @@
+;
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { User, Session } from '@supabase/supabase-js';
 import { supabase } from '@/integrations/supabase/client';
@@ -16,7 +17,7 @@ type FMSRole = 'system_admin'
 | 'bdm_user'
 | 'quality_user'
 | 'retail_user'
-| 'receiving_user';
+| 'receiving_user' | 'batch_operator';
 ;
 
 interface FMSUser {

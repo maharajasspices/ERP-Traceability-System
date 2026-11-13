@@ -2,7 +2,7 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
-import QualityDocumentControlSOP from './QualityDocumentControlSOP';
+import QualityDocumentControlSOP from './QualityDocumentControlSop';
 import { useFMSAuth } from '@/context/FMSAuthContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -131,12 +131,12 @@ const isUuid =
   );
 
 const { data, error } = isUuid
-  ? await supabase
+  ? await (supabase as any)
       .from('fms_quality_documents')
       .select('*')
       .eq('id', documentNumber)
       .single()
-  : await supabase
+  : await (supabase as any)
       .from('fms_quality_documents')
       .select('*')
       .eq('document_no', documentNumber)
@@ -155,7 +155,7 @@ const { data, error } = isUuid
       setApprovedBy(data.approved_by || '');
       setContent(data.content || '');
 
-      const { data: revisions, error: revisionError } = await supabase
+      const { data: revisions, error: revisionError } = await (supabase as any)
         .from('fms_quality_document_revisions')
         .select('*')
         .eq('document_id', data.id)
@@ -218,7 +218,7 @@ const { data, error } = isUuid
       return;
     }
 
-    const { data, error } = await supabase
+    const { data, error } = await (supabase as any)
       .from('fms_quality_documents')
       .insert({
         document_no: documentNo.trim(),
@@ -259,7 +259,7 @@ const { data, error } = isUuid
   }
 
   // Archive the current version before updating the master.
-      const { error: revisionError } = await supabase
+      const { error: revisionError } = await (supabase as any)
         .from('fms_quality_document_revisions')
         .insert({
           document_id: document.id,
@@ -278,7 +278,7 @@ const { data, error } = isUuid
 
       const today = new Date().toISOString().slice(0, 10);
 
-      const { data, error } = await supabase
+      const { data, error } = await (supabase as any)
         .from('fms_quality_documents')
         .update({
           title: title.trim(),

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Navigate } from 'react-router-dom';
+import { Navigate, useLocation } from 'react-router-dom';
 import { useFMSAuth } from '@/context/FMSAuthContext';
 import { Loader2, ShieldX } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -10,6 +10,8 @@ interface ProtectedRouteProps {
 
 export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children }) => {
   const { user, fmsUser, loading, signOut } = useFMSAuth();
+
+  const location = useLocation();
 
   if (loading) {
     return (
@@ -46,8 +48,14 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children }) => {
   }
   
     if (fmsUser.role === 'marketing_user') {
-    return <Navigate to="/marketing-dashboard" replace />;
+    return <Navigate to="/marketing-system/dashboard" replace />;
     
+  }
+  if (
+    fmsUser.role === 'batch_operator' &&
+    location.pathname !== '/batch-sheet'
+  ) {
+    return <Navigate to='/batch-sheet' replace />
   }
 
 
