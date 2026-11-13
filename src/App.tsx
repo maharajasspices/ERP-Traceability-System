@@ -80,6 +80,8 @@ const QualityDocumentEditor = lazy(
   () => import('./pages/QualitySystem/QualityDocumentEditor')
 );
 import FactoryDocumentLibrary from "@/pages/QualitySystem/FactoryDocumentLibrary";
+import FormBuilderAdmin from "@/pages/QualitySystem/Digital Forms/FormBuilderAdmin";
+
 
 
 // Business Development Management Pages
@@ -653,7 +655,12 @@ const App = () => (
                 path="/quality-system/nguni"
                 element={<FactoryDocumentLibrary factory="nguni" />}
               />
+             <Route
+  path="/quality-system/form-builder"
+  element={<FormBuilderAdmin />}
+/>
 
+            
          </Route>
                 {/* ==================================================
                     BUSINESS DEVELOPMENT MANAGEMENT

@@ -41,7 +41,7 @@ type QualityFolder = {
 type UploadedDocument = {
   id: string;
   document_name: string;
-  document_number: string | null;
+  document_no: string | null;
   category: string;
   subcategory: string;
   file_path: string;
@@ -203,7 +203,7 @@ const FactoryDocumentLibrary: React.FC<FactoryDocumentLibraryProps> = ({
     const { data: existingTemplate, error: findError } = await (supabase as any)
       .from("fms_quality_uploaded_documents")
       .select("id, digital_template")
-      .eq("document_number", template.documentNumber)
+      .eq("document_no", template.documentNumber)
       .eq("document_mode", "fillable_form")
       .eq("factory", "rockwood")
       .maybeSingle();
@@ -233,7 +233,7 @@ const FactoryDocumentLibrary: React.FC<FactoryDocumentLibraryProps> = ({
         .from("fms_quality_uploaded_documents")
         .insert({
           document_name: nextTemplate.title,
-          document_number: nextTemplate.documentNumber,
+          document_no: nextTemplate.documentNumber,
           category: "Quality Forms",
           subcategory: "Non-Conformance",
           file_path: "digital-templates/ncr-report",
@@ -292,7 +292,7 @@ const loadDigitalTemplate = async (): Promise<DigitalFormTemplate> => {
     const { data, error } = await (supabase as any)
       .from("fms_quality_uploaded_documents")
       .select("digital_template")
-      .eq("document_number", defaultNCRTemplate.documentNumber)
+      .eq("document_no", defaultNCRTemplate.documentNumber)
       .eq("document_mode", "fillable_form")
       .eq("factory", "rockwood")
       .maybeSingle();
@@ -531,7 +531,7 @@ const [showMasterSheet, setShowMasterSheet] = useState(false);
             .from("fms_quality_uploaded_documents")
             .insert({
               document_name: file.name,
-              document_number: null,
+              document_no: null,
               category: "Controlled Documents",
               subcategory:
                 factory === "rockwood"

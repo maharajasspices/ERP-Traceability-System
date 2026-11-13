@@ -234,7 +234,7 @@ const defaultQualityDocuments: QualityDocument[] = [
 type UploadedQualityDocument = {
   id: string;
   document_name: string;
-  document_number: string | null;
+  document_no: string | null;
   category: string;
   subcategory: string;
   file_path: string;
@@ -516,7 +516,7 @@ const handleUploadDocument = async () => {
   .from("fms_quality_uploaded_documents")
   .insert({
     document_name: uploadForm.documentName.trim(),
-    document_number: uploadForm.documentNumber.trim() || null,
+    document_no: uploadForm.documentNumber.trim() || null,
     category: parentCategories[selectedCategory] || "Other",
     subcategory: selectedCategory,
     file_path: filePath,
@@ -1150,9 +1150,9 @@ useEffect(() => {
               <div className="min-w-0 flex-1">
                 <h4 className="font-medium">{document.document_name}</h4>
 
-                {document.document_number && (
+                {document.document_no && (
                   <p className="text-xs text-muted-foreground">
-                    {document.document_number}
+                    {document.document_no}
                   </p>
                 )}
 
