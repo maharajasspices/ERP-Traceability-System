@@ -76,11 +76,6 @@ const QualityLogin = lazy(
 const QualityDocuments = lazy(
   () => import("./pages/QualitySystem/QualityDocuments")
 );
-const QualityDocumentEditor = lazy(
-  () => import('./pages/QualitySystem/QualityDocumentEditor')
-);
-import FactoryDocumentLibrary from "@/pages/QualitySystem/FactoryDocumentLibrary";
-import FormBuilderAdmin from "@/pages/QualitySystem/Digital Forms/FormBuilderAdmin";
 
 
 
@@ -209,7 +204,7 @@ const MarketingRouteGuard: React.FC<{ children: React.ReactNode }> = ({
     return (
       <Navigate
         to="/auth"
-        state={{ from: "/marketing-dashboard" }}
+        state={{ from: "/marketing-system/dashboard" }}
         replace
       />
     );
@@ -571,37 +566,43 @@ const App = () => (
               </Route>
 
 
-             {/* MARKETING SYSTEM */}
-              <Route
-                path="/marketing-login"
-                element={<MarketingLogin />}
-              />
-              <Route
-                path="/marketing-system/dashboard"
-                element={
-                  <ProtectedRoute>
-                    <MarketingDashboard />
-                  </ProtectedRoute>
-                }
-              />
+            {/* MARKETING SYSTEM */}
+<Route
+  path="/marketing-login"
+  element={<MarketingLogin />}
+/>
 
-              <Route
-                path="/marketing-system/folders"
-                element={
-                  <ProtectedRoute>
-                    <MarketingFolders />
-                  </ProtectedRoute>
-                }
-              />
+<Route
+  path="/marketing-system"
+  element={<Navigate to="/marketing-system/dashboard" replace />}
+/>
 
-              <Route
-                path="/marketing-system/folder/:id"
-                element={
-                  <ProtectedRoute>
-                    <MarketingFolderContents />
-                  </ProtectedRoute>
-                }
-              />
+<Route
+  path="/marketing-system/dashboard"
+  element={
+    <MarketingRouteGuard>
+      <MarketingDashboard />
+    </MarketingRouteGuard>
+  }
+/>
+
+<Route
+  path="/marketing-system/folders"
+  element={
+    <MarketingRouteGuard>
+      <MarketingFolders />
+    </MarketingRouteGuard>
+  }
+/>
+
+<Route
+  path="/marketing-system/folder/:id"
+  element={
+    <MarketingRouteGuard>
+      <MarketingFolderContents />
+    </MarketingRouteGuard>
+  }
+/>
               
 
 
@@ -614,54 +615,46 @@ const App = () => (
                 element={<NotFound />}
               />
 
-                        {/* ==================================================
-                    QUALITY MANAGEMENT SYSTEM
-                ================================================== */}
+                        
+{/* ==================================================
+    QUALITY MANAGEMENT SYSTEM
+================================================== */}
 
-                {/* Quality Login - accessible without being logged in */}
-                <Route
-                  path="/quality-login"
-                  element={<QualityLogin />}
-                />
-
-                {/* Protected Quality System */}
-                <Route
-                  element={
-                    <QualityRouteGuard>
-                      <QLayout />
-                    </QualityRouteGuard>
-                  }
-                >
-                  <Route
-                    path="/quality-system/dashboard"
-                    element={<QualitySystemDashboard />}
-                  />
-                  <Route
-                    path="/quality-system/documents"
-                    element={<QualityDocuments />}
-                  />
-              
-              <Route
-                path="/quality-system/documents/:documentId"
-                element={<QualityDocumentEditor />}
-              />
-
-              <Route
-                path="/quality-system/rockwood"
-                element={<FactoryDocumentLibrary factory="rockwood" />}
-              />
-
-              <Route
-                path="/quality-system/nguni"
-                element={<FactoryDocumentLibrary factory="nguni" />}
-              />
-             <Route
-  path="/quality-system/form-builder"
-  element={<FormBuilderAdmin />}
+{/* Quality Login - accessible without being logged in */}
+<Route
+  path="/quality-login"
+  element={<QualityLogin />}
 />
 
-            
-         </Route>
+{/* Protected Quality System - ONE layout only */}
+<Route
+  element={
+    <QualityRouteGuard>
+      <QLayout />
+    </QualityRouteGuard>
+  }
+>
+  <Route
+    path="/quality-system/dashboard"
+    element={<QualitySystemDashboard />}
+  />
+
+  <Route
+    path="/quality-system/documents"
+    element={<QualityDocuments />}
+  />
+
+  <Route
+    path="/quality-system/rockwood"
+    element={<QualityDocuments />}
+  />
+
+  <Route
+    path="/quality-system/nguni"
+    element={<QualityDocuments />}
+  />
+</Route>
+
                 {/* ==================================================
                     BUSINESS DEVELOPMENT MANAGEMENT
                 ================================================== */}

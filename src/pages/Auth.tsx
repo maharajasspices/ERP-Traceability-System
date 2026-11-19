@@ -12,7 +12,13 @@ import logo from '@/assets/logo.png';
 
 const Auth: React.FC = () => {
   const navigate = useNavigate();
-  const { user, fmsUser, loading: authLoading, signIn } = useFMSAuth();
+  const {
+  user,
+  fmsUser,
+  loading: authLoading,
+  fmsUserLoading,
+} = useFMSAuth();
+
   const { checkPassword, isChecking } = usePasswordBreachCheck();
 
   const [isLoading, setIsLoading] = useState(false);
@@ -22,19 +28,32 @@ const Auth: React.FC = () => {
   const [passwordBreached, setPasswordBreached] = useState<{ isBreached: boolean; count: number } | null>(null);
 
 
+
 useEffect(() => {
-  if (!authLoading && user && fmsUser) {
-    if (fmsUser.role === 'marketing_user') {
-      navigate('/marketing-dashboard', { replace: true });
-    } else {
-      navigate('/dashboard', { replace: true });
-    }
+  if (authLoading || fmsUserLoading) return;
+
+  if (!user) {
+    setAccessDenied(false);
+    return;
   }
 
-  if (!authLoading && user && !fmsUser) {
+  if (!fmsUser) {
     setAccessDenied(true);
+    return;
   }
-}, [user, fmsUser, authLoading, navigate]);
+
+  setAccessDenied(false);
+
+  if (
+    fmsUser.role === 'marketing_user' ||
+    fmsUser.role === 'system_admin'
+  ) {
+    navigate('/marketing-system/dashboard', { replace: true });
+  } else {
+    navigate('/dashboard', { replace: true });
+  }
+}, [authLoading, fmsUserLoading, user, fmsUser, navigate]);
+
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -56,7 +75,7 @@ useEffect(() => {
     setIsLoading(false);
   };
 
-  if (authLoading) {
+  if (authLoading || (user && fmsUserLoading)) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-background">
         <Loader2 className="h-8 w-8 animate-spin text-primary" />

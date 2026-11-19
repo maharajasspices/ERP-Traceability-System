@@ -2316,7 +2316,7 @@ console.log(
       coa_received: editCoaContent.trim().length > 0 ? 'pass' : (existing.coa_received || 'fail'),
     };
 
-    const { error } = await supabase
+    const { error } = await ( supabase as any)
       .from('fms_receiving')
       .update({ quality_checks: updated })
       .eq('id', selectedRecord.id);

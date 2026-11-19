@@ -2,7 +2,14 @@
 import React, { useEffect,useRef, useState } from 'react';
 import * as tus from 'tus-js-client'
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Folder, Upload, FileText, Download } from 'lucide-react';
+import { 
+  ArrowLeft, 
+  Folder, 
+  FolderPlus,
+  Upload, 
+  FileText, 
+  Download,
+ } from 'lucide-react';
 
 import MarketingLayout from './MarketingLayout';
 import { supabase } from '@/integrations/supabase/client';
@@ -40,6 +47,10 @@ const MarketingFolderContents: React.FC = () => {
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadError, setUploadError] = useState('');
+
+  const [newFolderName, setNewFolderName] = useState('');
+  const [showCreateFolder, setShowCreateFolder] = useState(false);
+  const [creatingFolder, setCreatingFolder] = useState(false);
 
 
   
@@ -93,7 +104,7 @@ const uploadFile = async (file: File) => {
         setUploadProgress(Math.round((bytesUploaded / bytesTotal) * 100));
       },
       onSuccess: async () => {
-        const { error } = await supabase
+        const { error } = await (supabase as any)
           .from('fms_marketing_items')
           .insert({
             name: file.name,
@@ -156,13 +167,51 @@ const downloadFile = async (item: any) => {
 
   URL.revokeObjectURL(url);
 };
+const createSubfolder = async () => {
+  const name = newFolderName.trim();
+
+  if (!name || !id) return;
+
+  setCreatingFolder(true);
+  setUploadError('');
+
+  try {
+    const { data: authData, error: authError } =
+      await supabase.auth.getUser();
+
+    if (authError) throw authError;
+    if (!authData.user) throw new Error('Please sign in first.');
+
+    const { error } = await (supabase as any)
+      .from('fms_marketing_items')
+      .insert({
+        name,
+        item_type: 'folder',
+        parent_id: id,
+        created_by: authData.user.id,
+        metadata: {},
+      });
+
+    if (error) throw error;
+
+    setNewFolderName('');
+    setShowCreateFolder(false);
+
+    await loadContents();
+  } catch (error: any) {
+    console.error('Create subfolder error:', error);
+    setUploadError(error.message || 'Could not create folder.');
+  } finally {
+    setCreatingFolder(false);
+  }
+};
 
   const loadContents = async () => {
     if (!id) return;
 
     setLoading(true);
 
-    const { data: folderData, error: folderError } = await supabase
+    const { data: folderData, error: folderError } = await (supabase as any)
       .from('fms_marketing_items')
       .select('id, name')
       .eq('id', id)
@@ -178,7 +227,7 @@ const downloadFile = async (item: any) => {
 
     setFolder(folderData);
 
-    const { data: itemData, error: itemError } = await supabase
+    const { data: itemData, error: itemError } = await (supabase as any)
       .from('fms_marketing_items')
       .select('*')
       .eq('parent_id', id)
@@ -223,13 +272,25 @@ return (
           </div>
         </div>
 
-        <Button
-          onClick={() => fileInputRef.current?.click()}
-          disabled={uploading}
-        >
-          <Upload className="mr-2 h-4 w-4" />
-          {uploading ? `Uploading ${uploadProgress}%` : 'Upload Files'}
-        </Button>
+<div className="flex items-center gap-2">
+  <Button
+    variant="outline"
+    onClick={() => setShowCreateFolder(!showCreateFolder)}
+  >
+    <FolderPlus className="mr-2 h-4 w-4" />
+    Add Folder
+  </Button>
+
+  <Button
+    onClick={() => fileInputRef.current?.click()}
+    disabled={uploading}
+  >
+    <Upload className="mr-2 h-4 w-4" />
+    {uploading ? `Uploading ${uploadProgress}%` : 'Upload Files'}
+  </Button>
+</div>
+      
+        
 
         <input
           ref={fileInputRef}
@@ -243,6 +304,38 @@ return (
           }}
         />
       </div>
+{showCreateFolder && (
+  <Card>
+    <CardContent className="flex flex-col gap-3 p-4 sm:flex-row">
+      <input
+        type="text"
+        placeholder="Enter subfolder name..."
+        value={newFolderName}
+        onChange={(event) => setNewFolderName(event.target.value)}
+        className="flex-1 rounded-md border bg-background px-3 py-2 text-sm"
+        disabled={creatingFolder}
+      />
+
+      <Button
+        onClick={createSubfolder}
+        disabled={creatingFolder || !newFolderName.trim()}
+      >
+        {creatingFolder ? 'Creating...' : 'Create Folder'}
+      </Button>
+
+      <Button
+        variant="outline"
+        onClick={() => {
+          setShowCreateFolder(false);
+          setNewFolderName('');
+        }}
+        disabled={creatingFolder}
+      >
+        Cancel
+      </Button>
+    </CardContent>
+  </Card>
+)}
 
       {/* Upload Progress */}
       {uploading && (
@@ -280,7 +373,19 @@ return (
       ) : (
         <div className="space-y-2">
           {items.map((item) => (
-            <Card key={item.id}>
+            <Card
+  key={item.id}
+  className={
+    item.item_type === 'folder'
+      ? 'cursor-pointer transition-colors hover:border-primary/50'
+      : ''
+  }
+  onClick={() => {
+    if (item.item_type === 'folder') {
+      navigate(`/marketing-system/folder/${encodeURIComponent(item.id)}`);
+    }
+  }}
+>
               <CardContent className="flex items-center gap-3 p-3">
   {item.item_type === 'folder' ? (
     <Folder className="h-5 w-5 text-amber-600" />

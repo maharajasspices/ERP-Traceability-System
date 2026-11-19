@@ -26,11 +26,12 @@ const MarketingLogin: React.FC = () => {
   const navigate = useNavigate();
 
   const {
-    user,
-    fmsUser,
-    loading: authLoading,
-    signIn,
-  } = useFMSAuth();
+  user,
+  fmsUser,
+  loading: authLoading,
+  fmsUserLoading,
+  signIn,
+} = useFMSAuth();
 
   const { checkPassword, isChecking } = usePasswordBreachCheck();
 
@@ -49,22 +50,22 @@ const MarketingLogin: React.FC = () => {
   } | null>(null);
 
   useEffect(() => {
-    if (authLoading || !user) return;
+  if (authLoading || fmsUserLoading || !user) return;
 
-    if (!fmsUser) {
-      setAccessDenied(true);
-      return;
-    }
+  if (!fmsUser) {
+    setAccessDenied(true);
+    return;
+  }
 
-    if (
-      fmsUser.role === 'marketing_user' ||
-      fmsUser.role === 'system_admin'
-    ) {
-      navigate('/marketing-system/dashboard', { replace: true });
-    } else {
-      setAccessDenied(true);
-    }
-  }, [user, fmsUser, authLoading, navigate]);
+  if (
+    fmsUser.role === 'marketing_user' ||
+    fmsUser.role === 'system_admin'
+  ) {
+    navigate('/marketing-system/dashboard', { replace: true });
+  } else {
+    setAccessDenied(true);
+  }
+}, [user, fmsUser, authLoading, fmsUserLoading, navigate]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -95,8 +96,7 @@ const MarketingLogin: React.FC = () => {
     }
   };
 
-  if (authLoading) {
-    return (
+  if (authLoading || (user && fmsUserLoading)) {    return (
       <div className="flex min-h-screen items-center justify-center bg-background">
         <Loader2 className="h-8 w-8 animate-spin text-primary" />
       </div>
@@ -246,6 +246,5 @@ const MarketingLogin: React.FC = () => {
       </p>
     </div>
   );
-};
-
+}
 export default MarketingLogin;

@@ -1,1338 +1,1346 @@
-import { supabase } from "@/integrations/supabase/client";
-import { toast } from "sonner";
-import React, {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { supabase } from '@/integrations/supabase/client';
 import {
-  ArrowLeft,
-  FileText,
   Folder,
   FolderOpen,
-  FolderTree,
-  Search,
-  ChevronRight,
-  ShieldCheck,
-  FileCheck,
-  ClipboardList,
-  Calendar,
-  User,
+  FileText,
+  FilePlus,
   Upload,
   Download,
-  ExternalLink,
+  Trash2,
+  ChevronRight,
+  Home,
+  Search,
+  RefreshCw,
   Loader2,
-} from "lucide-react";
+  File,
+  Plus,
+  FolderPlus,
+  Pencil,
+  ArrowLeft,
+} from 'lucide-react';
+import { useLocation } from 'react-router-dom';
 
-import { Card, CardContent } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
-import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
+const db = supabase as any;
+const BUCKET = 'quality-documents';
+const MAX_FILE_SIZE = 50 * 1024 * 1024;
 
-type QualityDocument = {
+type Factory = 'all' | 'rockwood' | 'nguni';
+
+interface QualityFolder {
   id: string;
-  title: string;
-  documentNumber: string;
-  category: string;
-  description: string;
-  type: "Procedure" | "Form" | "Register";
-  version: string;
-  issueDate: string;
-  compiledBy?: string;
-  approvedBy?: string;
-  status: string;
-  relatedDocumentIds?: string[];
-};
-
-type DocumentCategory = {
-  name: string;
-  description: string;
-  folders: string[];
-};
-
-
-
-const documentCategories: DocumentCategory[] = [
-  {
-    name: "Standard Operating Procedures – Rockwood",
-    description: "Controlled operating procedures for the Rockwood factory.",
-    folders: [],
-  },
-  {
-    name: "Standard Operating Procedures – Nguni",
-    description: "Controlled operating procedures for the Nguni factory.",
-    folders: [],
-  },
-  {
-    name: "Working Instructions",
-    description: "Departmental and operational working instructions.",
-    folders: [],
-  },
-  {
-    name: "Policies",
-    description: "Company policies and quality management policies.",
-    folders: [],
-  },
-  {
-    name: "Raw materials",
-    description: "Specifications for raw materials.",
-    folders: [],
-  },
-  {
-    name: "Packaging materials",
-    description: "Specifications for packaging materials.",
-    folders: [],
-  },
-  {
-    name: "Finished goods",
-    description: "Specifications for finished products.",
-    folders: [],
-  },
-  {
-    name: "Cleaning Chemicals",
-    description: "Specifications and documents for cleaning chemicals.",
-    folders: [],
-  },
-  {
-    name: "Process Flow Diagrams",
-    description: "Factory and production process flow diagrams.",
-    folders: [],
-  },
-  {
-    name: "Floor Plan",
-    description: "Factory and facility floor plans.",
-    folders: [],
-  },
-  {
-    name: "Lab results",
-    description: "External laboratory results and reports.",
-    folders: [],
-  },
-  {
-    name: "Calibration certificates",
-    description: "Equipment and instrument calibration certificates.",
-    folders: [],
-  },
-  {
-    name: "Halaal Certification",
-    description: "Halaal certificates and supporting documents.",
-    folders: [],
-  },
-  {
-    name: "R638 Certificate",
-    description: "R638 compliance certificates.",
-    folders: [],
-  },
-  {
-    name: "Food Quality & Safety Certificate",
-    description: "Food quality and food safety certificates.",
-    folders: [],
-  },
-  {
-    name: "Appointment letters",
-    description: "Employee appointment letters.",
-    folders: [],
-  },
-  {
-    name: "Job Descriptions & Organograms",
-    description: "Job descriptions, responsibilities and organisational structures.",
-    folders: [],
-  },
-  {
-    name: "Training Presentations",
-    description: "Employee training presentations and materials.",
-    folders: [],
-  },
-]
-
-const defaultQualityDocuments: QualityDocument[] = [
-  {
-    id: "non-conformance-procedure",
-    title: "Control of Non-Conformance Procedure",
-    documentNumber: "MSNQ2-SOP-1",
-    category: "Quality Management Procedures",
-    description:
-      "Procedure for identifying, reporting, investigating, isolating and controlling non-conforming products and materials.",
-    type: "Procedure",
-    version: "0",
-    issueDate: "01/05/2026",
-    compiledBy: "Tania Naicker",
-    approvedBy: "Bradley Pillay",
-    status: "Master document",
-    relatedDocumentIds: [
-      "non-conformance-form",
-      "quarantine-tag",
-      "concession-record",
-      "non-conformance-log",
-      "quarantine-register",
-    ],
-  },
-  {
-    id: "non-conformance-form",
-    title: "Non-Conformance Record Form",
-    documentNumber: "MSRQ2-FRM-1",
-    category: "Forms & Records",
-    description:
-      "Record details of a reported non-conformance, its criticality, investigation, disposition and corrective measures.",
-    type: "Form",
-    version: "0",
-    issueDate: "Not yet configured",
-    status: "Template to be created",
-  },
-  {
-    id: "quarantine-tag",
-    title: "Quarantine Tag",
-    documentNumber: "MSRQ2-FRM-2",
-    category: "Forms & Records",
-    description:
-      "Identify and label non-conforming products or materials placed in quarantine.",
-    type: "Form",
-    version: "0",
-    issueDate: "Not yet configured",
-    status: "Template to be created",
-  },
-  {
-    id: "concession-record",
-    title: "Concession Record",
-    documentNumber: "MSRQ2-FRM-3",
-    category: "Forms & Records",
-    description:
-      "Record and authorise the sale or use of non-conforming product or material under an approved concession.",
-    type: "Form",
-    version: "0",
-    issueDate: "Not yet configured",
-    status: "Template to be created",
-  },
-  {
-    id: "non-conformance-log",
-    title: "Non-Conformance Report Logbook",
-    documentNumber: "MSRQ2-LOG-1",
-    category: "Forms & Records",
-    description:
-      "Register reported non-conformances and track their status and closure.",
-    type: "Register",
-    version: "0",
-    issueDate: "Not yet configured",
-    status: "Template to be created",
-  },
-  {
-    id: "quarantine-register",
-    title: "Quarantine Register",
-    documentNumber: "MSRQ2-LOG-2",
-    category: "Forms & Records",
-    description:
-      "Track products and materials placed in quarantine, including their identification and final disposition.",
-    type: "Register",
-    version: "0",
-    issueDate: "Not yet configured",
-    status: "Template to be created",
-  },
-];
-
-type UploadedQualityDocument = {
-  id: string;
-  document_name: string;
-  document_no: string | null;
-  category: string;
-  subcategory: string;
-  file_path: string;
-  file_type: string | null;
-  file_size: number | null;
-  description: string | null;
-  uploaded_by: string;
+  folder_name: string;
+  factory: string | null;
+  category: string | null;
+  parent_folder_id: string | null;
+  created_by: string | null;
   created_at: string;
-  factory: "rockwood" | "nguni" | null;
-  document_mode: "normal" | "fillable_form";
-  digital_template: Record<string, any>;
+  updated_at: string;
+}
+
+interface QualityDocument {
+  id: string;
+  document_no: string;
+  title: string;
+  category: string;
+  document_type: string;
+  version_no: number;
+  issue_date: string | null;
+  revision_date: string | null;
+  compiled_by: string | null;
+  approved_by: string | null;
+  content: string;
+  status: string;
+  created_by: string | null;
+  updated_by: string | null;
+  created_at: string;
+  updated_at: string;
+  rockwood: boolean;
+  nguni: boolean;
+  folder_id: string | null;
+  file_path: string | null;
+  original_file_name: string | null;
+  mime_type: string | null;
+  file_size: number | null;
+  uploaded_at: string | null;
+}
+
+const formatSize = (bytes: number | null) => {
+  if (!bytes) return 'Unknown size';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+};
+
+const formatDate = (date: string | null) => {
+  if (!date) return '—';
+  return new Date(date).toLocaleDateString('en-ZA');
 };
 
 const QualityDocuments: React.FC = () => {
-  const [searchParams] = useSearchParams();
-  const requestedCategory = searchParams.get("category");
+  const [folders, setFolders] = useState<QualityFolder[]>([]);
+  const [documents, setDocuments] = useState<QualityDocument[]>([]);
 
-  const location = useLocation();
+const location = useLocation();
 
-const isRockwood = location.pathname === "/quality-system/rockwood";
-const isNguni = location.pathname === "/quality-system/nguni";
+const factory: Factory =
+  location.pathname === '/quality-system/rockwood'
+    ? 'rockwood'
+    : location.pathname === '/quality-system/nguni'
+      ? 'nguni'
+      : 'all';
 
-const currentFactory = isRockwood
-  ? "rockwood"
-  : isNguni
-    ? "nguni"
-    : null;
+const categoryParam = new URLSearchParams(location.search).get('category');
 
-  const [qualityDocuments, setQualityDocuments] = useState<QualityDocument[]>(
-    defaultQualityDocuments
-  );
-  const [loadingQualityDocuments, setLoadingQualityDocuments] = useState(false);
-  const [searchTerm, setSearchTerm] = useState("");
-  const [selectedCategory, setSelectedCategory] = useState<string | null>(
-  requestedCategory ||
-    (currentFactory === "rockwood"
-      ? "Standard Operating Procedures – Rockwood"
-      : currentFactory === "nguni"
-        ? "Standard Operating Procedures – Nguni"
-        : null)
-);
-const [selectedFolder, setSelectedFolder] = useState<string | null>(null);
-  const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(
-    null
-  );
-const navigate = useNavigate();
+const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
+const [search, setSearch] = useState('');
+const [loading, setLoading] = useState(true);
+const [uploading, setUploading] = useState(false);
+
+const [isDragging, setIsDragging] = useState(false);
+
+const [uploadingFolderId, setUploadingFolderId] = useState<string | null>(null);
+const [selectedUploadFolderId, setSelectedUploadFolderId] = useState<string | null>(null);
+const [deletingId, setDeletingId] = useState<string | null>(null);
+const [deletingFolderId, setDeletingFolderId] = useState<string | null>(null);
+
+const [editingFolder, setEditingFolder] = useState<QualityFolder | null>(null);
+const [editedFolderName, setEditedFolderName] = useState('');
+const [savingFolder, setSavingFolder] = useState(false);
+
+const [error, setError] = useState('');
+const [message, setMessage] = useState('');
+
+const [showAddFolder, setShowAddFolder] = useState(false);
+const [newFolderName, setNewFolderName] = useState('');
+const [newFolderFactory, setNewFolderFactory] = useState<
+  'both' | 'nguni' | 'rockwood' | 'general'
+>('both');
+
+const [creatingFolder, setCreatingFolder] = useState(false);
+
+
+
+const folderFileInputRef = useRef<HTMLInputElement>(null);
 const fileInputRef = useRef<HTMLInputElement>(null);
 
-const [uploadedDocuments, setUploadedDocuments] = useState<
-  UploadedQualityDocument[]
->([]);
+useEffect(() => {
+  setCurrentFolderId(null);
+  setSearch('');
+  setMessage('');
+  setError('');
+}, [factory, categoryParam]);
 
-const [loadingUploads, setLoadingUploads] = useState(false);
-const [uploading, setUploading] = useState(false);
-const [factorySops, setFactorySops] = useState<any[]>([]);
-const [loadingFactorySops, setLoadingFactorySops] = useState(false);
+  const currentFolder = folders.find(
+    folder => folder.id === currentFolderId
+  ) || null;
 
-const [uploadForm, setUploadForm] = useState({
-  documentName: "",
-  documentNumber: "",
-  description: "",
-});
-const [uploadMode, setUploadMode] = useState<
-  "normal" | "fillable_form"
->("normal");
-
-const loadQualityDocuments = async () => {
-  setLoadingQualityDocuments(true);
+  const loadData = useCallback(async () => {
+  setLoading(true);
+  setError('');
 
   try {
-      let query = (supabase as any)
-  .from("fms_quality_documents")
-  .select(`
-    id,
-    document_no,
-    title,
-    category,
-    document_type,
-    version_no,
-    issue_date,
-    compiled_by,
-    approved_by,
-    status,
-    content,
-    rockwood,
-    nguni
-  `);
+    const [folderResult, documentResult] = await Promise.all([
+      db
+        .from('fms_quality_folders')
+        .select('*')
+        .order('folder_name', { ascending: true }),
 
-if (currentFactory === "rockwood") {
-  query = query.eq("rockwood", true);
-} else if (currentFactory === "nguni") {
-  query = query.eq("nguni", true);
-}
+      db
+        .from('fms_quality_documents')
+        .select('*')
+        .order('updated_at', { ascending: false }),
+    ]);
 
-const { data, error } = await query.order("document_no");
-        
-  if (error) throw error;
+    if (folderResult.error) throw folderResult.error;
+    if (documentResult.error) throw documentResult.error;
 
-    const documents: QualityDocument[] = (data || []).map((doc) => {
-      let category = doc.category || "Forms & Records";
+    const loadedFolders = folderResult.data || [];
 
-if (doc.document_type === "SOP" && doc.rockwood) {
-  category = "Standard Operating Procedures – Rockwood";
-} else if (doc.document_type === "SOP" && doc.nguni) {
-  category = "Standard Operating Procedures – Nguni";
-}
+    const sortedFolders = [...loadedFolders].sort((a, b) => {
+      if (a.factory === 'rockwood' && b.factory === 'rockwood') {
+        const getNumber = (name: string) =>
+          Number(name.match(/\d+/)?.[0] || 999);
 
-      return {
-        id: doc.id,
-        title: doc.title,
-        documentNumber: doc.document_no,
-        category,
-        description: doc.content || "",
-        type:
-          doc.document_type === "Form"
-            ? "Form"
-            : doc.document_type === "Register"
-              ? "Register"
-              : "Procedure",
-        version: String(doc.version_no || "0"),
-        issueDate: doc.issue_date
-          ? new Date(`${doc.issue_date}T00:00:00`).toLocaleDateString("en-GB")
-          : "Not yet configured",
-        compiledBy: doc.compiled_by || undefined,
-        approvedBy: doc.approved_by || undefined,
-        status: doc.status || "Draft",
-      };
+        return getNumber(a.folder_name) - getNumber(b.folder_name);
+      }
+
+      // Keep other factories in their existing alphabetical order
+      if (a.factory === b.factory) {
+        return a.folder_name.localeCompare(b.folder_name);
+      }
+
+      return 0;
     });
 
-    setQualityDocuments(documents);
-  } catch (error) {
-    console.error("Error loading quality documents:", error);
-    toast.error("Could not load quality documents.");
+    setFolders(sortedFolders);
+    setDocuments(documentResult.data || []);
+
+  } catch (err: any) {
+    console.error('Error loading quality documents:', err);
+    setError(err.message || 'Could not load folders and documents.');
   } finally {
-    setLoadingQualityDocuments(false);
+    setLoading(false);
   }
-};
-useEffect(() => {
-  loadQualityDocuments();
 }, []);
 
-const loadFactorySops = async () => {
-  const isRockwood =
-    selectedCategory === 'Standard Operating Procedures – Rockwood';
 
-  const isNguni =
-    selectedCategory === 'Standard Operating Procedures – Nguni';
 
-  if (!isRockwood && !isNguni) {
-    setFactorySops([]);
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  // Keep the selected folder valid when changing factories.
+  useEffect(() => {
+  if (!currentFolderId) return;
+
+  const selected = folders.find(folder => folder.id === currentFolderId);
+
+  if (!selected) {
+    setCurrentFolderId(null);
     return;
   }
 
-  setLoadingFactorySops(true);
+  const selectedFactory = selected.factory?.toLowerCase();
 
-  try {
-    const { data, error } = await (supabase as any)
-      .from('fms_quality_documents')
-      .select('*')
-      .eq(isRockwood ? 'rockwood' : 'nguni', true)
-      .order('document_no', { ascending: true });
-
-    if (error) throw error;
-
-    setFactorySops(data || []);
-  } catch (error: any) {
-    console.error('Error loading factory SOPs:', error);
-    toast.error('Unable to load factory SOPs.');
-  } finally {
-    setLoadingFactorySops(false);
+  if (
+    factory !== 'all' &&
+    selectedFactory !== factory &&
+    selectedFactory !== 'both' &&
+    selectedFactory !== 'general'
+  ) {
+    setCurrentFolderId(null);
   }
-};
-useEffect(() => {
-  loadFactorySops();
-}, [selectedCategory]);
+}, [factory, folders, currentFolderId]);
 
-const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const getFolderCategory = (folder: QualityFolder): string | null => {
+  let current: QualityFolder | undefined = folder;
 
-const loadUploadedDocuments = async () => {
-  setLoadingUploads(true);
-
-  try {
-    let query = (supabase as any)
-      .from("fms_quality_uploaded_documents")
-      .select("*");
-
-    // Only show documents belonging to the selected factory.
-    if (currentFactory) {
-      query = query.eq("factory", currentFactory);
+  while (current) {
+    if (current.category) {
+      return current.category;
     }
 
-    const { data, error } = await query.order("created_at", {
-      ascending: false,
-    });
-
-    if (error) throw error;
-
-    setUploadedDocuments(data || []);
-  } catch (error: any) {
-    console.error("Error loading Quality documents:", error);
-    toast.error("Could not load uploaded documents.");
-  } finally {
-    setLoadingUploads(false);
+    current = folders.find(
+      item => item.id === current?.parent_folder_id
+    );
   }
+
+  return null;
 };
 
-useEffect(() => {
-  loadUploadedDocuments();
-}, [currentFactory]);
+const visibleFolders = useMemo(() => {
+  return folders.filter(folder => {
+    const folderFactory = folder.factory?.toLowerCase();
 
-const handleUploadDocument = async () => {
-  if (!selectedCategory) {
-    toast.error("Please select a document category.");
-    return;
-  }
+    const matchesFactory =
+      factory === 'all' ||
+      folderFactory === factory ||
+      folderFactory === 'both' ||
+      folderFactory === 'general';
 
-  if (!uploadForm.documentName.trim()) {
-    toast.error("Please enter a document name.");
-    return;
-  }
+    const matchesParent =
+      folder.parent_folder_id === currentFolderId;
 
-  if (!selectedFile) {
-    toast.error("Please select a file to upload.");
-    return;
-  }
+    const matchesCategory =
+      !categoryParam ||
+      getFolderCategory(folder)?.toLowerCase() ===
+        categoryParam.toLowerCase();
 
-  if (selectedFile.size > 50 * 1024 * 1024) {
-    toast.error("The maximum file size is 50 MB.");
-    return;
-  }
+    const matchesSearch =
+      !search.trim() ||
+      folder.folder_name.toLowerCase().includes(search.toLowerCase());
 
-  const parentCategories: Record<string, string> = {
-    "Standard Operating Procedures – Rockwood": "Controlled Documents",
-    "Standard Operating Procedures – Nguni": "Controlled Documents",
-    "Working Instructions": "Controlled Documents",
-    Policies: "Controlled Documents",
+    return (
+      matchesFactory &&
+      matchesParent &&
+      matchesCategory &&
+      matchesSearch
+    );
+  });
+}, [folders, factory, currentFolderId, search, categoryParam]);
 
-    "Raw materials": "Specifications & Technical Documents",
-    "Packaging materials": "Specifications & Technical Documents",
-    "Finished goods": "Specifications & Technical Documents",
-    "Cleaning Chemicals": "Specifications & Technical Documents",
-    "Process Flow Diagrams": "Specifications & Technical Documents",
-    "Floor Plan": "Specifications & Technical Documents",
+  const visibleDocuments = useMemo(() => {
+    return documents.filter(document => {
+      const matchesFolder =
+        document.folder_id === currentFolderId;
 
-    "Lab results": "Compliance & Certifications",
-    "Calibration certificates": "Compliance & Certifications",
-    "Halaal Certification": "Compliance & Certifications",
-    "R638 Certificate": "Compliance & Certifications",
-    "Food Quality & Safety Certificate": "Compliance & Certifications",
+      const matchesFactory =
+        factory === 'all' ||
+        (factory === 'rockwood' && document.rockwood === true) ||
+        (factory === 'nguni' && document.nguni === true);
 
-    "Appointment letters": "HR & Training Documents",
-    "Job Descriptions & Organograms": "HR & Training Documents",
-    "Training Presentations": "HR & Training Documents",
+      const searchText = search.toLowerCase();
+
+      const matchesSearch =
+        !search.trim() ||
+        document.title?.toLowerCase().includes(searchText) ||
+        document.document_no?.toLowerCase().includes(searchText) ||
+        document.original_file_name?.toLowerCase().includes(searchText);
+
+      return matchesFolder && matchesFactory && matchesSearch;
+    });
+  }, [documents, factory, currentFolderId, search]);
+
+  const breadcrumbs = useMemo(() => {
+    const result: QualityFolder[] = [];
+    let folder = currentFolder;
+
+    while (folder) {
+      result.unshift(folder);
+      folder = folders.find(
+        item => item.id === folder?.parent_folder_id
+      ) || null;
+    }
+
+    return result;
+  }, [currentFolder, folders]);
+
+  const openFolder = (folder: QualityFolder) => {
+    setCurrentFolderId(folder.id);
+    setSearch('');
+    setMessage('');
   };
 
-  const safeFileName = selectedFile.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-  const safeCategory = selectedCategory.replace(/[^a-zA-Z0-9_-]/g, "_");
+  const goToRoot = () => {
+    setCurrentFolderId(null);
+    setSearch('');
+    setMessage('');
+  };
 
-  const filePath = `${safeCategory}/${Date.now()}-${safeFileName}`;
+  const getDocumentFactory = (folder: QualityFolder) => {
+  const value = folder.factory?.toLowerCase();
 
-  setUploading(true);
+  return value === 'rockwood' ||
+    value === 'nguni' ||
+    value === 'both' ||
+    value === 'general'
+    ? value
+    : null;
+};
+
+const handleFolderUpload = (folder: QualityFolder) => {
+  setSelectedUploadFolderId(folder.id);
+  setUploadingFolderId(folder.id);
+  setError('');
+  setMessage('');
+
+  setTimeout(() => {
+    folderFileInputRef.current?.click();
+  }, 0);
+};
+
+ const uploadDocuments = async (files: File[]) => {
+  if (!files.length) return;
+
+  // Upload into the folder currently open
+  if (!currentFolder) {
+    setError('Please open a folder before uploading.');
+    return;
+  }
+
+  const targetFolder = currentFolder;
+  const documentFactory = getDocumentFactory(targetFolder);
+
+
+    if (!documentFactory) {
+      setError(
+        'This folder does not have a recognised factory. Please check its factory value in fms_quality_folders.'
+      );
+      return;
+    }
+
+    const oversized = files.filter(file => file.size > MAX_FILE_SIZE);
+
+    if (oversized.length) {
+      setError(
+        `These files exceed the 50 MB limit: ${oversized.map(file => file.name).join(', ')}`
+      );
+      return;
+    }
+
+    setUploading(true);
+    setError('');
+    setMessage('');
+
+    let successCount = 0;
+    const failures: string[] = [];
+
+    try {
+      const { data: authData } = await supabase.auth.getUser();
+      const userId = authData?.user?.id || null;
+
+      for (const file of files) {
+        const safeName = file.name
+          .replace(/[^\w.\-() ]/g, '_')
+          .replace(/\s+/g, '_');
+
+          const storageFolder =
+            documentFactory === 'both' || documentFactory === 'general'
+              ? 'shared'
+              : documentFactory;
+
+          const filePath =
+            `${storageFolder}/${targetFolder.id}/${Date.now()}_${safeName}`;
+
+        const extension =
+          file.name.split('.').pop()?.toUpperCase() || 'FILE';
+
+        try {
+          // Upload the physical file to Supabase Storage.
+          const { error: storageError } = await db.storage
+            .from(BUCKET)
+            .upload(filePath, file, {
+              cacheControl: '3600',
+              upsert: false,
+              contentType: file.type || undefined,
+            });
+
+          if (storageError) throw storageError;
+
+          const documentNo =
+            `QDOC-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${Date.now()}`;
+
+          // Save the document details in the database.
+          const { error: insertError } = await db
+            .from('fms_quality_documents')
+            .insert({
+              document_no: documentNo,
+              title: file.name.replace(/\.[^/.]+$/, ''),
+              category: targetFolder.folder_name,
+              document_type: extension,
+              version_no: 1,
+              issue_date: null,
+              revision_date: null,
+              compiled_by: null,
+              approved_by: null,
+              content: '',
+              status: 'published',
+              created_by: userId,
+              updated_by: userId,
+              folder_id: targetFolder.id,
+              file_path: filePath,
+              original_file_name: file.name,
+              mime_type: file.type || null,
+              file_size: file.size,
+              uploaded_at: new Date().toISOString(),
+              rockwood:
+                documentFactory === 'rockwood' ||
+                documentFactory === 'both' ||
+                documentFactory === 'general',
+
+              nguni:
+                documentFactory === 'nguni' ||
+                documentFactory === 'both' ||
+                documentFactory === 'general',
+            });
+
+          if (insertError) {
+            // Roll back the Storage upload if the database insert fails.
+            await db.storage.from(BUCKET).remove([filePath]);
+            throw insertError;
+          }
+
+          successCount++;
+        } catch (fileError: any) {
+          console.error(`Upload failed for ${file.name}:`, fileError);
+          failures.push(`${file.name}: ${fileError.message || 'Upload failed'}`);
+        }
+      }
+
+      if (successCount > 0) {
+        setMessage(
+          `${successCount} document${successCount === 1 ? '' : 's'} uploaded successfully.`
+        );
+      }
+
+      if (failures.length) {
+        setError(failures.join('\n'));
+      }
+
+      await loadData();
+    } catch (err: any) {
+      setError(err.message || 'An error occurred during upload.');
+    } finally {
+      setUploading(false);
+      setUploadingFolderId(null);
+      setSelectedUploadFolderId(null);
+    }
+  };
+
+
+const createFolder = async (event: React.FormEvent) => {
+  event.preventDefault();
+
+  if (!newFolderName.trim()) {
+    setError('Please enter a folder name.');
+    return;
+  }
+
+  const inheritedCategory = currentFolder
+  ? getFolderCategory(currentFolder)
+  : categoryParam || newFolderName.trim();
+
+  setCreatingFolder(true);
+  setError('');
+  setMessage('');
 
   try {
-    // Upload the actual file to private Supabase Storage.
-    const { error: storageError } = await supabase.storage
-      .from("quality-documents")
-      .upload(filePath, selectedFile, {
-        cacheControl: "3600",
-        upsert: false,
-        contentType: selectedFile.type || undefined,
+    const { data: authData } = await supabase.auth.getUser();
+
+    const { error: insertError } = await db
+      .from('fms_quality_folders')
+      .insert({
+        folder_name: newFolderName.trim(),
+        factory:
+        factory === 'rockwood' || factory === 'nguni'
+          ? factory
+          : currentFolder?.factory || newFolderFactory,
+        category: inheritedCategory,
+        parent_folder_id: currentFolderId,
+        created_by: authData?.user?.id || null,
       });
 
-    if (storageError) {
-      throw storageError;
-    }
+    if (insertError) throw insertError;
 
-    // Save the document details in the database.
-    const { error: databaseError } = await (supabase as any)
-  .from("fms_quality_uploaded_documents")
-  .insert({
-    document_name: uploadForm.documentName.trim(),
-    document_no: uploadForm.documentNumber.trim() || null,
-    category: parentCategories[selectedCategory] || "Other",
-    subcategory: selectedCategory,
-    file_path: filePath,
-    file_type: selectedFile.type || null,
-    file_size: selectedFile.size,
-    description: uploadForm.description.trim() || null,
-    factory: currentFactory,
-    document_mode: uploadMode,
-    digital_template: {},
-  });
+    setMessage(`"${newFolderName.trim()}" created successfully.`);
+    setNewFolderName('');
+    setShowAddFolder(false);
 
-    if (databaseError) {
-      console.error("Document metadata save error:", databaseError);
-      throw new Error(
-        "The file was uploaded, but its document details could not be saved. Please contact your administrator."
-      );
-    }
-
-    toast.success("Document uploaded successfully!");
-
-    setUploadForm({
-      documentName: "",
-      documentNumber: "",
-      description: "",
-    });
-
-    setSelectedFile(null);
-
-    if (fileInputRef.current) {
-      fileInputRef.current.value = "";
-    }
-
-    await loadUploadedDocuments();
-  } catch (error: any) {
-    console.error("Quality document upload error:", error);
-    toast.error(error.message || "Document upload failed.");
+    await loadData();
+  } catch (err: any) {
+    console.error('Create folder error:', err);
+    setError(err.message || 'Could not create folder.');
   } finally {
-    setUploading(false);
+    setCreatingFolder(false);
   }
 };
-useEffect(() => {
-  if (
-    requestedCategory &&
-    documentCategories.some(
-      (category) => category.name === requestedCategory
-    )
-  ) {
-    setSelectedCategory(requestedCategory);
-    setSelectedFolder(null);
-    setSelectedDocumentId(null);
-    setSearchTerm("");
-  }
-}, [requestedCategory]);
-  const currentCategory = documentCategories.find(
-    (category) => category.name === selectedCategory
-  );
 
-  const selectedDocument = qualityDocuments.find(
-    (document) => document.id === selectedDocumentId
-  );
 
-  const filteredCategories = useMemo(() => {
-    const search = searchTerm.toLowerCase().trim();
+  const downloadDocument = async (document: QualityDocument) => {
+    if (!document.file_path) {
+      setError('This document does not have a file path saved.');
+      return;
+    }
 
-    if (!search) return documentCategories;
+    setError('');
+    setMessage('');
 
-    return documentCategories.filter(
-      (category) =>
-        category.name.toLowerCase().includes(search) ||
-        category.description.toLowerCase().includes(search) ||
-        category.folders.some((folder) =>
-          folder.toLowerCase().includes(search)
-        ) ||
-        qualityDocuments.some(
-          (document) =>
-            document.category === category.name &&
-            (document.title.toLowerCase().includes(search) ||
-              document.documentNumber.toLowerCase().includes(search))
-        )
-    );
-  }, [searchTerm]);
+    try {
+      const { data, error: signedUrlError } = await db.storage
+        .from(BUCKET)
+        .createSignedUrl(document.file_path, 300);
 
-  const categoryDocuments = qualityDocuments.filter(
-    (document) => document.category === selectedCategory
-  );
+      if (signedUrlError) throw signedUrlError;
 
-  const relatedDocuments =
-    selectedDocument?.relatedDocumentIds
-      ?.map((id) => qualityDocuments.find((document) => document.id === id))
-      .filter((document): document is QualityDocument => Boolean(document)) ||
-    [];
-
-  const openCategory = (categoryName: string) => {
-    setSelectedCategory(categoryName);
-    setSelectedFolder(null);
-    setSelectedDocumentId(null);
-    setSearchTerm("");
-  };
-
-  const goBack = () => {
-    if (selectedDocumentId) {
-      setSelectedDocumentId(null);
-    } else if (selectedFolder) {
-      setSelectedFolder(null);
-    } else {
-      setSelectedCategory(null);
+      window.open(data.signedUrl, '_blank', 'noopener,noreferrer');
+    } catch (err: any) {
+      console.error('Download error:', err);
+      setError(err.message || 'Could not download this document.');
     }
   };
 
-  const resetNavigation = () => {
-    setSelectedCategory(null);
-    setSelectedFolder(null);
-    setSelectedDocumentId(null);
-    setSearchTerm("");
-  };
+  const deleteDocument = async (document: QualityDocument) => {
+    const confirmed = window.confirm(
+      `Are you sure you want to delete "${document.title}"?\n\nThis will permanently delete the file and its database record.`
+    );
 
-  const openDocument = (documentId: string) => {
-    setSelectedDocumentId(documentId);
+    if (!confirmed) return;
+
+    setDeletingId(document.id);
+    setError('');
+    setMessage('');
+
+    try {
+      // Remove the physical file first.
+      if (document.file_path) {
+        const { error: storageError } = await db.storage
+          .from(BUCKET)
+          .remove([document.file_path]);
+
+        if (storageError) throw storageError;
+      }
+
+      // Only remove the database row after Storage deletion succeeds.
+      const { error: databaseError } = await db
+        .from('fms_quality_documents')
+        .delete()
+        .eq('id', document.id);
+
+      if (databaseError) {
+        throw new Error(
+          `The file was removed from Storage, but its database record could not be deleted: ${databaseError.message}`
+        );
+      }
+
+      setMessage('Document deleted successfully.');
+      await loadData();
+    } catch (err: any) {
+      console.error('Delete error:', err);
+      setError(err.message || 'Could not delete this document.');
+    } finally {
+      setDeletingId(null);
+    }
   };
+  const deleteFolder = async (folder: QualityFolder) => {
+  // Find this folder and every nested folder beneath it.
+  const folderIds = new Set<string>([folder.id]);
+
+  let foundNewFolders = true;
+
+  while (foundNewFolders) {
+    foundNewFolders = false;
+
+    folders.forEach(item => {
+      if (
+        item.parent_folder_id &&
+        folderIds.has(item.parent_folder_id) &&
+        !folderIds.has(item.id)
+      ) {
+        folderIds.add(item.id);
+        foundNewFolders = true;
+      }
+    });
+  }
+
+  const allFolderIds = Array.from(folderIds);
+
+  setDeletingFolderId(folder.id);
+  setError('');
+  setMessage('');
+
+  try {
+    // Fetch every document stored in these folders.
+    const { data: folderDocuments, error: documentsError } = await db
+      .from('fms_quality_documents')
+      .select('id, title, file_path')
+      .in('folder_id', allFolderIds);
+
+    if (documentsError) throw documentsError;
+
+    const documentsToDelete = folderDocuments || [];
+
+    const confirmed = window.confirm(
+      `Are you sure you want to permanently delete "${folder.folder_name}"?\n\n` +
+      `This includes:\n` +
+      `• ${allFolderIds.length} folder(s), including nested folders\n` +
+      `• ${documentsToDelete.length} document(s)\n\n` +
+      `All associated uploaded files will also be deleted. This cannot be undone.`
+    );
+
+    if (!confirmed) return;
+
+    // Remove uploaded files from Supabase Storage.
+    const filePaths = documentsToDelete
+      .map((document: any) => document.file_path)
+      .filter((path: string | null): path is string => Boolean(path));
+
+    // Remove files in batches.
+    for (let i = 0; i < filePaths.length; i += 100) {
+      const batch = filePaths.slice(i, i + 100);
+
+      const { error: storageError } = await db.storage
+        .from(BUCKET)
+        .remove(batch);
+
+      if (storageError) {
+        throw new Error(
+          `Could not remove uploaded files from Storage: ${storageError.message}`
+        );
+      }
+    }
+
+    // Delete the document database records.
+    if (documentsToDelete.length > 0) {
+      const documentIds = documentsToDelete.map(
+        (document: any) => document.id
+      );
+
+      const { error: documentDeleteError } = await db
+        .from('fms_quality_documents')
+        .delete()
+        .in('id', documentIds);
+
+      if (documentDeleteError) throw documentDeleteError;
+    }
+
+    // Delete all folders, including nested folders.
+    const { error: folderDeleteError } = await db
+      .from('fms_quality_folders')
+      .delete()
+      .in('id', allFolderIds);
+
+    if (folderDeleteError) throw folderDeleteError;
+
+    // If the user was inside the deleted folder, return to the root.
+    if (folderIds.has(currentFolderId || '')) {
+      setCurrentFolderId(null);
+    }
+
+    setMessage(
+      `"${folder.folder_name}" and all its contents were deleted successfully.`
+    );
+
+    await loadData();
+  } catch (err: any) {
+    console.error('Folder deletion error:', err);
+    setError(err.message || 'Could not delete this folder and its contents.');
+  } finally {
+    setDeletingFolderId(null);
+  }
+};
+
+//Update Folder
+const updateFolder = async (event: React.FormEvent) => {
+  event.preventDefault();
+
+  if (!editingFolder || !editedFolderName.trim()) {
+    setError('Please enter a folder name.');
+    return;
+  }
+
+  setSavingFolder(true);
+  setError('');
+  setMessage('');
+
+  try {
+    const { error: updateError } = await db
+      .from('fms_quality_folders')
+      .update({
+        folder_name: editedFolderName.trim(),
+      })
+      .eq('id', editingFolder.id);
+
+    if (updateError) throw updateError;
+
+    setMessage('Folder renamed successfully.');
+    setEditingFolder(null);
+    setEditedFolderName('');
+
+    await loadData();
+  } catch (err: any) {
+    console.error('Folder update error:', err);
+    setError(err.message || 'Could not rename folder.');
+  } finally {
+    setSavingFolder(false);
+  }
+};
+
+  const selectedFactoryLabel =
+    factory === 'all'
+      ? 'All factories'
+      : factory === 'rockwood'
+        ? 'Rockwood'
+        : 'Nguni';
 
   return (
     <div className="space-y-6">
       {/* Page heading */}
-      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-        <div className="flex items-center gap-3">
-          <div className="rounded-lg bg-primary/10 p-2">
-            <FolderOpen className="h-6 w-6 text-primary" />
-          </div>
+<div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+  <div>
+    <h1 className="text-2xl font-bold tracking-tight text-foreground sm:text-3xl">
+      {categoryParam || (
+        factory === 'rockwood'
+          ? 'Rockwood'
+          : factory === 'nguni'
+            ? 'Nguni'
+            : 'Document Library'
+      )}
+    </h1>
 
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight">
-              Quality Documents
-            </h1>
-            <p className="text-sm text-muted-foreground">
-              Controlled document library for Quality Management
-            </p>
-          </div>
-        </div>
+    <p className="mt-1 text-sm text-muted-foreground">
+      Manage your quality procedures, forms, registers and other documents.
+    </p>
+  </div>
 
-        <Badge variant="secondary" className="w-fit">
-          <ShieldCheck className="mr-1 h-3.5 w-3.5" />
-          {qualityDocuments.length} Documents
-        </Badge>
+        <button
+          type="button"
+          onClick={loadData}
+          disabled={loading}
+          className="inline-flex items-center justify-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium hover:bg-muted disabled:opacity-50"
+        >
+          <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
+          Refresh
+        </button>
+
+          <input
+  ref={fileInputRef}
+  type="file"
+  multiple
+  className="hidden"
+  onChange={event => {
+    const files = Array.from(event.target.files || []);
+    event.target.value = '';
+    uploadDocuments(files);
+  }}
+/>
       </div>
 
-      {/* Library information */}
-      <Card>
-        <CardContent className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center">
-          <div className="rounded-full bg-primary/10 p-3">
-            <ShieldCheck className="h-6 w-6 text-primary" />
-          </div>
+    
 
-          <div className="flex-1">
-            <h3 className="font-semibold">Quality Document Library</h3>
-            <p className="text-sm text-muted-foreground">
-              Browse controlled procedures, forms, registers, specifications
-              and compliance documents.
-            </p>
-          </div>
+      {/* Breadcrumbs */}
+      <div className="flex flex-wrap items-center gap-2 text-sm">
+        <button
+          type="button"
+          onClick={goToRoot}
+          className="inline-flex items-center gap-1 text-muted-foreground hover:text-foreground"
+        >
+          <Home size={16} />
+          Folders
+        </button>
 
-          <Badge variant="outline">
-            {documentCategories.length} Categories
-          </Badge>
-        </CardContent>
-      </Card>
+        {breadcrumbs.map((folder, index) => (
+          <React.Fragment key={folder.id}>
+            <ChevronRight size={15} className="text-muted-foreground" />
+            <button
+              type="button"
+              onClick={() => setCurrentFolderId(folder.id)}
+              className={`hover:text-foreground ${
+                index === breadcrumbs.length - 1
+                  ? 'font-semibold text-foreground'
+                  : 'text-muted-foreground'
+              }`}
+            >
+              {folder.folder_name}
+            </button>
+          </React.Fragment>
+        ))}
+      </div>
 
-      {/* Search */}
-      {!selectedDocumentId && (
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            placeholder="Search categories, documents or document numbers..."
-            value={searchTerm}
-            onChange={(event) => setSearchTerm(event.target.value)}
-            className="pl-10"
+      {/* Search and upload */}
+      <div className="flex flex-col gap-3 rounded-xl border bg-card p-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="relative w-full sm:max-w-md">
+          <Search
+            size={17}
+            className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
+          />
+          <input
+            type="text"
+            value={search}
+            onChange={event => setSearch(event.target.value)}
+            placeholder="Search folders and documents..."
+            className="w-full rounded-lg border bg-background py-2.5 pl-10 pr-3 text-sm outline-none focus:ring-2 focus:ring-primary"
           />
         </div>
-      )}
 
-      {/* Breadcrumb navigation */}
-      {selectedCategory && (
-        <div className="flex flex-wrap items-center gap-2 text-sm">
-          <Button variant="ghost" size="sm" onClick={resetNavigation}>
-            All Categories
-          </Button>
+        <div className="flex flex-wrap items-center gap-2">
+            {(factory === 'rockwood' || factory === 'nguni' || categoryParam) && (
+  <button
+    type="button"
+    onClick={() => {
+      setNewFolderFactory(
+        factory === 'rockwood' || factory === 'nguni'
+          ? factory
+          : 'rockwood'
+      );
+      setShowAddFolder(true);
+      setError('');
+      setMessage('');
+    }}
+    className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2.5 text-sm font-medium text-primary-foreground hover:opacity-90"
+  >
+    <Plus size={17} />
+    Add Folder
+  </button>
+)}
 
-          <ChevronRight className="h-4 w-4 text-muted-foreground" />
+          {currentFolder && (
+  <div className="flex items-center justify-between gap-4 mb-6">
+    <div>
+      <h2 className="text-xl font-bold text-foreground">
+        {currentFolder.folder_name}
+      </h2>
+      <p className="text-sm text-muted-foreground">
+        Documents in this folder
+      </p>
+    </div>
 
-          {selectedDocumentId ? (
-            <>
-              <button
-                onClick={() =>
-                navigate(
-  `/quality-system/documents/${encodeURIComponent(
-  selectedDocument?.documentNumber || ""
-)}`
-)
-                }
-                className="text-muted-foreground hover:text-foreground"
-              >
-                {selectedCategory}
-              </button>
-              <ChevronRight className="h-4 w-4 text-muted-foreground" />
-              <span className="font-semibold">
-                {selectedDocument?.title}
-              </span>
-            </>
-          ) : selectedFolder ? (
-            <>
-              <button
-                onClick={() => setSelectedFolder(null)}
-                className="text-muted-foreground hover:text-foreground"
-              >
-                {selectedCategory}
-              </button>
-              <ChevronRight className="h-4 w-4 text-muted-foreground" />
-              <span className="font-semibold">{selectedFolder}</span>
-            </>
-          ) : (
-            <span className="font-semibold">{selectedCategory}</span>
+    <button
+      type="button"
+      onClick={() => fileInputRef.current?.click()}
+      disabled={uploading}
+      className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
+    >
+      <Upload size={16} />
+      {uploading ? 'Uploading...' : 'Upload Document'}
+    </button>
+
+    
+<button
+  type="button"
+  onClick={() => {
+    setNewFolderName('');
+
+    const inheritedFactory =
+      currentFolder?.factory?.toLowerCase();
+
+    setNewFolderFactory(
+      inheritedFactory === 'nguni' ||
+      inheritedFactory === 'rockwood' ||
+      inheritedFactory === 'both' ||
+      inheritedFactory === 'general'
+        ? inheritedFactory
+        : factory === 'all' ? 'both' : factory
+    );
+
+    setError('');
+    setMessage('');
+    setShowAddFolder(true);
+  }}
+  className="inline-flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium hover:bg-muted"
+>
+  <FolderPlus size={16} />
+  Add Subfolder
+</button>
+
+  </div>
+)}
+          {!currentFolder && (
+            <span className="text-xs text-muted-foreground">
+              Open a folder to upload documents.
+            </span>
           )}
+        </div>
+      </div>
+
+{/* Edit Folder Modal */}
+{editingFolder && (
+  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+    <div className="w-full max-w-md rounded-xl border bg-card p-6 shadow-xl">
+
+      <div className="mb-5">
+        <h3 className="text-xl font-bold text-foreground">
+          Edit Folder
+        </h3>
+
+        <p className="mt-1 text-sm text-muted-foreground">
+          Change the name of this folder.
+        </p>
+      </div>
+
+      <form onSubmit={updateFolder} className="space-y-4">
+        <div>
+          <label className="mb-2 block text-sm font-medium">
+            Folder Name
+          </label>
+
+          <input
+            type="text"
+            value={editedFolderName}
+            onChange={event => setEditedFolderName(event.target.value)}
+            placeholder="Enter folder name"
+            className="w-full rounded-lg border bg-background px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-primary"
+            required
+            autoFocus
+          />
+        </div>
+
+        <div className="flex justify-end gap-2 pt-2">
+          <button
+            type="button"
+            onClick={() => {
+              setEditingFolder(null);
+              setEditedFolderName('');
+            }}
+            disabled={savingFolder}
+            className="rounded-lg border px-4 py-2 text-sm font-medium hover:bg-muted"
+          >
+            Cancel
+          </button>
+
+          <button
+            type="submit"
+            disabled={savingFolder || !editedFolderName.trim()}
+            className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"
+          >
+            {savingFolder ? (
+              <Loader2 size={16} className="animate-spin" />
+            ) : (
+              <Pencil size={16} />
+            )}
+
+            {savingFolder ? 'Saving...' : 'Save Changes'}
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+)}
+{/* Drag and Drop Upload Area */}
+
+
+
+{showAddFolder && (
+  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+    <div className="w-full max-w-md rounded-xl border bg-card p-6 shadow-xl">
+      <div className="mb-5">
+        <h3 className="text-xl font-bold text-foreground">
+          Create New Folder
+        </h3>
+
+        <p className="mt-1 text-sm text-muted-foreground">
+          {currentFolder
+            ? `Create a subfolder inside "${currentFolder.folder_name}".`
+            : `Create a folder inside "${categoryParam}".`}
+        </p>
+      </div>
+
+      <form onSubmit={createFolder} className="space-y-4">
+        <div>
+          <label className="mb-2 block text-sm font-medium">
+            Folder Name
+          </label>
+
+          <input
+            type="text"
+            value={newFolderName}
+            onChange={event => setNewFolderName(event.target.value)}
+            placeholder="Enter folder name"
+            className="w-full rounded-lg border bg-background px-3 py-2.5 text-sm outline-none focus:ring-2 focus:ring-primary"
+            required
+            autoFocus
+          />
+        </div>
+        <div className="flex justify-end gap-2 pt-2">
+          <button
+            type="button"
+            onClick={() => {
+              setShowAddFolder(false);
+              setNewFolderName('');
+              setError('');
+            }}
+            disabled={creatingFolder}
+            className="rounded-lg border px-4 py-2 text-sm font-medium hover:bg-muted"
+          >
+            Cancel
+          </button>
+
+          <button
+            type="submit"
+            disabled={creatingFolder}
+            className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground disabled:opacity-50"
+          >
+            {creatingFolder ? (
+              <Loader2 size={16} className="animate-spin" />
+            ) : (
+              <Plus size={16} />
+            )}
+
+            {creatingFolder ? 'Creating...' : 'Create Folder'}
+          </button>
+        </div>
+            </form>
+    </div>
+  </div>
+)}
+{/* Drag and Drop Upload Area */}
+{currentFolder && (
+  <button
+    type="button"
+    disabled={uploading}
+    onClick={() => fileInputRef.current?.click()}
+    onDragOver={event => {
+      event.preventDefault();
+      if (!uploading) setIsDragging(true);
+    }}
+    onDragLeave={event => {
+      event.preventDefault();
+      setIsDragging(false);
+    }}
+    onDrop={event => {
+      event.preventDefault();
+      setIsDragging(false);
+
+      if (uploading) return;
+
+      const files = Array.from(event.dataTransfer.files);
+
+      if (files.length > 0) {
+        uploadDocuments(files);
+      }
+    }}
+    className={`flex w-full flex-col items-center justify-center rounded-xl border-2 border-dashed p-8 text-center transition-all ${
+      isDragging
+        ? 'border-primary bg-primary/10'
+        : 'border-border bg-card hover:border-primary hover:bg-muted/50'
+    } disabled:cursor-not-allowed disabled:opacity-50`}
+  >
+    {uploading ? (
+      <Loader2
+        size={36}
+        className="mb-3 animate-spin text-primary"
+      />
+    ) : (
+      <Upload
+        size={36}
+        className={`mb-3 ${
+          isDragging ? 'text-primary' : 'text-muted-foreground'
+        }`}
+      />
+    )}
+
+    <p className="font-semibold text-foreground">
+      {uploading
+        ? 'Uploading documents...'
+        : isDragging
+          ? 'Drop your files here!'
+          : 'Drag and drop your documents here'}
+    </p>
+
+    <p className="mt-2 text-sm text-muted-foreground">
+      {uploading
+        ? 'Please wait while your files are uploaded.'
+        : 'Or click here to browse and select files.'}
+    </p>
+
+    <p className="mt-3 text-xs text-muted-foreground">
+      Multiple files supported · Maximum 50 MB per file
+    </p>
+  </button>
+)}
+
+      {/* Feedback */}
+      {error && (
+        <div className="whitespace-pre-wrap rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-700">
+          {error}
         </div>
       )}
 
-      {/* All categories */}
-      {!selectedCategory && (
-        <div className="space-y-4">
+      {message && (
+        <div className="rounded-lg border border-green-300 bg-green-50 p-3 text-sm text-green-700">
+          {message}
+        </div>
+      )}
+
+      {/* Current location */}
+      <div>
+        <div className="mb-4 flex items-center justify-between gap-3">
           <div>
-            <h2 className="text-lg font-semibold">Document Categories</h2>
-            <p className="text-sm text-muted-foreground">
-              Select a category to browse its documents and folders.
+            <h3 className="font-semibold text-foreground">
+              {currentFolder ? currentFolder.folder_name : 'Document Folders'}
+            </h3>
+            <p className="text-xs text-muted-foreground">
+              {selectedFactoryLabel}
+              {currentFolder?.factory
+                ? ` · ${currentFolder.factory}`
+                : ''}
             </p>
           </div>
 
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-            {filteredCategories.map((category) => {
-             const count =
-  qualityDocuments.filter(
-    (document) => document.category === category.name
-  ).length +
-  uploadedDocuments.filter(
-    (document) => document.subcategory === category.name
-  ).length;
-
-              return (
-                <Card
-                  key={category.name}
-                  className="group cursor-pointer transition-all hover:border-primary/50 hover:shadow-md"
-                  onClick={() => openCategory(category.name)}
-                >
-                  <CardContent className="flex items-start gap-4 p-5">
-                    <div className="rounded-xl bg-amber-500/10 p-3">
-                      {category.folders.length > 0 ? (
-                        <FolderTree className="h-7 w-7 text-amber-600" />
-                      ) : (
-                        <Folder className="h-7 w-7 text-amber-600" />
-                      )}
-                    </div>
-
-                    <div className="min-w-0 flex-1">
-                      <h3 className="font-semibold leading-snug group-hover:text-primary">
-                        {category.name}
-                      </h3>
-
-                      <p className="mt-1 text-sm text-muted-foreground">
-                        {category.description}
-                      </p>
-
-                      <div className="mt-3 flex items-center justify-between">
-                        <span className="text-xs text-muted-foreground">
-                          {count > 0
-                            ? `${count} documents`
-                            : category.folders.length > 0
-                              ? `${category.folders.length} subfolders`
-                              : "Document folder"}
-                        </span>
-
-                        <ChevronRight className="h-4 w-4 text-muted-foreground transition-transform group-hover:translate-x-1" />
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              );
-            })}
-          </div>
-
-          {filteredCategories.length === 0 && (
-            <EmptyState message="No categories or documents found. Try another search term." />
-          )}
-        </div>
-      )}
-
-
-      {/* Selected document viewer preview */}
-      {selectedDocument && (
-        <div className="space-y-5">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <Button variant="outline" size="sm" onClick={goBack}>
-              <ArrowLeft className="mr-2 h-4 w-4" />
-              Back to Documents
-            </Button>
-
-            <Badge variant="secondary">{selectedDocument.status}</Badge>
-          </div>
-
-          <Card>
-            <CardContent className="space-y-5 p-6">
-              <div className="flex items-start gap-3">
-                <div className="rounded-lg bg-primary/10 p-3">
-                  <FileText className="h-7 w-7 text-primary" />
-                </div>
-
-                <div className="min-w-0 flex-1">
-                  <h2 className="text-xl font-bold">
-                    {selectedDocument.title}
-                  </h2>
-                  <p className="text-sm text-muted-foreground">
-                    {selectedDocument.documentNumber}
-                  </p>
-                </div>
-              </div>
-
-              <p className="text-sm text-muted-foreground">
-                {selectedDocument.description}
-              </p>
-
-              <div className="grid gap-4 rounded-lg bg-muted/40 p-4 sm:grid-cols-2">
-                <DocumentDetail
-                  icon={<FileCheck className="h-4 w-4" />}
-                  label="Document Type"
-                  value={selectedDocument.type}
-                />
-                <DocumentDetail
-                  icon={<FileText className="h-4 w-4" />}
-                  label="Version"
-                  value={selectedDocument.version}
-                />
-                <DocumentDetail
-                  icon={<Calendar className="h-4 w-4" />}
-                  label="Issue Date"
-                  value={selectedDocument.issueDate}
-                />
-                <DocumentDetail
-                  icon={<Folder className="h-4 w-4" />}
-                  label="Category"
-                  value={selectedDocument.category}
-                />
-                {selectedDocument.compiledBy && (
-                  <DocumentDetail
-                    icon={<User className="h-4 w-4" />}
-                    label="Compiled By"
-                    value={selectedDocument.compiledBy}
-                  />
-                )}
-                {selectedDocument.approvedBy && (
-                  <DocumentDetail
-                    icon={<ShieldCheck className="h-4 w-4" />}
-                    label="Approved By"
-                    value={selectedDocument.approvedBy}
-                  />
-                )}
-              </div>
-
-              <div className="rounded-lg border p-5 text-center space-y-3">
-                <FileText className="mx-auto h-8 w-8 text-primary" />
-
-                <div>
-                  <h3 className="font-semibold">Controlled Document</h3>
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    Open the complete document to view its contents, access
-                    revision history and download a PDF.
-                  </p>
-                </div>
-
-                <Button
-                  className="w-full sm:w-auto"
-                  onClick={() =>
-                    navigate(
-                      `/quality-system/documents/${encodeURIComponent(
-                        selectedDocument.documentNumber
-                      )}`
-                    )
-                  }
-                >
-                  <FileText className="mr-2 h-4 w-4" />
-                  Open Full Document
-                </Button>
-              </div>
-
-              {relatedDocuments.length > 0 && (
-                <div className="space-y-3">
-                  <div>
-                    <h3 className="font-semibold">Related Forms & Records</h3>
-                    <p className="text-sm text-muted-foreground">
-                      Documents referenced by this procedure.
-                    </p>
-                  </div>
-
-                  <div className="space-y-2">
-                    {relatedDocuments.map((document) => (
-                      <button
-                        key={document.id}
-                        onClick={() => openDocument(document.id)}
-                        className="flex w-full items-center gap-3 rounded-lg border p-3 text-left transition-colors hover:bg-muted/50"
-                      >
-                        <ClipboardList className="h-5 w-5 shrink-0 text-primary" />
-
-                        <span className="min-w-0 flex-1">
-                          <span className="block font-medium">
-                            {document.title}
-                          </span>
-                          <span className="text-xs text-muted-foreground">
-                            {document.documentNumber}
-                          </span>
-                        </span>
-
-                        <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-      )}
-
-      
-
-      {/* Selected category */}
-      {selectedCategory && !selectedDocumentId && currentCategory && (
-        <div className="space-y-5">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <h2 className="text-lg font-semibold">
-                {currentCategory.name}
-              </h2>
-              <p className="text-sm text-muted-foreground">
-                {currentCategory.description}
-              </p>
-            </div>
-
-            <Button variant="outline" size="sm" onClick={goBack}>
-              <ArrowLeft className="mr-2 h-4 w-4" />
-              Back
-            </Button>
-          </div>
-{/* Upload Document */}
-<Card>
-  <CardContent className="space-y-4 p-5">
-    <div className="flex items-center gap-3">
-      <div className="rounded-lg bg-primary/10 p-2">
-        <Upload className="h-5 w-5 text-primary" />
-      </div>
-
-      <div>
-        <h3 className="font-semibold">Upload Document</h3>
-        <p className="text-sm text-muted-foreground">
-          Upload a document into {currentCategory.name}.
-        </p>
-      </div>
-    </div>
-{/* Document Mode */}
-<div className="space-y-3">
-  <label className="text-sm font-medium">
-    Document Type *
-  </label>
-
-  <div className="grid gap-3 sm:grid-cols-2">
-    <Button
-      type="button"
-      variant={uploadMode === "normal" ? "default" : "outline"}
-      className="h-auto justify-start whitespace-normal p-4"
-      onClick={() => setUploadMode("normal")}
-    >
-      <div className="text-left">
-        <div className="font-semibold">Normal Document</div>
-        <p className="mt-1 text-xs font-normal opacity-80">
-          Upload SOPs, policies, certificates and reports
-          for viewing or downloading.
-        </p>
-      </div>
-    </Button>
-
-    <Button
-      type="button"
-      variant={uploadMode === "fillable_form" ? "default" : "outline"}
-      className="h-auto justify-start whitespace-normal p-4"
-      onClick={() => setUploadMode("fillable_form")}
-    >
-      <div className="text-left">
-        <div className="font-semibold">Fillable Form</div>
-        <p className="mt-1 text-xs font-normal opacity-80">
-          Upload a blank master sheet to convert into
-          an editable digital form.
-        </p>
-      </div>
-    </Button>
-  </div>
-</div>
-    <div className="grid gap-4 sm:grid-cols-2">
-      <div className="space-y-2">
-        <label className="text-sm font-medium">Document Name *</label>
-        <Input
-          placeholder="Enter document name"
-          value={uploadForm.documentName}
-          onChange={(event) =>
-            setUploadForm({
-              ...uploadForm,
-              documentName: event.target.value,
-            })
-          }
-        />
-      </div>
-
-      <div className="space-y-2">
-        <label className="text-sm font-medium">Document Number</label>
-        <Input
-          placeholder="Optional document number"
-          value={uploadForm.documentNumber}
-          onChange={(event) =>
-            setUploadForm({
-              ...uploadForm,
-              documentNumber: event.target.value,
-            })
-          }
-        />
-      </div>
-    </div>
-
-    <div className="space-y-2">
-      <label className="text-sm font-medium">Description</label>
-      <Input
-        placeholder="Optional description"
-        value={uploadForm.description}
-        onChange={(event) =>
-          setUploadForm({
-            ...uploadForm,
-            description: event.target.value,
-          })
-        }
-      />
-    </div>
-
-    <div className="space-y-2">
-      <label className="text-sm font-medium">Select File *</label>
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.jpg,.jpeg,.png"
-        onChange={(event) =>
-          setSelectedFile(event.target.files?.[0] || null)
-        }
-        className="block w-full rounded-md border p-2 text-sm"
-      />
-      <p className="text-xs text-muted-foreground">
-        PDF, Word, Excel, PowerPoint, text and image files. Maximum 50 MB.
-      </p>
-    </div>
-
-    {selectedFile && (
-      <p className="text-sm text-muted-foreground">
-        Selected: {selectedFile.name}
-      </p>
-    )}
-
-    <Button
-      onClick={handleUploadDocument}
-      disabled={uploading}
-    >
-      {uploading ? (
-        <>
-          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-          Uploading...
-        </>
-      ) : (
-        <>
-          <Upload className="mr-2 h-4 w-4" />
-          Upload Document
-        </>
-      )}
-    </Button>
-  </CardContent>
-</Card>
-{/* Uploaded Documents */}
-<Card>
-  <CardContent className="space-y-4 p-5">
-    <div className="flex items-center justify-between gap-3">
-      <div>
-        <h3 className="font-semibold">Uploaded Documents</h3>
-        <p className="text-sm text-muted-foreground">
-          Documents stored in this category.
-        </p>
-      </div>
-
-      <Badge variant="secondary">
-        {
-          uploadedDocuments.filter(
-            (document) => document.subcategory === selectedCategory
-          ).length
-        } Documents
-      </Badge>
-    </div>
-
-    {loadingUploads ? (
-      <div className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
-        <Loader2 className="h-4 w-4 animate-spin" />
-        Loading uploaded documents...
-      </div>
-    ) : uploadedDocuments.filter(
-        (document) => document.subcategory === selectedCategory
-      ).length === 0 ? (
-      <p className="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground">
-        No uploaded documents in this category yet.
-      </p>
-    ) : (
-      <div className="space-y-2">
-        {uploadedDocuments
-          .filter(
-            (document) => document.subcategory === selectedCategory
-          )
-          .map((document) => (
-            <div
-              key={document.id}
-              className="flex flex-col gap-3 rounded-lg border p-4 sm:flex-row sm:items-center"
+          {currentFolder && (
+            <button
+              type="button"
+              onClick={() => {
+                const parent = folders.find(
+                  folder => folder.id === currentFolder.parent_folder_id
+                );
+                setCurrentFolderId(parent?.id || null);
+                setSearch('');
+              }}
+              className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
             >
-              <div className="rounded-lg bg-primary/10 p-2">
-                <FileText className="h-5 w-5 text-primary" />
-              </div>
-
-              <div className="min-w-0 flex-1">
-                <h4 className="font-medium">{document.document_name}</h4>
-
-                {document.document_no && (
-                  <p className="text-xs text-muted-foreground">
-                    {document.document_no}
-                  </p>
-                )}
-
-                {document.description && (
-                  <p className="mt-1 text-sm text-muted-foreground">
-                    {document.description}
-                  </p>
-                )}
-
-                <p className="mt-1 text-xs text-muted-foreground">
-                  Uploaded {new Date(document.created_at).toLocaleDateString()}
-                </p>
-              </div>
-
-              <div className="flex gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={async () => {
-                    const { data, error } = await supabase.storage
-                      .from("quality-documents")
-                      .createSignedUrl(document.file_path, 60);
-
-                    if (error) {
-                      toast.error("Could not open this document.");
-                      return;
-                    }
-
-                    window.open(data.signedUrl, "_blank", "noopener,noreferrer");
-                  }}
-                >
-                  <ExternalLink className="mr-2 h-4 w-4" />
-                  View
-                </Button>
-
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={async () => {
-                    const { data, error } = await supabase.storage
-                      .from("quality-documents")
-                      .download(document.file_path);
-
-                    if (error || !data) {
-                      toast.error("Could not download this document.");
-                      return;
-                    }
-
-                    const url = URL.createObjectURL(data);
-                    const link = window.document.createElement("a");
-                    link.href = url;
-                    link.download = document.document_name;
-                    link.click();
-                    URL.revokeObjectURL(url);
-                  }}
-                >
-                  <Download className="mr-2 h-4 w-4" />
-                  Download
-                </Button>
-              </div>
-            </div>
-          ))}
-      </div>
-    )}
-  </CardContent>
-</Card>
-
-          {/* Documents in category */}
-          {categoryDocuments.filter((document) => {
-            const search = searchTerm.toLowerCase().trim();
-            return (
-              !search ||
-              document.title.toLowerCase().includes(search) ||
-              document.documentNumber.toLowerCase().includes(search)
-            );
-          }).length > 0 && (
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {categoryDocuments
-                .filter((document) => {
-                  const search = searchTerm.toLowerCase().trim();
-                  return (
-                    !search ||
-                    document.title.toLowerCase().includes(search) ||
-                    document.documentNumber.toLowerCase().includes(search)
-                  );
-                })
-                .map((document) => (
-                  <Card
-                    key={document.id}
-                    className="cursor-pointer transition-all hover:border-primary/50 hover:shadow-sm"
-                    onClick={() => openDocument(document.id)}
-                  >
-                    <CardContent className="flex items-start gap-3 p-4">
-                      <div className="rounded-lg bg-primary/10 p-2">
-                        <FileText className="h-6 w-6 text-primary" />
-                      </div>
-
-                      <div className="min-w-0 flex-1">
-                        <h3 className="font-semibold leading-snug">
-                          {document.title}
-                        </h3>
-                        <p className="mt-1 text-xs text-muted-foreground">
-                          {document.documentNumber}
-                        </p>
-                        <div className="mt-3 flex flex-wrap gap-2">
-                          <Badge variant="outline">{document.type}</Badge>
-                          <Badge variant="secondary">{document.status}</Badge>
-                        </div>
-                      </div>
-
-                      <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
-                    </CardContent>
-                  </Card>
-                ))}
-            </div>
-          )}
-
-          {/* Subfolders */}
-          {!selectedFolder && currentCategory.folders.length > 0 && (
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {currentCategory.folders
-                .filter((folder) =>
-                  folder.toLowerCase().includes(searchTerm.toLowerCase())
-                )
-                .map((folder) => (
-                  <Card
-                    key={folder}
-                    className="cursor-pointer transition-all hover:border-primary/50 hover:shadow-sm"
-                    onClick={() => setSelectedFolder(folder)}
-                  >
-                    <CardContent className="flex items-center gap-3 p-4">
-                      <FolderOpen className="h-7 w-7 text-amber-600" />
-                      <span className="flex-1 font-medium">{folder}</span>
-                      <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                    </CardContent>
-                  </Card>
-                ))}
-            </div>
-          )}
-
-          {/* Empty category */}
-          {categoryDocuments.length === 0 &&
-            currentCategory.folders.length === 0 && (
-              <EmptyState message="No documents have been configured in this category yet." />
-            )}
-
-          {selectedFolder && (
-            <div className="space-y-3">
-              <h3 className="font-semibold">{selectedFolder}</h3>
-              <EmptyState message="No documents have been configured in this folder yet." />
-            </div>
+              <ArrowLeft size={16} />
+              Back
+            </button>
           )}
         </div>
-      )}
+
+        {loading ? (
+          <div className="flex items-center justify-center gap-2 rounded-xl border p-12 text-sm text-muted-foreground">
+            <Loader2 size={20} className="animate-spin" />
+            Loading folders and documents...
+          </div>
+        ) : (
+          <>
+            
+{/* Folders */}
+<div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 mb-6">
+  {visibleFolders.map(folder => (
+    <div
+      key={folder.id}
+      className="flex flex-col gap-3 rounded-xl border bg-card p-4 transition-colors hover:border-primary"
+    >
+      <button
+        type="button"
+        onClick={() => openFolder(folder)}
+        className="flex min-w-0 flex-1 items-center gap-3 text-left"
+      >
+        <div className="rounded-lg bg-primary/10 p-3 text-primary">
+          <Folder size={24} />
+        </div>
+
+        <div className="min-w-0 flex-1">
+          <p className="truncate font-semibold text-foreground">
+            {folder.folder_name}
+          </p>
+          <p className="text-xs capitalize text-muted-foreground">
+            {folder.factory || 'No factory assigned'}
+          </p>
+        </div>
+
+        <ChevronRight size={18} className="shrink-0 text-muted-foreground" />
+      </button>
+
+      <div className="flex justify-end border-t pt-3">
+         {/* Edit Folder */}
+  <button
+    type="button"
+    onClick={() => {
+      setEditingFolder(folder);
+      setEditedFolderName(folder.folder_name);
+      setError('');
+      setMessage('');
+    }}
+    title="Edit folder name"
+    className="rounded-lg p-2 text-blue-600 hover:bg-blue-50"
+  >
+    <Pencil size={16} />
+  </button>
+        <button
+          type="button"
+          onClick={() => deleteFolder(folder)}
+          disabled={deletingFolderId === folder.id}
+          title="Delete folder and all its contents"
+          className="rounded-lg p-2 text-red-600 hover:bg-red-50 disabled:opacity-50"
+        >
+          {deletingFolderId === folder.id ? (
+            <Loader2 size={16} className="animate-spin" />
+          ) : (
+            <Trash2 size={16} />
+          )}
+        </button>
+      </div>
+    </div>
+  ))}
+</div>
+
+
+            {/* Documents */}
+            <div className="overflow-hidden rounded-xl border bg-card">
+              <div className="border-b px-4 py-3">
+                <div className="flex items-center gap-2">
+                  <FileText size={18} />
+                  <h4 className="font-semibold">Documents</h4>
+                  <span className="rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                    {visibleDocuments.length}
+                  </span>
+                </div>
+              </div>
+
+              {visibleDocuments.length === 0 ? (
+                <div className="flex flex-col items-center justify-center px-4 py-12 text-center">
+                  <div className="mb-3 rounded-full bg-muted p-4">
+                    {currentFolder ? (
+                      <FolderOpen size={28} className="text-muted-foreground" />
+                    ) : (
+                      <FilePlus size={28} className="text-muted-foreground" />
+                    )}
+                  </div>
+                  <p className="font-medium text-foreground">
+                    No documents found
+                  </p>
+                  <p className="mt-1 max-w-sm text-sm text-muted-foreground">
+                    {currentFolder
+                      ? 'Upload a document into this folder to get started.'
+                      : 'Open a folder to view its documents.'}
+                  </p>
+                </div>
+              ) : (
+                
+             
+<div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+  {visibleDocuments.map(document => (
+    <div
+      key={document.id}
+      className="group rounded-xl border border-border bg-card p-4 shadow-sm transition-all hover:shadow-md"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex min-w-0 items-start gap-3">
+          <div className="rounded-lg bg-muted p-3">
+            <File size={24} className="text-muted-foreground" />
+          </div>
+
+          <div className="min-w-0">
+            <p className="break-words text-sm font-semibold text-foreground">
+              {document.title || document.original_file_name}
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              {document.document_type || 'Document'}
+            </p>
+          </div>
+        </div>
+
+        <div className="flex shrink-0 items-center gap-1">
+          <button
+            type="button"
+            onClick={() => downloadDocument(document)}
+            disabled={!document.file_path}
+            title="Download document"
+           className="rounded-full p-2 text-muted-foreground bg-red-100 hover:text-red-600 disabled:opacity-40"
+          >
+            <Download size={17} />
+          </button>
+
+          <button
+            type="button"
+            onClick={() => deleteDocument(document)}
+            disabled={deletingId === document.id}
+            title="Delete document"
+            className="rounded-full p-2 text-muted-foreground bg-red-100 hover:text-red-600 disabled:opacity-40"
+          >
+            {deletingId === document.id ? (
+              <Loader2 size={17} className="animate-spin" />
+            ) : (
+              <Trash2 size={17} />
+            )}
+          </button>
+        </div>
+      </div>
+
+      <div className="mt-4 space-y-2 border-t border-border pt-3">
+        <div className="flex items-center justify-between gap-2 text-xs">
+          <span className="text-muted-foreground">Document number</span>
+          <span className="font-medium text-foreground">
+            {document.document_no || 'Not assigned'}
+          </span>
+        </div>
+
+        <div className="flex items-center justify-between gap-2 text-xs">
+          <span className="text-muted-foreground">File size</span>
+          <span className="text-foreground">
+            {formatSize(document.file_size)}
+          </span>
+        </div>
+
+        <div className="flex items-center justify-between gap-2 text-xs">
+          <span className="text-muted-foreground">Uploaded</span>
+          <span className="text-foreground">
+            {formatDate(document.uploaded_at || document.created_at)}
+          </span>
+        </div>
+         </div>
+    </div>
+  ))}
+</div>
+)}
+
+
+            {visibleFolders.length === 0 &&
+              visibleDocuments.length === 0 &&
+              !search.trim() && (
+                <p className="mt-4 text-center text-xs text-muted-foreground">
+                  Nothing else to display in this location.
+                </p>
+              )}
+        </div>
+          </>
+          
+        )}
+      </div>
+  
     </div>
   );
 };
-
-const DocumentDetail: React.FC<{
-  icon: React.ReactNode;
-  label: string;
-  value: string;
-}> = ({ icon, label, value }) => (
-  <div className="flex items-start gap-2">
-    <div className="mt-0.5 text-muted-foreground">{icon}</div>
-    <div>
-      <p className="text-xs text-muted-foreground">{label}</p>
-      <p className="text-sm font-medium">{value}</p>
-    </div>
-  </div>
-);
-
-const EmptyState: React.FC<{ message: string }> = ({ message }) => (
-  <Card>
-    <CardContent className="flex flex-col items-center justify-center px-6 py-12 text-center">
-      <FileText className="h-9 w-9 text-muted-foreground" />
-      <h3 className="mt-3 font-semibold">Nothing here yet</h3>
-      <p className="mt-1 max-w-md text-sm text-muted-foreground">{message}</p>
-    </CardContent>
-  </Card>
-);
 
 export default QualityDocuments;

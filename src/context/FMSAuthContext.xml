@@ -105,6 +105,7 @@ export const FMSAuthProvider: React.FC<{ children: ReactNode }> = ({ children })
     return () => subscription.unsubscribe();
   }, []);
 
+
   const fetchFMSUser = async (userId: string, attempt: number = 0) => {
     try {
       const { data, error } = await supabase
