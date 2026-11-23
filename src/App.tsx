@@ -69,13 +69,14 @@ import MarketingFolderContents from './pages/MarketingSystem/MarketingFolderCont
 
 //Quality System Pages
 const QualitySystemDashboard = lazy(() => import("./pages/QualitySystem/QualityDashboard"))
-
 const QualityLogin = lazy(
   () => import("./pages/QualitySystem/QualityLogin")
 );
 const QualityDocuments = lazy(
   () => import("./pages/QualitySystem/QualityDocuments")
 );
+const QualityForms = lazy(() => import('./pages/QualitySystem/QualityDigitalForms'))
+
 
 
 
@@ -567,42 +568,42 @@ const App = () => (
 
 
             {/* MARKETING SYSTEM */}
-<Route
-  path="/marketing-login"
-  element={<MarketingLogin />}
-/>
+              <Route
+                path="/marketing-login"
+                element={<MarketingLogin />}
+              />
 
-<Route
-  path="/marketing-system"
-  element={<Navigate to="/marketing-system/dashboard" replace />}
-/>
+              <Route
+                path="/marketing-system"
+                element={<Navigate to="/marketing-system/dashboard" replace />}
+              />
 
-<Route
-  path="/marketing-system/dashboard"
-  element={
-    <MarketingRouteGuard>
-      <MarketingDashboard />
-    </MarketingRouteGuard>
-  }
-/>
+              <Route
+                path="/marketing-system/dashboard"
+                element={
+                  <MarketingRouteGuard>
+                    <MarketingDashboard />
+                  </MarketingRouteGuard>
+                }
+              />
 
-<Route
-  path="/marketing-system/folders"
-  element={
-    <MarketingRouteGuard>
-      <MarketingFolders />
-    </MarketingRouteGuard>
-  }
-/>
+              <Route
+                path="/marketing-system/folders"
+                element={
+                  <MarketingRouteGuard>
+                    <MarketingFolders />
+                  </MarketingRouteGuard>
+                }
+              />
 
-<Route
-  path="/marketing-system/folder/:id"
-  element={
-    <MarketingRouteGuard>
-      <MarketingFolderContents />
-    </MarketingRouteGuard>
-  }
-/>
+              <Route
+                path="/marketing-system/folder/:id"
+                element={
+                  <MarketingRouteGuard>
+                    <MarketingFolderContents />
+                  </MarketingRouteGuard>
+                }
+              />
               
 
 
@@ -615,45 +616,50 @@ const App = () => (
                 element={<NotFound />}
               />
 
-                        
-{/* ==================================================
-    QUALITY MANAGEMENT SYSTEM
-================================================== */}
+                                        
+                {/* ==================================================
+                    QUALITY MANAGEMENT SYSTEM
+                ================================================== */}
 
-{/* Quality Login - accessible without being logged in */}
-<Route
-  path="/quality-login"
-  element={<QualityLogin />}
-/>
+                {/* Quality Login - accessible without being logged in */}
+                <Route
+                  path="/quality-login"
+                  element={<QualityLogin />}
+                />
 
-{/* Protected Quality System - ONE layout only */}
-<Route
-  element={
-    <QualityRouteGuard>
-      <QLayout />
-    </QualityRouteGuard>
-  }
->
-  <Route
-    path="/quality-system/dashboard"
-    element={<QualitySystemDashboard />}
-  />
+                {/* Protected Quality System - ONE layout only */}
+                <Route
+                  element={
+                    <QualityRouteGuard>
+                      <QLayout />
+                    </QualityRouteGuard>
+                  }
+                >
+                  <Route
+                    path="/quality-system/dashboard"
+                    element={<QualitySystemDashboard />}
+                  />
 
-  <Route
-    path="/quality-system/documents"
-    element={<QualityDocuments />}
-  />
+                  <Route
+                    path="/quality-system/documents"
+                    element={<QualityDocuments />}
+                  />
 
-  <Route
-    path="/quality-system/rockwood"
-    element={<QualityDocuments />}
-  />
+                  <Route
+                    path="/quality-system/rockwood"
+                    element={<QualityDocuments />}
+                  />
 
-  <Route
-    path="/quality-system/nguni"
-    element={<QualityDocuments />}
-  />
-</Route>
+                  <Route
+                    path="/quality-system/nguni"
+                    element={<QualityDocuments />}
+                  />
+                  <Route
+                  path='/quality-system/forms'
+                  element={<QualityForms />}
+                  />
+                 
+                </Route>
 
                 {/* ==================================================
                     BUSINESS DEVELOPMENT MANAGEMENT

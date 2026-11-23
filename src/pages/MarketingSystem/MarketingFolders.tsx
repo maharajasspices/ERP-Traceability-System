@@ -61,7 +61,7 @@ const [editingFolderName, setEditingFolderName] = useState('');
     setError('');
 
     try {
-      const { data, error: fetchError } = await supabase
+      const { data, error: fetchError } = await (supabase as any)
         .from('fms_marketing_items')
         .select('id, name, created_at, metadata')
         .eq('item_type', 'folder')
@@ -93,14 +93,14 @@ const [editingFolderName, setEditingFolderName] = useState('');
           metadata: { is_default: true },
         }));
 
-        const { error: insertError } = await supabase
+        const { error: insertError } = await (supabase as any)
           .from('fms_marketing_items')
           .insert(initialFolders);
 
         if (insertError) throw insertError;
 
         const { data: refreshedData, error: refreshError } =
-          await supabase
+          await (supabase as any)
             .from('fms_marketing_items')
             .select('id, name, created_at, metadata')
             .eq('item_type', 'folder')
@@ -161,7 +161,7 @@ const [editingFolderName, setEditingFolderName] = useState('');
     throw new Error('Please sign in to access the Marketing Workspace.');
     }
 
-      const { error: insertError } = await supabase
+      const { error: insertError } = await (supabase as any)
         .from('fms_marketing_items')
         .insert({
           name,
@@ -206,7 +206,7 @@ window.dispatchEvent(
   }
 
   try {
-    const { error } = await supabase
+    const { error } = await (supabase as any)
       .from('fms_marketing_items')
       .update({ name, updated_at: new Date().toISOString() })
       .eq('id', editingFolderId);
@@ -232,7 +232,7 @@ const deleteFolder = async (folder: WorkspaceFolder) => {
   if (!confirmed) return;
 
   try {
-    const { error } = await supabase
+    const { error } = await (supabase as any)
       .from('fms_marketing_items')
       .delete()
       .eq('id', folder.id);
@@ -452,99 +452,188 @@ const deleteFolder = async (folder: WorkspaceFolder) => {
             }
           >
             {filteredFolders.map((folder) => (
-              <Card
-                key={folder.id}
-                className="group cursor-pointer transition-all hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-md"
-                onClick={() => {
-                  window.location.href =
-                    `/marketing-system/folder/${encodeURIComponent(folder.id)}`;
+              
+<Card
+  key={folder.id}
+  className={`group cursor-pointer transition-all duration-200 hover:-translate-y-1 hover:border-primary/40 hover:shadow-lg ${
+    viewMode === 'grid' ? 'min-h-[210px]' : ''
+  }`}
+  onClick={() => {
+    if (editingFolderId === folder.id) return;
+    window.location.href =
+      `/marketing-system/folder/${encodeURIComponent(folder.id)}`;
+  }}
+>
+  <CardContent
+    className={
+      viewMode === 'grid'
+        ? 'flex min-h-[210px] flex-col p-4'
+        : 'flex items-center justify-between p-4'
+    }
+  >
+    {viewMode === 'grid' ? (
+      <>
+        {/* Card actions */}
+        <div className="flex justify-end gap-1">
+          {editingFolderId !== folder.id && (
+            <>
+              <Button
+                variant="ghost"
+                size="icon"
+                title="Edit folder"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setEditingFolderId(folder.id);
+                  setEditingFolderName(folder.name);
                 }}
               >
-                <CardContent
-                  className={
-                    viewMode === 'grid'
-                      ? 'flex items-center gap-3 p-4'
-                      : 'flex items-center justify-between p-4'
-                  }
+                <Pencil className="h-4 w-4" />
+              </Button>
+
+              <Button
+                variant="ghost"
+                size="icon"
+                title="Delete folder"
+                className="text-destructive hover:text-destructive"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  deleteFolder(folder);
+                }}
+              >
+                <Trash2 className="h-4 w-4" />
+              </Button>
+            </>
+          )}
+        </div>
+
+        {/* Folder icon */}
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 text-center">
+          <div className="rounded-2xl bg-amber-500/10 p-5 transition-colors group-hover:bg-amber-500/20">
+            <Folder className="h-10 w-10 text-amber-600" />
+          </div>
+
+          {editingFolderId === folder.id ? (
+            <div
+              className="w-full space-y-2"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <Input
+                value={editingFolderName}
+                onChange={(event) =>
+                  setEditingFolderName(event.target.value)
+                }
+                className="h-9 text-center"
+                autoFocus
+              />
+
+              <div className="flex justify-center gap-2">
+                <Button size="sm" onClick={updateFolder}>
+                  Save
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setEditingFolderId(null)}
                 >
-                  <div className="flex min-w-0 items-center gap-3">
-                    <div className="rounded-xl bg-amber-500/10 p-3">
-                      <Folder className="h-6 w-6 text-amber-600" />
-                    </div>
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="w-full">
+              <h3 className="text-sm font-semibold leading-snug break-words">
+                {folder.name}
+              </h3>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {folder.createdAt}
+              </p>
+            </div>
+          )}
+        </div>
+      </>
+    ) : (
+      <>
+        {/* List view */}
+        <div className="flex min-w-0 flex-1 items-center gap-3">
+          <div className="rounded-xl bg-amber-500/10 p-3">
+            <Folder className="h-6 w-6 text-amber-600" />
+          </div>
 
-                    <div className="min-w-0">
-                      {editingFolderId === folder.id ? (
-  <div
-    className="flex min-w-0 flex-1 items-center gap-2"
-    onClick={(event) => event.stopPropagation()}
-  >
-    <Input
-      value={editingFolderName}
-      onChange={(event) => setEditingFolderName(event.target.value)}
-      className="h-8"
-      autoFocus
-    />
+          <div className="min-w-0 flex-1">
+            {editingFolderId === folder.id ? (
+              <div
+                className="flex items-center gap-2"
+                onClick={(event) => event.stopPropagation()}
+              >
+                <Input
+                  value={editingFolderName}
+                  onChange={(event) =>
+                    setEditingFolderName(event.target.value)
+                  }
+                  className="h-8"
+                  autoFocus
+                />
+                <Button size="sm" onClick={updateFolder}>
+                  Save
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setEditingFolderId(null)}
+                >
+                  Cancel
+                </Button>
+              </div>
+            ) : (
+              <>
+                <h3 className="truncate text-sm font-semibold">
+                  {folder.name}
+                </h3>
+                <p className="text-xs text-muted-foreground">
+                  {folder.createdAt}
+                </p>
+              </>
+            )}
+          </div>
+        </div>
 
-    <Button size="sm" onClick={updateFolder}>
-      Save
-    </Button>
+        <div
+          className="flex shrink-0 items-center gap-1"
+          onClick={(event) => event.stopPropagation()}
+        >
+          {editingFolderId !== folder.id && (
+            <>
+              <Button
+                variant="ghost"
+                size="icon"
+                title="Edit folder"
+                onClick={() => {
+                  setEditingFolderId(folder.id);
+                  setEditingFolderName(folder.name);
+                }}
+              >
+                <Pencil className="h-4 w-4" />
+              </Button>
 
-    <Button
-      size="sm"
-      variant="outline"
-      onClick={() => setEditingFolderId(null)}
-    >
-      Cancel
-    </Button>
-  </div>
-) : (
-  <div className="min-w-0">
-    <h3 className="truncate text-sm font-semibold">
-      {folder.name}
-    </h3>
-    <p className="text-xs text-muted-foreground">
-      {folder.createdAt}
-    </p>
-  </div>
-)}
-                     
-                    </div>
-                  </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                title="Delete folder"
+                className="text-destructive hover:text-destructive"
+                onClick={() => deleteFolder(folder)}
+              >
+                <Trash2 className="h-4 w-4" />
+              </Button>
+            </>
+          )}
 
-                <div
-  className="flex shrink-0 items-center gap-1"
-  onClick={(event) => event.stopPropagation()}
->
-  {editingFolderId !== folder.id && (
-    <>
-      <Button
-        variant="ghost"
-        size="icon"
-        title="Edit folder"
-        onClick={() => {
-          setEditingFolderId(folder.id);
-          setEditingFolderName(folder.name);
-        }}
-      >
-        <Pencil className="h-4 w-4" />
-      </Button>
+          <ChevronRight className="h-4 w-4 text-muted-foreground" />
+        </div>
+      </>
+    )}
+  </CardContent>
+</Card>
 
-      <Button
-        variant="ghost"
-        size="icon"
-        title="Delete folder"
-        className="text-destructive hover:text-destructive"
-        onClick={() => deleteFolder(folder)}
-      >
-        <Trash2 className="h-4 w-4" />
-      </Button>
-    </>
-  )}
-
-  <ChevronRight className="h-4 w-4 text-muted-foreground" />
-</div>
-                </CardContent>
-              </Card>
             ))}
           </div>
         )}

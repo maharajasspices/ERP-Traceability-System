@@ -17,6 +17,7 @@ const Auth: React.FC = () => {
   fmsUser,
   loading: authLoading,
   fmsUserLoading,
+  signIn,
 } = useFMSAuth();
 
   const { checkPassword, isChecking } = usePasswordBreachCheck();

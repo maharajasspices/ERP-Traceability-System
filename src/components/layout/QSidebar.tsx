@@ -25,6 +25,7 @@ import {
   FileText,
   GraduationCap,
   Building2,
+  Pencil,
 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
@@ -85,6 +86,7 @@ const documentGroups = [
       },
     ],
   },
+ 
   {
     title: 'HR & Training Documents',
     icon: Users,
@@ -98,8 +100,21 @@ const documentGroups = [
         label: 'Training Presentations',
         category: 'Training Presentations',
       },
+     
     ],
   },
+      {
+    title: 'Forms',
+    icon: ClipboardCheck,
+    children: [
+      { label: 'Document Control Distribution', category: 'Document Control Distribution' },
+      { label: 'Obsolete Document List', category: 'Obsolete Document List' },
+      { label: 'Non-Conformance Report', category: 'Non-Conformance Report' },
+      { label: 'Quarantine Tag', category: 'Quarantine Tag',}
+    ],
+  },
+  
+  
 ];
 
 
@@ -133,7 +148,10 @@ const isNguniPage = location.pathname === '/quality-system/nguni';
   };
 
   const categoryLink = (category: string) =>
-    `/quality-system/documents?category=${encodeURIComponent(category)}`;
+  `/quality-system/documents?category=${encodeURIComponent(category)}`;
+
+const formsCategoryLink = (category: string) =>
+  `/quality-system/forms?category=${encodeURIComponent(category)}`;
 
   return (
     <div className="flex h-full flex-col">
@@ -250,7 +268,10 @@ const isNguniPage = location.pathname === '/quality-system/nguni';
     ? location.pathname === child.path
     : selectedCategory === child.category;
 
-  const childLink = child.path || categoryLink(child.category!);
+const childLink = child.path ||
+  (group.title === 'Forms'
+    ? formsCategoryLink(child.category!)
+    : categoryLink(child.category!));
 
   return (
     <Link
