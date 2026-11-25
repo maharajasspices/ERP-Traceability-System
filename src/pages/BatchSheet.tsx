@@ -15,8 +15,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Switch } from '@/components/ui/switch';
 import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
+
 import { Plus, Search, Factory, Printer, Eye, Play, CheckCircle, XCircle, Clock, FileText, Loader2, QrCode, Trash2, Download, Edit2, Camera, Table, Copy, Tag, Sparkles, CalendarDays, BarChart3, ArrowRight } from 'lucide-react';
+
 import { generateQRCodePair, printQRCodes, downloadQRCodeWithLabel, generateQRCodeImage, copyQRCodeWithLabel, renderExpirySticker, downloadExpirySticker, printExpiryStickers } from '@/lib/qrCodeUtils';
+
 import { QRScanner } from '@/components/QRScanner';
 import { PickleBatchWorkflow, ensurePickleRunForBatch, isPickleBatch, computeBatchMaterialRequirements, fetchFreshBomsForPlan } from '@/components/pickle/PickleBatchWorkflow';
 import { exportToExcel } from '@/lib/exportUtils';
@@ -78,8 +81,31 @@ const defaultProcessingSteps: Omit<ProcessingStep, 'id'>[] = [
 
 const Production: React.FC = () => {
   const { user } = useFMSAuth();
-    const { stockCodes, boms, receivingRecords, productionBatches, loading, addProductionBatch,updateProductionBatch, getStockCodeById, getBOMByFinishedGoodId, refreshData, deductStockForBatch, stockLevels, fifoAllocateLots, recordLotUsage, stockReservations, reserveStockForBatch, releaseBatchReservations, consumeBatchReservations, getReservationsForBatch, getReceivingById } = useFMSData();
-
+   const {
+  stockCodes,
+  boms,
+  receivingRecords,
+  productionBatches,
+  loading,
+  loadingMoreProductionBatches,
+  hasMoreProductionBatches,
+  loadMoreProductionBatches,
+  addProductionBatch,
+  updateProductionBatch,
+  getStockCodeById,
+  getBOMByFinishedGoodId,
+  refreshData,
+  deductStockForBatch,
+  stockLevels,
+  fifoAllocateLots,
+  recordLotUsage,
+  stockReservations,
+  reserveStockForBatch,
+  releaseBatchReservations,
+  consumeBatchReservations,
+  getReservationsForBatch,
+  getReceivingById
+} = useFMSData({ pagedProductionBatches: true });
   const getBOMById = (bomId: string | null | undefined) => {
     if (!bomId) return null;
     return boms.find(bom => bom.id === bomId) || null;
@@ -468,13 +494,7 @@ useEffect(() => {
         }
       }
 
-      if (noLotsMaterials.length > 0) {
-        toast.warning(
-          `No stock lots found for: ${[...new Set(noLotsMaterials)].join(', ')}. ` +
-          'Lot numbers will be blank — check that this material has accepted receiving records and that the FIFO SQL migration is applied.',
-          { duration: 10000 }
-        );
-      }
+      
 
       const result = await addProductionBatch({
         finished_good_id: cfg.finished_good_id,
@@ -769,10 +789,15 @@ const handleStartProduction = async (batchId: string) => {
     return;
   }
 
-  toast.success('Production started');
-  await refreshData();
-};
+    setSelectedBatch({
+    ...batch,
+    status: 'pre_weighing',
+    production_start: new Date().toISOString()
+  });
 
+  setViewDialogOpen(true);
+  toast.success('Production started');
+};
 
   /**
    * Return stock that a STARTED batch had already consumed.
@@ -2416,7 +2441,28 @@ const filteredMaterialTotal = useMemo(() => {
           </div>
         )}
       </div>
+      {/* Load More Batch Sheets */}
+      {hasMoreProductionBatches && (
+        <div className="flex justify-center py-6">
+          <Button
+            variant="outline"
+            onClick={() => loadMoreProductionBatches()}
+            disabled={loadingMoreProductionBatches}
+            className="min-w-[180px]"
+          >
+            {loadingMoreProductionBatches ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Loading...
+              </>
+            ) : (
+              'Load More Batch Sheets'
+            )}
+          </Button>
+        </div>
+      )}
 
+     
       {/* View/Manage Dialog */}
       <Dialog open={viewDialogOpen} onOpenChange={setViewDialogOpen}>
         <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-[800px]">
@@ -2601,13 +2647,7 @@ const BatchManagement: React.FC<BatchManagementProps> = ({
         setPreWeighMaterials(next);
         onUpdateBatch({ pre_weigh_materials: next });
       }
-      if (stillMissing.length > 0) {
-        toast.warning(
-          `Could not auto-fill lot numbers for: ${[...new Set(stillMissing)].join(', ')}. ` +
-          'Check that the material has accepted receiving records, and that the stock reservation/FIFO SQL migrations have been applied to the database.',
-          { duration: 10000 }
-        );
-      }
+      
     };
 
     fillMissingLots();

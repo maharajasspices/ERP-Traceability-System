@@ -24,6 +24,7 @@ interface FMSUser {
   id: string;
   user_id: string;
   name: string;
+  email: string;
   role: FMSRole;
   is_active: boolean;
 }

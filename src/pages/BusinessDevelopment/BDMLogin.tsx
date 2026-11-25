@@ -59,7 +59,7 @@ if (
   fmsUser.role === 'system_admin' ||
   fmsUser.role === 'bdm_user'
 ) {
-  navigate('/bdm-system/dashboard', { replace: true });
+  navigate('/bdm/dashboard', { replace: true });
 } else if (fmsUser.role === 'retail_user') {
   navigate('/bdm-system/pricing', { replace: true });
 } else {

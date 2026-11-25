@@ -57,6 +57,11 @@ type SavedNCR = {
   status: string;
   form_data: NCRFormData;
   created_at: string;
+  orignatorName: string;
+  productDescription: string;
+  batchNumber: string;
+  problemDescription: string;
+  critically : string;
 };
 
 const emptyForm = (): NCRFormData => ({
@@ -171,9 +176,7 @@ export default function QualityNCRForm() {
 
       return updated;
     });
-  };
-
-  const generateNCRNumber = async (factory: Factory) => {
+  };const generateNCRNumber = async (factory: Factory) => {
     const year = new Date().getFullYear();
     const suffix = factory === "Rockwood" ? "R" : "N";
 
@@ -183,6 +186,7 @@ export default function QualityNCRForm() {
       .eq("title", "Non-Conformance Report")
       .eq("factory", factory.toLowerCase());
 
+    
     if (error) throw error;
     let highestNumber = 0;
     (data || []).forEach((record: any) => {
@@ -276,7 +280,7 @@ export default function QualityNCRForm() {
   };
 
   const filteredRecords = savedRecords.filter((record) => {
-    const data = record.form_data || {};
+    const data: Partial<NCRFormData> = record.form_data || {};
     const searchable = [
       record.record_number,
       record.factory,

@@ -70,7 +70,7 @@ const BDMLayout: React.FC = () => {
   const currentPage = navigation.find(
     (item) =>
       location.pathname === item.path ||
-      (item.path !== '/bdm-system/dashboard' &&
+      (item.path !== '/bdm/dashboard' &&
         location.pathname.startsWith(item.path))
   );
 
@@ -80,7 +80,7 @@ const BDMLayout: React.FC = () => {
       {/* Logo and Module Name */}
       <div className="flex items-center gap-3 border-b border-sidebar-border px-4 py-4">
         <Link
-          to={isRetailUser ? '/bdm-system/pricing' : '/bdm-system/dashboard'}
+          to={isRetailUser ? '/bdm-system/pricing' : '/bdm/dashboard'}
           className="flex items-center gap-3 overflow-hidden"
         >
           <img
@@ -126,7 +126,7 @@ const BDMLayout: React.FC = () => {
 
           const isActive =
             location.pathname === item.path ||
-            (item.path !== '/bdm-system/dashboard' &&
+            (item.path !== '/bdm/dashboard' &&
               location.pathname.startsWith(item.path));
 
           return (

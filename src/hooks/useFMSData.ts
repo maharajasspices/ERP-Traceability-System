@@ -364,6 +364,7 @@ const dataCache: FMSDataCache = {
 };
 
 const CACHE_TTL = 10 * 60 * 1000; // 10 minutes
+const PRODUCTION_BATCH_PAGE_SIZE = 50;
 
 // How often a cache-HIT mount may re-fetch supplier order emails. Every mount
 // of any page calls fetchData(), so without this throttle each navigation
@@ -388,7 +389,8 @@ interface ValidatedRequestOptions {
 }
 
 // Custom hook for FMS data operations
-export function useFMSData() {
+export function useFMSData(options: { pagedProductionBatches?: boolean } = {}) {
+  const pagedProductionBatches = options.pagedProductionBatches === true;
   const { user, fmsUser } = useFMSAuth();
   const [suppliers, setSuppliers] = useState<FMSSupplier[]>([]);
   const [stockCodes, setStockCodes] = useState<FMSStockCode[]>([]);
@@ -408,6 +410,59 @@ export function useFMSData() {
   // `loading` and unblock as soon as wave 1 (stock codes, suppliers,
   // receiving, BOMs, batches, stock levels) finishes.
   const [secondaryLoading, setSecondaryLoading] = useState(true);
+
+    // Batch Sheets pagination — only enabled for pages that request it.
+  const [loadingMoreProductionBatches, setLoadingMoreProductionBatches] = useState(false);
+  const [hasMoreProductionBatches, setHasMoreProductionBatches] = useState(true);
+
+  const productionBatchOffset = useRef(0);
+  const loadingMoreProductionBatchesRef = useRef(false);
+  const hasMoreProductionBatchesRef = useRef(true);
+
+  const loadMoreProductionBatches = useCallback(async (force = false) => {
+    if (!pagedProductionBatches || !user) return;
+    if (loadingMoreProductionBatchesRef.current) return;
+    if (!force && !hasMoreProductionBatchesRef.current) return;
+
+    loadingMoreProductionBatchesRef.current = true;
+    setLoadingMoreProductionBatches(true);
+
+    try {
+      const from = productionBatchOffset.current;
+
+      const { data, error } = await (supabase
+        .from('fms_production_batches') as any)
+        .select('*')
+        .order('created_at', { ascending: false })
+        .range(from, from + PRODUCTION_BATCH_PAGE_SIZE - 1);
+
+      if (error) throw error;
+
+      const page = (data || []) as FMSProductionBatch[];
+
+      setProductionBatches(prev => {
+        const existingIds = new Set(prev.map(batch => batch.id));
+
+        return [
+          ...prev,
+          ...page.filter(batch => !existingIds.has(batch.id)),
+        ];
+      });
+
+      productionBatchOffset.current = from + page.length;
+
+      const moreAvailable = page.length === PRODUCTION_BATCH_PAGE_SIZE;
+
+      hasMoreProductionBatchesRef.current = moreAvailable;
+      setHasMoreProductionBatches(moreAvailable);
+    } catch (error: any) {
+      console.error('[FMS] Load more production batches failed:', error);
+      toast.error(error?.message || 'Could not load more batch sheets');
+    } finally {
+      loadingMoreProductionBatchesRef.current = false;
+      setLoadingMoreProductionBatches(false);
+    }
+  }, [pagedProductionBatches, user]);
 
 
 
@@ -480,10 +535,26 @@ export function useFMSData() {
       });
 
       if (error) {
-        console.error('[FMS] Edge function error:', error);
-        // Edge function failed (non-2xx, not deployed, runtime error) - use direct fallback
-        return await fallbackDirect();
+  console.error('[FMS] Edge function error:', error);
+
+  const response = (error as any).context;
+
+  if (response && typeof response.clone === 'function') {
+    try {
+      const errorBody = await response.clone().json();
+      console.error('[FMS] Edge function response body:', errorBody);
+    } catch {
+      try {
+        const errorText = await response.clone().text();
+        console.error('[FMS] Edge function response text:', errorText);
+      } catch (readError) {
+        console.error('[FMS] Could not read error response:', readError);
       }
+    }
+  }
+
+  return await fallbackDirect();
+}
 
       if (!data?.success) {
         // If the edge function responded but validation failed, return the error
@@ -517,14 +588,30 @@ export function useFMSData() {
       Date.now() - dataCache.fetchedAt < CACHE_TTL &&
       !force;
 
-    if (cacheValid && dataCache.suppliers && dataCache.stockCodes) {
+    if (
+      cacheValid &&
+      dataCache.suppliers &&
+      dataCache.stockCodes &&
+      (pagedProductionBatches || dataCache.productionBatches !== null)
+    ) {
       // Use cached data - instant load
       setSuppliers(dataCache.suppliers);
       setStockCodes(dataCache.stockCodes);
       if (dataCache.receivingRecords) setReceivingRecords(dataCache.receivingRecords);
       if (dataCache.stockOrders) setStockOrders(dataCache.stockOrders);
       if (dataCache.boms) setBoms(dataCache.boms);
-      if (dataCache.productionBatches) setProductionBatches(dataCache.productionBatches);
+      if (pagedProductionBatches) {
+        setLoading(true);
+        setProductionBatches([]);
+
+        productionBatchOffset.current = 0;
+        hasMoreProductionBatchesRef.current = true;
+        setHasMoreProductionBatches(true);
+
+        await loadMoreProductionBatches(true);
+      } else if (dataCache.productionBatches) {
+        setProductionBatches(dataCache.productionBatches);
+      }
       if (dataCache.dispatchRecords) setDispatchRecords(dataCache.dispatchRecords);
       if (dataCache.stockLevels) setStockLevels(dataCache.stockLevels);
       if (dataCache.stockMovements) setStockMovements(dataCache.stockMovements);
@@ -712,9 +799,12 @@ export function useFMSData() {
           () => []
         ),
 
-        dbOrLocal<FMSProductionBatch>(
+                dbOrLocal<FMSProductionBatch>(
           async () => {
-            const pageSize = 1000;
+            const pageSize = pagedProductionBatches
+              ? PRODUCTION_BATCH_PAGE_SIZE
+              : 1000;
+
             let from = 0;
             const all: FMSProductionBatch[] = [];
 
@@ -730,10 +820,17 @@ export function useFMSData() {
               const page = (data || []) as FMSProductionBatch[];
               all.push(...page);
 
-              if (page.length < pageSize) break;
+              // Batch Sheets only fetches one page initially.
+              // Other FMS pages retain the existing full pagination.
+              if (
+                pagedProductionBatches ||
+                page.length < pageSize
+              ) {
+                break;
+              }
 
               from += pageSize;
-            }  
+            }
 
             return {
               data: all,
@@ -759,7 +856,18 @@ export function useFMSData() {
       if (bomsRes) {
         setBoms(bomsRes.map((bom: any) => withJoinLinks(bom)));
       }
+      
       setProductionBatches(batchesRes);
+
+      if (pagedProductionBatches) {
+        productionBatchOffset.current = batchesRes.length;
+
+        const moreAvailable =
+          batchesRes.length === PRODUCTION_BATCH_PAGE_SIZE;
+
+        hasMoreProductionBatchesRef.current = moreAvailable;
+        setHasMoreProductionBatches(moreAvailable);
+      }
       if (stockLevelsRes) setStockLevels(stockLevelsRes);
       // Wave 1 done: unblock every page that gates on core data only.
       setLoading(false);
@@ -870,8 +978,11 @@ export function useFMSData() {
         dataCache.boms = bomsRes.map((bom: any) => withJoinLinks(bom));
       }
        
-      dataCache.productionBatches = batchesRes;
-      dataCache.dispatchRecords = dispatchRes.map(withDispatchRelations);
+      // Never store a partial Batch Sheets page as the complete shared dataset.
+      dataCache.productionBatches = pagedProductionBatches
+        ? null
+        : batchesRes;
+            dataCache.dispatchRecords = dispatchRes.map(withDispatchRelations);
       dataCache.stockLevels = stockLevelsRes;
       dataCache.stockMovements = stockMovementsRes;
       dataCache.stockReservations = stockReservationsRes;
@@ -892,7 +1003,7 @@ export function useFMSData() {
       inFlightFetch = null;
       signalFetchDone();
     }
-  }, [user]);
+  }, [user, pagedProductionBatches, loadMoreProductionBatches]);
 
   useEffect(() => {
     fetchData();
@@ -1204,9 +1315,16 @@ const loadSupplierOrderEmails = async () => {
     }
 
     if (data) {
-      setProductionBatches(prev => [data, ...prev]);
-      toast.success('Batch created successfully');
-    }
+  setProductionBatches(prev => [data, ...prev]);
+
+  if (pagedProductionBatches) {
+    productionBatchOffset.current += 1;
+    hasMoreProductionBatchesRef.current = true;
+    setHasMoreProductionBatches(true);
+  }
+
+  toast.success('Batch created successfully');
+}
     return data;
   };
 
@@ -2212,6 +2330,9 @@ const markTruckDeparted = async (
     stockOrders,
     loading,
     secondaryLoading,
+    loadingMoreProductionBatches,
+    hasMoreProductionBatches,
+    loadMoreProductionBatches,
     
     // Refresh (forces a fresh fetch, bypassing cache)
     refreshData: () => fetchData(true),
