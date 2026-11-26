@@ -1622,6 +1622,950 @@ function QualityQuarantineTag() {
 }
 
 
+type ConcessionItem = {
+  id: number;
+  itemNumber: string;
+  signature: string;
+  price: string;
+};
+
+type ConcessionFormData = {
+  factory: Factory;
+  date: string;
+  requesterName: string;
+  companyName: string;
+  address: string;
+  contactPerson: string;
+  deliveryNoteNumber: string;
+  invoiceNumber: string;
+  productDescription: string;
+  ncrNumber: string;
+  reasonForConcession: string;
+  acceptanceReason: string;
+  acceptingSignature: string;
+  acceptingDate: string;
+  items: ConcessionItem[];
+};
+
+type SavedConcession = {
+  id: string;
+  record_number: string;
+  factory: string;
+  form_data: ConcessionFormData;
+  status: string;
+  created_at: string;
+};
+
+const emptyConcession = (): ConcessionFormData => ({
+  factory: "",
+  date: new Date().toISOString().slice(0, 10),
+  requesterName: "",
+  companyName: "",
+  address: "",
+  contactPerson: "",
+  deliveryNoteNumber: "",
+  invoiceNumber: "",
+  productDescription: "",
+  ncrNumber: "",
+  reasonForConcession: "",
+  acceptanceReason: "",
+  acceptingSignature: "",
+  acceptingDate: "",
+  items: [{ id: 1, itemNumber: "1", signature: "", price: "" }],
+});
+
+function QualityConcessionRecord() {
+  const [form, setForm] = useState<ConcessionFormData>(emptyConcession());
+  const [records, setRecords] = useState<SavedConcession[]>([]);
+  const [activeView, setActiveView] = useState<"new" | "master">("new");
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [searchTerm, setSearchTerm] = useState("");
+
+  const loadRecords = async () => {
+    setLoading(true);
+
+    const { data, error } = await (supabase as any)
+      .from("fms_quality_records")
+      .select("*")
+      .eq("title", "Concession Record")
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      console.error("Error loading concession records:", error);
+      alert("Could not load the Concession Register.");
+    } else {
+      setRecords((data || []) as SavedConcession[]);
+    }
+
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    loadRecords();
+  }, []);
+
+  const updateField = (field: keyof ConcessionFormData, value: string) => {
+    setForm((previous) => ({ ...previous, [field]: value }));
+  };
+
+  const updateItem = (
+    id: number,
+    field: keyof ConcessionItem,
+    value: string
+  ) => {
+    setForm((previous) => ({
+      ...previous,
+      items: previous.items.map((item) =>
+        item.id === id ? { ...item, [field]: value } : item
+      ),
+    }));
+  };
+
+  const addItem = () => {
+    setForm((previous) => ({
+      ...previous,
+      items: [
+        ...previous.items,
+        {
+          id: Date.now(),
+          itemNumber: String(previous.items.length + 1),
+          signature: "",
+          price: "",
+        },
+      ],
+    }));
+  };
+
+  const removeItem = (id: number) => {
+    setForm((previous) => ({
+      ...previous,
+      items: previous.items
+        .filter((item) => item.id !== id)
+        .map((item, index) => ({
+          ...item,
+          itemNumber: String(index + 1),
+        })),
+    }));
+  };
+
+  const saveConcession = async () => {
+    if (!form.factory) {
+      alert("Please select a factory.");
+      return;
+    }
+
+    if (!form.date || !form.requesterName.trim()) {
+      alert("Please complete the date and name of the person requesting concession.");
+      return;
+    }
+
+    if (!form.productDescription.trim() || !form.reasonForConcession.trim()) {
+      alert("Please complete the product description and reason for concession.");
+      return;
+    }
+
+    setSaving(true);
+
+    try {
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+
+      if (userError || !user) {
+        throw new Error("Your session could not be verified. Please log in again.");
+      }
+
+      const recordNumber = `CON-${new Date().getFullYear()}-${Date.now()}`;
+
+      const { error } = await supabase
+        .from("fms_quality_records")
+        .insert({
+          title: "Concession Record",
+          record_number: recordNumber,
+          factory: form.factory.toLowerCase(),
+          form_data: {
+            ...form,
+            factory: form.factory,
+          },
+          status: "submitted",
+          created_by: user.id,
+          updated_by: user.id,
+          submitted_at: new Date().toISOString(),
+        });
+
+      if (error) throw error;
+
+      alert(`Concession Record saved successfully.\nInternal Reference: ${recordNumber}`);
+
+      setForm(emptyConcession());
+      await loadRecords();
+      setActiveView("master");
+    } catch (error: any) {
+      console.error("Error saving concession record:", error);
+      alert(error.message || "Could not save the Concession Record.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const filteredRecords = records.filter((record) => {
+    const data = record.form_data || {};
+    const search = searchTerm.toLowerCase();
+
+    return [
+      record.record_number,
+      record.factory,
+      data.requesterName,
+      data.companyName,
+      data.productDescription,
+      data.ncrNumber,
+    ].some((value) => String(value || "").toLowerCase().includes(search));
+  });
+
+  const inputField = (
+    label: string,
+    field: keyof ConcessionFormData,
+    type = "text"
+  ) => (
+    <label className="ncr-field">
+      <span>{label}</span>
+      <input
+        type={type}
+        value={String(form[field] || "")}
+        onChange={(e) => updateField(field, e.target.value)}
+      />
+    </label>
+  );
+
+  const textAreaField = (
+    label: string,
+    field: keyof ConcessionFormData
+  ) => (
+    <label className="ncr-field">
+      <span>{label}</span>
+      <textarea
+        value={String(form[field] || "")}
+        onChange={(e) => updateField(field, e.target.value)}
+        rows={3}
+      />
+    </label>
+  );
+
+  return (
+    <div className="quality-register-page">
+      <div className="register-topbar no-print">
+        <h2>Concession Record</h2>
+        <button
+          className="register-btn"
+          type="button"
+          onClick={loadRecords}
+          disabled={loading}
+        >
+          {loading ? "Refreshing..." : "Refresh Register"}
+        </button>
+      </div>
+
+      <div className="register-tabs no-print">
+  <button
+    type="button"
+    className={`register-tab ${activeView === "new" ? "active" : ""}`}
+    onClick={() => setActiveView("new")}
+  >
+    New Concession Record
+  </button>
+
+  <button
+    type="button"
+    className={`register-tab ${activeView === "master" ? "active" : ""}`}
+    onClick={() => {
+      setActiveView("master");
+      loadRecords();
+    }}
+  >
+    Master Concession Register ({records.length})
+  </button>
+</div>
+
+      {activeView === "new" && (
+        <div className="register-paper">
+          <div className="ncr-sheet">
+            <div className="ncr-header">
+              <img
+                className="ncr-logo"
+                src="/images/mslogo.png"
+                alt="Maharaja's Spices"
+              />
+              <div className="ncr-title">CONCESSION RECORD</div>
+            </div>
+
+            <div className="ncr-document-details">
+              <span>Doc No.: MS Q002 FORM 3</span>
+              <span>Issue Date: 12/06/2019</span>
+              <span>Version No.: 2</span>
+              <span>Rev Date: 14/01/2025</span>
+            </div>
+
+            <div className="ncr-approval-row">
+              <span>Compiled By: Tania Naicker</span>
+              <span>Approved By: Livinia Govender</span>
+            </div>
+
+            <div className="ncr-factory">
+              <label>
+                Factory:
+                <select
+                  value={form.factory}
+                  onChange={(e) =>
+                    updateField("factory", e.target.value)
+                  }
+                >
+                  <option value="">Select Factory</option>
+                  <option value="Rockwood">Rockwood</option>
+                  <option value="Nguni">Nguni</option>
+                </select>
+              </label>
+              <span>
+                Internal Record Ref.: Generated when saved
+              </span>
+            </div>
+
+            <div className="ncr-grid">
+              {inputField("Date", "date", "date")}
+              {inputField("Name of person requesting concession", "requesterName")}
+              {inputField("Company Name", "companyName")}
+              {inputField("Address", "address")}
+              {inputField("Contact Person", "contactPerson")}
+              {inputField("Delivery Note No.", "deliveryNoteNumber")}
+              {inputField("Invoice No.", "invoiceNumber")}
+              {inputField("NCR No.", "ncrNumber")}
+            </div>
+
+            <div className="ncr-section-heading">
+              PRODUCT DESCRIPTION
+            </div>
+            {textAreaField("Product Description", "productDescription")}
+
+            <div className="ncr-section-heading">
+              REASON FOR CONCESSION
+            </div>
+            {textAreaField("Reason for Concession", "reasonForConcession")}
+
+            <div className="ncr-section-heading">
+              CONCESSION DETAILS
+            </div>
+
+            <table className="master-table">
+              <thead>
+                <tr>
+                  <th>No.</th>
+                  <th>Signature</th>
+                  <th>Price</th>
+                  <th className="no-print">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {form.items.map((item) => (
+                  <tr key={item.id}>
+                    <td>
+                      <input
+                        value={item.itemNumber}
+                        onChange={(e) =>
+                          updateItem(item.id, "itemNumber", e.target.value)
+                        }
+                      />
+                    </td>
+                    <td>
+                      <input
+                        value={item.signature}
+                        onChange={(e) =>
+                          updateItem(item.id, "signature", e.target.value)
+                        }
+                      />
+                    </td>
+                    <td>
+                      <input
+                        value={item.price}
+                        onChange={(e) =>
+                          updateItem(item.id, "price", e.target.value)
+                        }
+                      />
+                    </td>
+                    <td className="no-print">
+                      <button
+                        type="button"
+                        className="register-btn"
+                        onClick={() => removeItem(item.id)}
+                        disabled={form.items.length === 1}
+                      >
+                        Remove
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+
+            <button
+              type="button"
+              className="register-btn no-print"
+              onClick={addItem}
+            >
+              + Add Row
+            </button>
+
+            <div className="ncr-section-heading">
+              PERSON ACCEPTING CONCESSION
+            </div>
+
+            {textAreaField(
+              "Reason for accepting / not accepting",
+              "acceptanceReason"
+            )}
+
+            <div className="ncr-grid">
+              {inputField("Signature", "acceptingSignature")}
+              {inputField("Date", "acceptingDate", "date")}
+            </div>
+
+            <div className="document-footer">
+              <span>Doc No.: MS Q002 FORM 3</span>
+              <span>Page 1 of 1</span>
+              <span>Version No.: 2</span>
+            </div>
+          </div>
+
+          <div className="ncr-save-area no-print">
+            <button
+              type="button"
+              className="register-btn"
+              onClick={() => window.print()}
+            >
+              Print Form
+            </button>
+            <button
+              type="button"
+              className="register-btn"
+              onClick={saveConcession}
+              disabled={saving}
+            >
+              {saving ? "Saving..." : "Save Concession Record"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {activeView === "master" && (
+        <div className="register-paper">
+          <div className="register-topbar">
+            <h3>Master Concession Register</h3>
+            <input
+              className="register-search"
+              placeholder="Search records..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+            />
+          </div>
+
+          {loading ? (
+            <p>Loading records...</p>
+          ) : (
+            <div className="table-responsive">
+              <table className="master-table">
+                <thead>
+                  <tr>
+                    <th>Factory</th>
+                    <th>Internal Record Ref.</th>
+                    <th>Date</th>
+                    <th>Requester</th>
+                    <th>Company</th>
+                    <th>Product Description</th>
+                    <th>NCR No.</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredRecords.length === 0 ? (
+                    <tr>
+                      <td colSpan={8}>No concession records found.</td>
+                    </tr>
+                  ) : (
+                    filteredRecords.map((record) => (
+                      <tr key={record.id}>
+                        <td>{record.factory}</td>
+                        <td>{record.record_number}</td>
+                        <td>{record.form_data?.date || "—"}</td>
+                        <td>{record.form_data?.requesterName || "—"}</td>
+                        <td>{record.form_data?.companyName || "—"}</td>
+                        <td>{record.form_data?.productDescription || "—"}</td>
+                        <td>{record.form_data?.ncrNumber || "—"}</td>
+                        <td>{record.status || "Submitted"}</td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+type QuarantineRegisterEntry = {
+  id: number;
+  date: string;
+  number: string;
+  description: string;
+  reason: string;
+  actioned: string;
+  ncrNumber: string;
+  supplier: string;
+  deliveryNoteNumber: string;
+  batchNumber: string;
+  quantityAffected: string;
+  quantityPerOutcome: string;
+  outcome: string;
+  comment: string;
+  authorisedBy: string;
+};
+
+type SavedQuarantineRegister = {
+  id: string;
+  record_number: string;
+  factory: string;
+  form_data: {
+    factory: string;
+    entries: QuarantineRegisterEntry[];
+  };
+  status: string;
+  created_at: string;
+};
+
+const emptyQuarantineRegisterEntry = (): QuarantineRegisterEntry => ({
+  id: Date.now(),
+  date: new Date().toISOString().slice(0, 10),
+  number: "",
+  description: "",
+  reason: "",
+  actioned: "",
+  ncrNumber: "",
+  supplier: "",
+  deliveryNoteNumber: "",
+  batchNumber: "",
+  quantityAffected: "",
+  quantityPerOutcome: "",
+  outcome: "",
+  comment: "",
+  authorisedBy: "",
+});
+
+function QualityQuarantineRegister() {
+  const [factory, setFactory] = useState<Factory>("");
+  const [entries, setEntries] = useState<QuarantineRegisterEntry[]>([
+    emptyQuarantineRegisterEntry(),
+  ]);
+  const [records, setRecords] = useState<SavedQuarantineRegister[]>([]);
+  const [activeView, setActiveView] = useState<"new" | "master">("new");
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [searchTerm, setSearchTerm] = useState("");
+
+  const outcomes = [
+    "Return to supplier",
+    "Accepted on Concession",
+    "Returned to Stock",
+    "Sold on Concession",
+    "Scrapped",
+  ];
+
+  const loadRecords = async () => {
+    setLoading(true);
+
+    const { data, error } = await supabase
+      .from("fms_quality_records")
+      .select("*")
+      .eq("title", "Quarantine Register")
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      console.error("Error loading quarantine register:", error);
+      alert("Could not load the Quarantine Register.");
+    } else {
+      setRecords((data || []) as SavedQuarantineRegister[]);
+    }
+
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    loadRecords();
+  }, []);
+
+  const updateEntry = (
+    id: number,
+    field: keyof QuarantineRegisterEntry,
+    value: string
+  ) => {
+    setEntries((previous) =>
+      previous.map((entry) =>
+        entry.id === id ? { ...entry, [field]: value } : entry
+      )
+    );
+  };
+
+  const addEntry = () => {
+    setEntries((previous) => [
+      ...previous,
+      {
+        ...emptyQuarantineRegisterEntry(),
+        id: Date.now() + previous.length,
+        number: String(previous.length + 1),
+      },
+    ]);
+  };
+
+  const removeEntry = (id: number) => {
+    setEntries((previous) =>
+      previous
+        .filter((entry) => entry.id !== id)
+        .map((entry, index) => ({
+          ...entry,
+          number: String(index + 1),
+        }))
+    );
+  };
+
+  const saveRegister = async () => {
+    if (!factory) {
+      alert("Please select a factory.");
+      return;
+    }
+
+    const completedEntries = entries.filter(
+      (entry) =>
+        entry.description.trim() ||
+        entry.reason.trim() ||
+        entry.supplier.trim() ||
+        entry.ncrNumber.trim()
+    );
+
+    if (completedEntries.length === 0) {
+      alert("Please enter at least one quarantine register entry.");
+      return;
+    }
+
+    setSaving(true);
+
+    try {
+      const {
+        data: { user },
+        error: userError,
+      } = await supabase.auth.getUser();
+
+      if (userError || !user) {
+        throw new Error("Your session could not be verified. Please log in again.");
+      }
+
+      const recordNumber = `QREG-${new Date().getFullYear()}-${Date.now()}`;
+
+      const { error } = await supabase
+        .from("fms_quality_records")
+        .insert({
+          title: "Quarantine Register",
+          record_number: recordNumber,
+          factory: factory.toLowerCase(),
+          form_data: {
+            factory,
+            entries: completedEntries,
+          },
+          status: "submitted",
+          created_by: user.id,
+          updated_by: user.id,
+          submitted_at: new Date().toISOString(),
+        });
+
+      if (error) throw error;
+
+      alert(`Quarantine Register saved successfully.\nInternal Reference: ${recordNumber}`);
+
+      setFactory("");
+      setEntries([emptyQuarantineRegisterEntry()]);
+      await loadRecords();
+      setActiveView("master");
+    } catch (error: any) {
+      console.error("Error saving quarantine register:", error);
+      alert(error.message || "Could not save the Quarantine Register.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const filteredRecords = records.filter((record) => {
+    const search = searchTerm.toLowerCase();
+    const data = record.form_data || {};
+
+    return [
+      record.record_number,
+      record.factory,
+      ...(data.entries || []).flatMap((entry) => [
+        entry.description,
+        entry.supplier,
+        entry.ncrNumber,
+        entry.batchNumber,
+        entry.outcome,
+      ]),
+    ].some((value) => String(value || "").toLowerCase().includes(search));
+  });
+
+  const field = (
+    entry: QuarantineRegisterEntry,
+    label: string,
+    key: keyof QuarantineRegisterEntry,
+    type = "text"
+  ) => (
+    <label className="ncr-field">
+      <span>{label}</span>
+      <input
+        type={type}
+        value={entry[key] as string}
+        onChange={(e) => updateEntry(entry.id, key, e.target.value)}
+      />
+    </label>
+  );
+
+  return (
+    <div className="quality-register-page">
+      <div className="register-topbar no-print">
+        <h2>Quarantine Register</h2>
+        <button
+          type="button"
+          className="register-btn"
+          onClick={loadRecords}
+          disabled={loading}
+        >
+          {loading ? "Refreshing..." : "Refresh Register"}
+        </button>
+      </div>
+
+      <div className="register-tabs no-print">
+        <button
+          type="button"
+          className={`register-tab ${activeView === "new" ? "active" : ""}`}
+          onClick={() => setActiveView("new")}
+        >
+          New Register Entry
+        </button>
+
+        <button
+          type="button"
+          className={`register-tab ${activeView === "master" ? "active" : ""}`}
+          onClick={() => {
+            setActiveView("master");
+            loadRecords();
+          }}
+        >
+          Master Quarantine Register ({records.length})
+        </button>
+      </div>
+
+      {activeView === "new" && (
+        <div className="register-paper">
+          <div className="ncr-sheet">
+            <div className="ncr-header">
+              <img
+                className="ncr-logo"
+                src="/images/mslogo.png"
+                alt="Maharaja's Spices"
+              />
+              <div className="ncr-title">QUARANTINE REGISTER</div>
+            </div>
+
+            <div className="ncr-document-details">
+              <span>Doc No.: MS Q002 LOG 2</span>
+              <span>Issue Date: 12/06/2019</span>
+              <span>Revision Date: 14/01/2025</span>
+              <span>Version No.: 2</span>
+            </div>
+
+            <div className="ncr-approval-row">
+              <span>Compiled By: Tania Naicker</span>
+              <span>Approved By: Livinia Govender</span>
+            </div>
+
+            <div className="ncr-factory">
+              <label>
+                Factory:
+                <select
+                  value={factory}
+                  onChange={(e) => setFactory(e.target.value as Factory)}
+                >
+                  <option value="">Select Factory</option>
+                  <option value="Rockwood">Rockwood</option>
+                  <option value="Nguni">Nguni</option>
+                </select>
+              </label>
+            </div>
+
+            <div className="ncr-section-heading">
+              QUARANTINE REGISTER ENTRIES
+            </div>
+
+            {entries.map((entry, index) => (
+              <div className="ncr-register-entry" key={entry.id}>
+                <div className="ncr-section-heading">
+                  Entry {index + 1}
+                  <button
+                    type="button"
+                    className="register-btn no-print"
+                    onClick={() => removeEntry(entry.id)}
+                    disabled={entries.length === 1}
+                  >
+                    Remove Entry
+                  </button>
+                </div>
+
+                <div className="ncr-grid">
+                  {field(entry, "Date", "date", "date")}
+                  {field(entry, "No.", "number")}
+                  {field(entry, "NCR No.", "ncrNumber")}
+                  {field(entry, "Supplier", "supplier")}
+                  {field(entry, "Delivery Note No.", "deliveryNoteNumber")}
+                  {field(entry, "Batch No.", "batchNumber")}
+                  {field(entry, "Quantity Affected", "quantityAffected")}
+                </div>
+
+                {field(entry, "Description of Material", "description")}
+                {field(entry, "Reason for Quarantine", "reason")}
+
+                <div className="ncr-grid">
+                  {field(entry, "Actioned", "actioned")}
+                  <label className="ncr-field">
+                    <span>Outcome</span>
+                    <select
+                      value={entry.outcome}
+                      onChange={(e) =>
+                        updateEntry(entry.id, "outcome", e.target.value)
+                      }
+                    >
+                      <option value="">Select Outcome</option>
+                      {outcomes.map((outcome) => (
+                        <option key={outcome} value={outcome}>
+                          {outcome}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  {field(entry, "Quantity per Outcome", "quantityPerOutcome")}
+                  {field(entry, "Authorised By", "authorisedBy")}
+                </div>
+
+                {field(entry, "Comment", "comment")}
+              </div>
+            ))}
+
+            <button
+              type="button"
+              className="register-btn no-print"
+              onClick={addEntry}
+            >
+              + Add Register Entry
+            </button>
+
+            <div className="document-footer">
+              <span>DOC No.: MS Q002 LOG 2</span>
+              <span>Page 1 of 1</span>
+              <span>Version No.: 2</span>
+            </div>
+          </div>
+
+          <div className="ncr-save-area no-print">
+            <button
+              type="button"
+              className="register-btn"
+              onClick={() => window.print()}
+            >
+              Print Register
+            </button>
+            <button
+              type="button"
+              className="register-btn"
+              onClick={saveRegister}
+              disabled={saving}
+            >
+              {saving ? "Saving..." : "Save Register"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {activeView === "master" && (
+        <div className="register-paper">
+          <div className="register-topbar">
+            <h3>Master Quarantine Register</h3>
+            <input
+              className="register-search"
+              placeholder="Search register..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+            />
+          </div>
+
+          {loading ? (
+            <p>Loading register...</p>
+          ) : (
+            <div className="table-responsive">
+              <table className="master-table">
+                <thead>
+                  <tr>
+                    <th>Factory</th>
+                    <th>Internal Reference</th>
+                    <th>Date</th>
+                    <th>Description of Material</th>
+                    <th>Supplier</th>
+                    <th>Batch No.</th>
+                    <th>NCR No.</th>
+                    <th>Outcome</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredRecords.length === 0 ? (
+                    <tr>
+                      <td colSpan={8}>No quarantine register entries found.</td>
+                    </tr>
+                  ) : (
+                    filteredRecords.flatMap((record) =>
+                      (record.form_data?.entries || []).map((entry) => (
+                        <tr key={`${record.id}-${entry.id}`}>
+                          <td>{record.factory}</td>
+                          <td>{record.record_number}</td>
+                          <td>{entry.date || "—"}</td>
+                          <td>{entry.description || "—"}</td>
+                          <td>{entry.supplier || "—"}</td>
+                          <td>{entry.batchNumber || "—"}</td>
+                          <td>{entry.ncrNumber || "—"}</td>
+                          <td>{entry.outcome || "—"}</td>
+                        </tr>
+                      ))
+                    )
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+
+
+
 export default function QualityDigitalForms() {
   const location = useLocation();
 
@@ -1643,7 +2587,12 @@ export default function QualityDigitalForms() {
       {selectedCategory === "Quarantine Tag" && (
         <QualityQuarantineTag />
       )}
-
+      {selectedCategory === "Concession Record" && (
+        <QualityConcessionRecord />
+      )}
+      {selectedCategory === "Quarantine Register" && (
+  <QualityQuarantineRegister />
+)}
       {!selectedCategory && (
         <div className="register-paper">
           Select a form from the Forms section in the sidebar.
@@ -1655,7 +2604,9 @@ export default function QualityDigitalForms() {
           "Document Control Distribution",
           "Obsolete Document List",
           "Non-Conformance Report",
-          "Quarantine Tag"
+          "Quarantine Tag",
+          "Concession Record",
+          "Quarantine Register"
         ].includes(selectedCategory) && (
           <div className="register-paper">
             Form not found.

@@ -3,7 +3,6 @@ import React, { useState } from 'react';
 import { Link, useLocation, Outlet } from 'react-router-dom';
 import { useFMSAuth } from '@/context/FMSAuthContext';
 import { cn } from '@/lib/utils';
-
 import {
   LayoutDashboard,
   FileSpreadsheet,
@@ -49,34 +48,26 @@ const navigation = [
     icon: FolderOpen,
   },
 ];
-
 const BDMLayout: React.FC = () => {
   const location = useLocation();
   const { fmsUser } = useFMSAuth();
-
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
-
   const isRetailUser = fmsUser?.role === 'retail_user';
-
   const visibleNavigation = isRetailUser
     ? navigation.filter((item) =>
         ['Retail Pricing', 'Product Catalogue'].includes(item.title)
       )
     : navigation;
-
   const displayName = fmsUser?.name || 'Business Development User';
-
   const currentPage = navigation.find(
     (item) =>
       location.pathname === item.path ||
       (item.path !== '/bdm/dashboard' &&
         location.pathname.startsWith(item.path))
   );
-
   const SidebarContent = () => (
     <div className="flex h-full flex-col bg-sidebar">
-
       {/* Logo and Module Name */}
       <div className="flex items-center gap-3 border-b border-sidebar-border px-4 py-4">
         <Link
@@ -88,7 +79,6 @@ const BDMLayout: React.FC = () => {
             alt="Maharaja's Spices"
             className="h-10 w-auto object-contain"
           />
-
           {!sidebarCollapsed && (
             <div className="min-w-0">
               <p className="text-sm font-bold text-sidebar-foreground">
@@ -100,7 +90,6 @@ const BDMLayout: React.FC = () => {
             </div>
           )}
         </Link>
-
         <button
           type="button"
           onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
@@ -114,21 +103,17 @@ const BDMLayout: React.FC = () => {
           )}
         </button>
       </div>
-
       {/* Navigation */}
       <nav className="flex-1 space-y-2 overflow-y-auto p-3">
         <p className="mb-3 px-3 text-xs font-semibold uppercase tracking-wider text-sidebar-foreground/50">
           Workspace
         </p>
-
         {visibleNavigation.map((item) => {
           const Icon = item.icon;
-
           const isActive =
             location.pathname === item.path ||
             (item.path !== '/bdm/dashboard' &&
               location.pathname.startsWith(item.path));
-
           return (
             <Link
               key={item.path}
@@ -145,7 +130,6 @@ const BDMLayout: React.FC = () => {
               )}
             >
               <Icon size={19} className="shrink-0" />
-
               {!sidebarCollapsed && (
                 <span className="truncate">{item.title}</span>
               )}
@@ -153,7 +137,6 @@ const BDMLayout: React.FC = () => {
           );
         })}
       </nav>
-
       {/* Bottom Navigation */}
       <div className="space-y-1 border-t border-sidebar-border p-3">
         <Link
@@ -161,30 +144,25 @@ const BDMLayout: React.FC = () => {
           className={cn(
             'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-sidebar-foreground transition-colors hover:bg-sidebar-accent',
             sidebarCollapsed && 'justify-center px-2'
-          )}
-        >
+          )}>
           <ArrowLeft size={19} />
           {!sidebarCollapsed && <span>Back to ERP</span>}
         </Link>
-
         <button
           type="button"
           onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
           className={cn(
             'flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-sidebar-foreground transition-colors hover:bg-sidebar-accent',
             sidebarCollapsed && 'justify-center px-2'
-          )}
-        >
+          )}>
           <LogOut size={19} />
           {!sidebarCollapsed && <span>Sign Out</span>}
         </button>
       </div>
     </div>
   );
-
   return (
     <div className="min-h-screen bg-muted/30">
-
       {/* Desktop Sidebar */}
       <aside
         className={cn(
@@ -193,7 +171,6 @@ const BDMLayout: React.FC = () => {
         )}
       >
         <SidebarContent />
-
         <button
           type="button"
           onClick={() => setSidebarCollapsed((previous) => !previous)}
@@ -207,7 +184,6 @@ const BDMLayout: React.FC = () => {
           )}
         </button>
       </aside>
-
       {/* Mobile Sidebar */}
       {mobileOpen && (
         <div className="fixed inset-0 z-50 lg:hidden">
@@ -221,7 +197,6 @@ const BDMLayout: React.FC = () => {
           </aside>
         </div>
       )}
-
       {/* Main Content */}
       <div
         className={cn(
@@ -231,7 +206,6 @@ const BDMLayout: React.FC = () => {
       >
         {/* Header */}
         <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b bg-background/95 px-4 backdrop-blur md:px-6">
-
           <div className="flex items-center gap-3">
             <button
               onClick={() => setMobileOpen(true)}
@@ -239,7 +213,6 @@ const BDMLayout: React.FC = () => {
             >
               <Menu size={22} />
             </button>
-
             <div>
               <h1 className="text-lg font-semibold text-foreground">
                 {currentPage?.title || 'Business Development'}
@@ -249,7 +222,6 @@ const BDMLayout: React.FC = () => {
               </p>
             </div>
           </div>
-
           <div className="flex items-center gap-3">
             <div className="hidden text-right sm:block">
               <p className="text-sm font-medium text-foreground">
@@ -265,7 +237,6 @@ const BDMLayout: React.FC = () => {
             </div>
           </div>
         </header>
-
         {/* Page Content */}
         <main className="min-h-[calc(100vh-4rem)] overflow-x-hidden p-4 md:p-6">
           <Outlet />
@@ -274,5 +245,4 @@ const BDMLayout: React.FC = () => {
     </div>
   );
 };
-
 export default BDMLayout;

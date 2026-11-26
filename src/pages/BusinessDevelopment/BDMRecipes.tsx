@@ -1,21 +1,49 @@
-import { Button } from "@/components/ui/button";
-import React, { useEffect, useState } from 'react';
+
+import React, { useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import {
   BookOpen,
-  Plus,
   Search,
   Eye,
   RefreshCw,
+  Package,
+  CalendarDays,
+  Layers,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { Button } from '@/components/ui/button';
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
   DialogDescription,
-} from "@/components/ui/dialog";
+} from '@/components/ui/dialog';
+
+interface RecipeIngredient {
+  id?: string;
+  stock_code?: string;
+  stock_code_id?: string | null;
+  ingredient_name?: string;
+  quantity?: number | string;
+  unit?: string;
+  uom?: string;
+}
+
+interface RecipeStage {
+  id?: string;
+  stage_number?: number;
+  stage_name?: string;
+  process?: string;
+  instructions?: string;
+  ingredients?: RecipeIngredient[];
+}
+
+interface RecipeData {
+  batch_size_kg?: number | string;
+  ingredients?: RecipeIngredient[];
+  stages?: RecipeStage[];
+}
 
 interface Recipe {
   id: string;
@@ -28,392 +56,227 @@ interface Recipe {
   version: number;
   status: string;
   is_current: boolean;
-  recipe_data: any;
-  costing_data: any;
-  trial_data: any;
-  specifications_data: any;
+  recipe_data: RecipeData | null;
+  costing_data: Record<string, any> | null;
+  trial_data: Record<string, any> | null;
+  specifications_data: Record<string, any> | null;
   approved_by: string | null;
   approved_at: string | null;
   updated_at: string;
+  created_at?: string;
 }
-
-interface RecipeIngredient {
-  id: string;
-  stock_code: string;
-  ingredient_name: string;
-  quantity: string;
-  uom: string;
-  notes: string;
-}
-
-interface RecipeStage {
-  id: string;
-  stage_name: string;
-  process: string;
-  ingredients: RecipeIngredient[];
-}
-
-const createRecipeIngredient = (): RecipeIngredient => ({
-  id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-  stock_code: '',
-  ingredient_name: '',
-  quantity: '',
-  uom: 'kg',
-  notes: '',
-});
-
-const createRecipeStage = (number: number): RecipeStage => ({
-  id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
-  stage_name: `Stage ${number}`,
-  process: '',
-  ingredients: [createRecipeIngredient()],
-});
-
-const getStageTotals = (ingredients: RecipeIngredient[]) => {
-  const totals = {
-    kg: 0,
-    L: 0,
-    '%': 0,
-    units: 0,
-  };
-
-  ingredients.forEach((item) => {
-    const quantity = Number(item.quantity) || 0;
-
-    switch (item.uom) {
-      case 'kg':
-        totals.kg += quantity;
-        break;
-      case 'g':
-        totals.kg += quantity / 1000;
-        break;
-      case 'L':
-        totals.L += quantity;
-        break;
-      case 'ml':
-        totals.L += quantity / 1000;
-        break;
-      case '%':
-        totals['%'] += quantity;
-        break;
-      case 'Units':
-      case 'Pieces':
-        totals.units += quantity;
-        break;
-    }
-  });
-
-  return totals;
-};
-
 
 const BDMRecipes = () => {
   const [recipes, setRecipes] = useState<Recipe[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
-
-  
-const [showAddRecipe, setShowAddRecipe] = useState(false);
-const [saving, setSaving] = useState(false);
-
-const [recipeName, setRecipeName] = useState('');
-const [productCode, setProductCode] = useState('');
-const [category, setCategory] = useState('');
-const [description, setDescription] = useState('');
-const [preparationStage, setPreparationStage] = useState('');
-
-const [selectedRecipe, setSelectedRecipe] = useState<Recipe | null>(null);
-const [showRecipeDetails, setShowRecipeDetails] = useState(false);
-
-const [recipeStages, setRecipeStages] = useState<RecipeStage[]>([
-  createRecipeStage(1),
-]);
+  const [selectedRecipe, setSelectedRecipe] = useState<Recipe | null>(null);
+  const [showRecipeDetails, setShowRecipeDetails] = useState(false);
 
   const loadRecipes = async () => {
-  try {
-    setLoading(true);
+    try {
+      setLoading(true);
 
-    const { data, error } = await (supabase as any)
-  .from('fms_bdm_developments')
-  .select('*')
-  .eq('record_type', 'revision')
-  .eq('status', 'approved')
-  .order('approved_at', { ascending: false });
-    
+      const { data, error } = await (supabase as any)
+        .from('fms_bdm_developments')
+        .select('*')
+        .eq('record_type', 'revision')
+        .eq('status', 'approved')
+        .order('approved_at', { ascending: false, nullsFirst: false })
+        .order('version', { ascending: false });
 
-    if (error) throw error;
+      if (error) throw error;
 
-    const approvedRecipes = (data || []) as Recipe[];
+      const approvedRecipes = (data || []) as Recipe[];
 
-const latestByProduct = new Map<string, Recipe>();
+      // Keep only the latest approved version for each product.
+      const latestByProduct = new Map<string, Recipe>();
 
-approvedRecipes.forEach((recipe) => {
-  const productKey = recipe.parent_id || recipe.id;
-  const existing = latestByProduct.get(productKey);
+      approvedRecipes.forEach((recipe) => {
+        const productKey = recipe.parent_id || recipe.id;
+        const existing = latestByProduct.get(productKey);
 
-  if (!existing || recipe.version > existing.version) {
-    latestByProduct.set(productKey, recipe);
-  }
-});
+        if (!existing) {
+          latestByProduct.set(productKey, recipe);
+          return;
+        }
 
-setRecipes(Array.from(latestByProduct.values()));
-  } catch (error: any) {
-    console.error('Recipe loading error:', error);
-    toast.error('Could not load approved recipes.');
-  } finally {
-    setLoading(false);
-  }
-};
+        const recipeDate = new Date(
+          recipe.approved_at || recipe.updated_at || recipe.created_at || 0
+        ).getTime();
+
+        const existingDate = new Date(
+          existing.approved_at || existing.updated_at || existing.created_at || 0
+        ).getTime();
+
+        if (
+          recipe.version > existing.version ||
+          (recipe.version === existing.version && recipeDate > existingDate)
+        ) {
+          latestByProduct.set(productKey, recipe);
+        }
+      });
+
+      setRecipes(
+        Array.from(latestByProduct.values()).sort((a, b) =>
+          a.product_name.localeCompare(b.product_name)
+        )
+      );
+    } catch (error: any) {
+      console.error('Recipe loading error:', error);
+      toast.error('Could not load approved recipes.');
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
     loadRecipes();
   }, []);
 
+  const filteredRecipes = useMemo(() => {
+    const searchTerm = search.toLowerCase().trim();
 
-const resetRecipeForm = () => {
-  setRecipeName('');
-  setProductCode('');
-  setCategory('');
-  setDescription('');
-  setPreparationStage('');
-  setRecipeStages([createRecipeStage(1)]);
-};
+    if (!searchTerm) return recipes;
 
-const saveRecipe = async (
-  recipeStatus: 'draft' | 'pending_approval'
-) => {
-  if (!recipeName.trim()) {
-    toast.error('Please enter a recipe name.');
-    return;
-  }
+    return recipes.filter((recipe) =>
+      `${recipe.product_name} ${recipe.product_code || ''} ${
+        recipe.product_category || ''
+      }`
+        .toLowerCase()
+        .includes(searchTerm)
+    );
+  }, [recipes, search]);
 
-  if (recipeStages.length === 0) {
-    toast.error('Please add at least one manufacturing stage.');
-    return;
-  }
+  const openRecipe = (recipe: Recipe) => {
+    setSelectedRecipe(recipe);
+    setShowRecipeDetails(true);
+  };
 
-  for (const stage of recipeStages) {
-    if (!stage.stage_name.trim()) {
-      toast.error('Please enter a name for every stage.');
-      return;
-    }
+  const getStages = (recipe: Recipe): RecipeStage[] => {
+    return Array.isArray(recipe.recipe_data?.stages)
+      ? recipe.recipe_data!.stages!
+      : [];
+  };
 
-    if (stage.ingredients.length === 0) {
-      toast.error(`Please add ingredients to ${stage.stage_name}.`);
-      return;
-    }
+  const getIngredients = (stage: RecipeStage): RecipeIngredient[] => {
+    return Array.isArray(stage.ingredients) ? stage.ingredients : [];
+  };
 
-    const invalidIngredient = stage.ingredients.some(
-      (item) =>
-        !item.ingredient_name.trim() ||
-        !item.quantity ||
-        Number(item.quantity) <= 0 ||
-        !item.uom
+  const getQuantity = (ingredient: RecipeIngredient) => {
+    const quantity = Number(ingredient.quantity);
+
+    return Number.isFinite(quantity)
+      ? quantity.toLocaleString('en-ZA', {
+          maximumFractionDigits: 4,
+        })
+      : '—';
+  };
+
+  const getUnit = (ingredient: RecipeIngredient) => {
+    return ingredient.unit || ingredient.uom || '—';
+  };
+
+  const getStageProcess = (stage: RecipeStage) => {
+    return stage.process || stage.instructions || '';
+  };
+
+  const getAllIngredients = (recipe: Recipe) => {
+    const stages = getStages(recipe);
+
+    // New formulation layout: ingredients belong to individual stages.
+    const stageIngredients = stages.flatMap((stage) =>
+      getIngredients(stage)
     );
 
-    if (invalidIngredient) {
-      toast.error(`Please complete the ingredients in ${stage.stage_name}.`);
-      return;
+    if (stageIngredients.length > 0) {
+      return stageIngredients;
     }
-  }
 
-  try {
-    setSaving(true);
-
-    const { data: userData } = await supabase.auth.getUser();
-
-    const recipeData = recipeStages.map((stage, index) => ({
-      stage_number: index + 1,
-      stage_name: stage.stage_name,
-      process: stage.process,
-      ingredients: stage.ingredients.map((item) => ({
-        stock_code: item.stock_code.trim(),
-        ingredient_name: item.ingredient_name.trim(),
-        quantity: Number(item.quantity),
-        uom: item.uom,
-        notes: item.notes.trim(),
-      })),
-    }));
-
-    const { error } = await (supabase as any)
-      .from('fms_bdm_developments')
-      .insert({
-        product_name: recipeName.trim(),
-        product_code: productCode.trim() || null,
-        product_category: category || null,
-        description: description.trim() || null,
-        record_type: 'recipe',
-        version: 1,
-        is_current: true,
-        recipe_data: recipeData,
-        specifications_data: {
-          preparation_stage: preparationStage.trim(),
-        },
-        costing_data: {},
-        trial_data: [],
-        status: recipeStatus,
-        created_by: userData.user?.id || null,
-      });
-
-    if (error) throw error;
-
-    toast.success('Recipe saved successfully!');
-
-    resetRecipeForm();
-    setShowAddRecipe(false);
-    await loadRecipes();
-  } catch (error: any) {
-    console.error('Recipe save error:', error);
-    toast.error(error.message || 'Could not save recipe.');
-  } finally {
-    setSaving(false);
-  }
-};
-
-
-
-const addStage = () => {
-  setRecipeStages((current) => [
-    ...current,
-    createRecipeStage(current.length + 1),
-  ]);
-};
-
-const removeStage = (stageId: string) => {
-  setRecipeStages((current) =>
-    current
-      .filter((stage) => stage.id !== stageId)
-      .map((stage, index) => ({
-        ...stage,
-        stage_name: `Stage ${index + 1}`,
-      }))
-  );
-};
-
-const updateStage = (
-  stageId: string,
-  field: 'stage_name' | 'process',
-  value: string
-) => {
-  setRecipeStages((current) =>
-    current.map((stage) =>
-      stage.id === stageId
-        ? { ...stage, [field]: value }
-        : stage
-    )
-  );
-};
-
-const addStageIngredient = (stageId: string) => {
-  setRecipeStages((current) =>
-    current.map((stage) =>
-      stage.id === stageId
-        ? {
-            ...stage,
-            ingredients: [
-              ...stage.ingredients,
-              createRecipeIngredient(),
-            ],
-          }
-        : stage
-    )
-  );
-};
-
-const updateStageIngredient = (
-  stageId: string,
-  ingredientId: string,
-  field: keyof RecipeIngredient,
-  value: string
-) => {
-  setRecipeStages((current) =>
-    current.map((stage) =>
-      stage.id === stageId
-        ? {
-            ...stage,
-            ingredients: stage.ingredients.map((ingredient) =>
-              ingredient.id === ingredientId
-                ? { ...ingredient, [field]: value }
-                : ingredient
-            ),
-          }
-        : stage
-    )
-  );
-};
-
-const removeStageIngredient = (
-  stageId: string,
-  ingredientId: string
-) => {
-  setRecipeStages((current) =>
-    current.map((stage) =>
-      stage.id === stageId
-        ? {
-            ...stage,
-            ingredients: stage.ingredients.filter(
-              (ingredient) => ingredient.id !== ingredientId
-            ),
-          }
-        : stage
-    )
-  );
-};
-
-
-  const filteredRecipes = recipes.filter((recipe) =>
-    `${recipe.product_name} ${recipe.product_code || ''}`
-      .toLowerCase()
-      .includes(search.toLowerCase())
-  );
+    // Older formulation layout: ingredients were stored at recipe level.
+    return Array.isArray(recipe.recipe_data?.ingredients)
+      ? recipe.recipe_data!.ingredients!
+      : [];
+  };
 
   return (
     <section className="space-y-6 p-4 md:p-6">
+      {/* HEADER */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <div className="flex items-center gap-2">
             <BookOpen className="text-orange-500" size={25} />
+
             <h1 className="text-2xl font-bold text-gray-900">
               Recipe Management
             </h1>
           </div>
+
           <p className="mt-1 text-sm text-gray-500">
-            Manage approved product recipes and formulations.
+            View approved product formulations from Product Development.
           </p>
         </div>
 
-        <button
-          onClick={() => setShowAddRecipe(true)}
-          className="flex items-center justify-center gap-2 rounded-lg bg-orange-500 px-4 py-2.5 text-sm font-medium text-white hover:bg-orange-600"
+        <Button
+          variant="outline"
+          onClick={loadRecipes}
+          disabled={loading}
+          className="gap-2"
         >
-          <Plus size={17} />
-          Add Recipe
-        </button>
+          <RefreshCw
+            size={16}
+            className={loading ? 'animate-spin' : ''}
+          />
+          Refresh
+        </Button>
       </div>
 
+      {/* SUMMARY */}
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="rounded-xl border bg-white p-4">
-          <p className="text-sm text-gray-500">Total Recipes</p>
-          <p className="mt-1 text-2xl font-bold">{recipes.length}</p>
+          <div className="flex items-center gap-2 text-gray-500">
+            <BookOpen size={17} />
+            <p className="text-sm">Approved Recipes</p>
+          </div>
+
+          <p className="mt-2 text-2xl font-bold text-gray-900">
+            {recipes.length}
+          </p>
         </div>
 
         <div className="rounded-xl border bg-white p-4">
-          <p className="text-sm text-gray-500">Approved Recipes</p>
-          <p className="mt-1 text-2xl font-bold text-green-600">
-            {recipes.filter((r) => r.status === 'approved').length}
+          <div className="flex items-center gap-2 text-gray-500">
+            <Layers size={17} />
+            <p className="text-sm">Manufacturing Formulations</p>
+          </div>
+
+          <p className="mt-2 text-2xl font-bold text-gray-900">
+            {recipes.filter(
+              (recipe) => getStages(recipe).length > 0
+            ).length}
           </p>
         </div>
       </div>
 
+      {/* RECIPE LIBRARY */}
       <div className="rounded-xl border bg-white">
         <div className="flex flex-col gap-3 border-b p-4 sm:flex-row sm:items-center sm:justify-between">
-          <h2 className="font-semibold text-gray-900">Recipe Library</h2>
+          <div>
+            <h2 className="font-semibold text-gray-900">
+              Approved Recipe Library
+            </h2>
+
+            <p className="mt-1 text-xs text-gray-500">
+              Recipes are automatically published here after approval in Product Development.
+            </p>
+          </div>
 
           <div className="relative w-full sm:max-w-xs">
             <Search
               size={17}
               className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
             />
+
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
@@ -431,7 +294,8 @@ const removeStageIngredient = (
                 <th className="p-3">Product Code</th>
                 <th className="p-3">Category</th>
                 <th className="p-3">Version</th>
-                <th className="p-3">Status</th>
+                <th className="p-3">Batch Size</th>
+                <th className="p-3">Approval Date</th>
                 <th className="p-3 text-right">Action</th>
               </tr>
             </thead>
@@ -439,42 +303,80 @@ const removeStageIngredient = (
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={6} className="p-8 text-center text-gray-500">
-                    Loading recipes...
+                  <td
+                    colSpan={7}
+                    className="p-8 text-center text-gray-500"
+                  >
+                    Loading approved recipes...
                   </td>
                 </tr>
               ) : filteredRecipes.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="p-8 text-center text-gray-500">
-                    No recipes found.
+                  <td
+                    colSpan={7}
+                    className="p-10 text-center"
+                  >
+                    <Package
+                      size={32}
+                      className="mx-auto mb-3 text-gray-300"
+                    />
+
+                    <p className="font-medium text-gray-700">
+                      No approved recipes found.
+                    </p>
+
+                    <p className="mt-1 text-sm text-gray-500">
+                      Approved formulations from Product Development will appear here automatically.
+                    </p>
                   </td>
                 </tr>
               ) : (
                 filteredRecipes.map((recipe) => (
-                  <tr key={recipe.id} className="border-t hover:bg-orange-50/40">
-                    <td className="p-3 font-medium">{recipe.product_name}</td>
-                    <td className="p-3">{recipe.product_code || '—'}</td>
-                    <td className="p-3">{recipe.product_category || '—'}</td>
-                    <td className="p-3">v{recipe.version}</td>
+                  <tr
+                    key={recipe.id}
+                    className="border-t hover:bg-orange-50/40"
+                  >
+                    <td className="p-3 font-medium text-gray-900">
+                      {recipe.product_name}
+                    </td>
+
                     <td className="p-3">
-                      <span className="rounded-full bg-green-100 px-2.5 py-1 text-xs font-medium text-green-700">
-                        {recipe.status}
+                      {recipe.product_code || '—'}
+                    </td>
+
+                    <td className="p-3">
+                      {recipe.product_category || '—'}
+                    </td>
+
+                    <td className="p-3">
+                      <span className="rounded-full bg-orange-50 px-2.5 py-1 text-xs font-medium text-orange-700">
+                        v{recipe.version}
                       </span>
                     </td>
-                    <td className="p-3 text-right">
-                     <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => {
-                          setSelectedRecipe(recipe);
-                          setShowRecipeDetails(true);
-                        }}
-                      
 
-                        className="rounded-lg border p-2 text-gray-600 hover:border-orange-400 hover:text-orange-600"
-                        title="View recipe"
+                    <td className="p-3">
+                      {recipe.recipe_data?.batch_size_kg
+                        ? `${recipe.recipe_data.batch_size_kg} kg`
+                        : '—'}
+                    </td>
+
+                    <td className="p-3">
+                      {recipe.approved_at
+                        ? new Date(
+                            recipe.approved_at
+                          ).toLocaleDateString('en-ZA')
+                        : '—'}
+                    </td>
+
+                    <td className="p-3 text-right">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => openRecipe(recipe)}
+                        className="gap-2"
                       >
-                        <Eye size={16} />
+                        <Eye size={15} />
+                        View
                       </Button>
                     </td>
                   </tr>
@@ -484,590 +386,277 @@ const removeStageIngredient = (
           </table>
         </div>
 
-        <div className="flex justify-end border-t p-3">
-          <button
-            onClick={loadRecipes}
-            className="flex items-center gap-2 text-sm text-gray-500 hover:text-orange-600"
-          >
-            <RefreshCw size={15} />
-            Refresh
-          </button>
+        <div className="border-t px-4 py-3 text-xs text-gray-500">
+          Showing {filteredRecipes.length} of {recipes.length} approved recipes.
         </div>
       </div>
-      
-{showAddRecipe && (
-  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-3 sm:p-6">
-    <div className="flex max-h-[95vh] w-full max-w-5xl flex-col overflow-hidden rounded-xl bg-white shadow-2xl">
 
-      <div className="flex items-center justify-between border-b p-5">
-        <div>
-          <h2 className="text-xl font-bold text-gray-900">
-            Create New Recipe
-          </h2>
-          <p className="mt-1 text-sm text-gray-500">
-            Enter product details, ingredients and preparation instructions.
-          </p>
-        </div>
+      {/* RECIPE DETAILS */}
+      <Dialog
+        open={showRecipeDetails}
+        onOpenChange={(open) => {
+          setShowRecipeDetails(open);
 
-        <button
-          type="button"
-          disabled={saving}
-          onClick={() => {
-            setShowAddRecipe(false);
-            resetRecipeForm();
-          }}
-          className="rounded-lg p-2 hover:bg-gray-100"
-        >
-          ✕
-        </button>
-      </div>
-
-      <div className="flex-1 space-y-6 overflow-y-auto p-5">
-
-        <div>
-          <h3 className="mb-3 font-semibold">Product Information</h3>
-
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div>
-              <label className="mb-1 block text-sm">Recipe Name *</label>
-              <input
-                value={recipeName}
-                onChange={(e) => setRecipeName(e.target.value)}
-                placeholder="Recipe name"
-                className="w-full rounded-lg border p-2.5"
-              />
-            </div>
-
-            <div>
-              <label className="mb-1 block text-sm">Product Code</label>
-              <input
-                value={productCode}
-                onChange={(e) => setProductCode(e.target.value)}
-                placeholder="Product code"
-                className="w-full rounded-lg border p-2.5"
-              />
-            </div>
-
-            <div>
-              <label className="mb-1 block text-sm">Category</label>
-              <select
-                value={category}
-                onChange={(e) => setCategory(e.target.value)}
-                className="w-full rounded-lg border p-2.5"
-              >
-                <option value="">Select category</option>
-                <option value="Seasoning">Seasoning</option>
-                <option value="Spice Blend">Spice Blend</option>
-                <option value="Sauce">Sauce</option>
-                <option value="Marinade">Marinade</option>
-                <option value="Other">Other</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="mb-1 block text-sm">Description</label>
-              <input
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                placeholder="Short description"
-                className="w-full rounded-lg border p-2.5"
-              />
-            </div>
-          </div>
-        </div>
-
-        
-{/* PREPARATION STAGE */}
-<div>
-  <h3 className="mb-3 font-semibold">
-    Preparation Stage
-  </h3>
-
-  <textarea
-    value={preparationStage}
-    onChange={(e) => setPreparationStage(e.target.value)}
-    rows={4}
-    placeholder="Enter the initial preparation instructions..."
-    className="w-full rounded-lg border p-3"
-  />
-</div>
-
-{/* MANUFACTURING STAGES */}
-<div className="space-y-5">
-  <div className="flex flex-wrap items-center justify-between gap-3">
-    <div>
-      <h3 className="font-semibold">Manufacturing Stages</h3>
-      <p className="text-sm text-gray-500">
-        Add ingredients and process instructions for each stage.
-      </p>
-    </div>
-
-    <button
-      type="button"
-      onClick={addStage}
-      className="rounded-lg bg-orange-50 px-4 py-2 text-sm font-medium text-orange-700"
-    >
-      + Add Stage
-    </button>
-  </div>
-
-  {recipeStages.map((stage, stageIndex) => {
-    const totals = getStageTotals(stage.ingredients);
-
-    return (
-      <div
-        key={stage.id}
-        className="space-y-4 rounded-xl border p-4"
+          if (!open) {
+            setSelectedRecipe(null);
+          }
+        }}
       >
-        {/* STAGE HEADING */}
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <h4 className="font-semibold text-orange-700">
-            Stage {stageIndex + 1}
-          </h4>
+        <DialogContent className="max-h-[90vh] max-w-5xl overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="text-xl">
+              {selectedRecipe?.product_name || 'Recipe Details'}
+            </DialogTitle>
 
-          <button
-            type="button"
-            disabled={recipeStages.length === 1}
-            onClick={() => removeStage(stage.id)}
-            className="text-sm text-red-500 disabled:opacity-30"
-          >
-            Remove Stage
-          </button>
-        </div>
+            <DialogDescription>
+              Approved Product Formulation
+              {selectedRecipe?.version
+                ? ` — Version ${selectedRecipe.version}`
+                : ''}
+            </DialogDescription>
+          </DialogHeader>
 
-        {/* STAGE NAME */}
-        <div>
-          <label className="mb-1 block text-sm font-medium">
-            Stage Description *
-          </label>
+          {selectedRecipe && (
+            <div className="space-y-6">
+              {/* PRODUCT INFORMATION */}
+              <div className="rounded-xl border bg-gray-50 p-4">
+                <h3 className="mb-4 font-semibold text-gray-900">
+                  Product Information
+                </h3>
 
-          <input
-            value={stage.stage_name}
-            onChange={(e) =>
-              updateStage(stage.id, 'stage_name', e.target.value)
-            }
-            placeholder="e.g. Salt Brine"
-            className="w-full rounded-lg border p-2.5"
-          />
-        </div>
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                  <div>
+                    <p className="text-xs text-gray-500">
+                      Product Code
+                    </p>
+                    <p className="mt-1 font-medium">
+                      {selectedRecipe.product_code || '—'}
+                    </p>
+                  </div>
 
-        {/* INGREDIENTS */}
-        <div>
-          <div className="mb-3 flex items-center justify-between">
-            <h5 className="text-sm font-semibold">
-              Ingredients
-            </h5>
+                  <div>
+                    <p className="text-xs text-gray-500">
+                      Category
+                    </p>
+                    <p className="mt-1 font-medium">
+                      {selectedRecipe.product_category || '—'}
+                    </p>
+                  </div>
 
-            <button
-              type="button"
-              onClick={() => addStageIngredient(stage.id)}
-              className="rounded-lg bg-orange-50 px-3 py-2 text-sm text-orange-700"
-            >
-              + Add Ingredient
-            </button>
-          </div>
+                  <div>
+                    <p className="text-xs text-gray-500">
+                      Version
+                    </p>
+                    <p className="mt-1 font-medium">
+                      v{selectedRecipe.version}
+                    </p>
+                  </div>
 
-          <div className="overflow-x-auto rounded-lg border">
-            <table className="w-full min-w-[850px] text-sm">
-              <thead className="bg-orange-50">
-                <tr className="text-left">
-                  <th className="p-3">Stock Code</th>
-                  <th className="p-3">RM Description</th>
-                  <th className="p-3">Quantity</th>
-                  <th className="p-3">UOM</th>
-                  <th className="p-3">Notes</th>
-                  <th className="p-3">Action</th>
-                </tr>
-              </thead>
+                  <div>
+                    <p className="text-xs text-gray-500">
+                      Batch Size
+                    </p>
+                    <p className="mt-1 font-medium">
+                      {selectedRecipe.recipe_data?.batch_size_kg
+                        ? `${selectedRecipe.recipe_data.batch_size_kg} kg`
+                        : 'Not specified'}
+                    </p>
+                  </div>
 
-              <tbody>
-                {stage.ingredients.map((item) => (
-                  <tr key={item.id} className="border-t">
-                    <td className="p-2">
-                      <input
-                        value={item.stock_code}
-                        onChange={(e) =>
-                          updateStageIngredient(
-                            stage.id,
-                            item.id,
-                            'stock_code',
-                            e.target.value
-                          )
-                        }
-                        placeholder="RM001"
-                        className="w-28 rounded border p-2"
-                      />
-                    </td>
+                  <div>
+                    <p className="text-xs text-gray-500">
+                      Approval Date
+                    </p>
+                    <p className="mt-1 font-medium">
+                      {selectedRecipe.approved_at
+                        ? new Date(
+                            selectedRecipe.approved_at
+                          ).toLocaleDateString('en-ZA')
+                        : 'Not available'}
+                    </p>
+                  </div>
 
-                    <td className="p-2">
-                      <input
-                        value={item.ingredient_name}
-                        onChange={(e) =>
-                          updateStageIngredient(
-                            stage.id,
-                            item.id,
-                            'ingredient_name',
-                            e.target.value
-                          )
-                        }
-                        placeholder="Ingredient description"
-                        className="w-full rounded border p-2"
-                      />
-                    </td>
-
-                    <td className="p-2">
-                      <input
-                        type="number"
-                        min="0"
-                        step="any"
-                        value={item.quantity}
-                        onChange={(e) =>
-                          updateStageIngredient(
-                            stage.id,
-                            item.id,
-                            'quantity',
-                            e.target.value
-                          )
-                        }
-                        placeholder="0"
-                        className="w-24 rounded border p-2"
-                      />
-                    </td>
-
-                    <td className="p-2">
-                      <select
-                        value={item.uom}
-                        onChange={(e) =>
-                          updateStageIngredient(
-                            stage.id,
-                            item.id,
-                            'uom',
-                            e.target.value
-                          )
-                        }
-                        className="w-24 rounded border p-2"
-                      >
-                        <option value="kg">kg</option>
-                        <option value="g">g</option>
-                        <option value="L">L</option>
-                        <option value="ml">ml</option>
-                        <option value="%">%</option>
-                        <option value="Units">Units</option>
-                        <option value="Pieces">Pieces</option>
-                      </select>
-                    </td>
-
-                    <td className="p-2">
-                      <input
-                        value={item.notes}
-                        onChange={(e) =>
-                          updateStageIngredient(
-                            stage.id,
-                            item.id,
-                            'notes',
-                            e.target.value
-                          )
-                        }
-                        placeholder="Optional"
-                        className="w-full rounded border p-2"
-                      />
-                    </td>
-
-                    <td className="p-2">
-                      <button
-                        type="button"
-                        disabled={stage.ingredients.length === 1}
-                        onClick={() =>
-                          removeStageIngredient(stage.id, item.id)
-                        }
-                        className="rounded p-2 text-red-500 disabled:opacity-30"
-                      >
-                        Remove
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          {/* AUTOMATIC TOTALS */}
-          <div className="mt-3 flex flex-wrap gap-3 rounded-lg bg-gray-50 p-3 text-sm">
-            <span className="font-semibold">Stage Totals:</span>
-
-            {totals.kg > 0 && (
-              <span>{totals.kg.toFixed(3)} kg</span>
-            )}
-
-            {totals.L > 0 && (
-              <span>{totals.L.toFixed(3)} L</span>
-            )}
-
-            {totals['%'] > 0 && (
-              <span
-                className={
-                  Math.abs(totals['%'] - 100) < 0.001
-                    ? 'font-semibold text-green-700'
-                    : 'font-semibold text-orange-700'
-                }
-              >
-                {totals['%'].toFixed(3)}%
-                {Math.abs(totals['%'] - 100) < 0.001
-                  ? ' (100% complete)'
-                  : ' (Target: 100%)'}
-              </span>
-            )}
-
-            {totals.units > 0 && (
-              <span>{totals.units.toLocaleString()} Units / Pieces</span>
-            )}
-
-            {!Object.values(totals).some((value) => value > 0) && (
-              <span className="text-gray-500">No quantities entered yet.</span>
-            )}
-          </div>
-        </div>
-
-        {/* PROCESS */}
-        <div>
-          <label className="mb-2 block text-sm font-semibold">
-            Process Instructions
-          </label>
-
-          <textarea
-            value={stage.process}
-            onChange={(e) =>
-              updateStage(stage.id, 'process', e.target.value)
-            }
-            rows={4}
-            placeholder="Describe the process for this manufacturing stage..."
-            className="w-full rounded-lg border p-3"
-          />
-        </div>
-      </div>
-    );
-  })}
-
-  <button
-    type="button"
-    onClick={addStage}
-    className="w-full rounded-lg border border-dashed border-orange-400 py-3 text-sm font-medium text-orange-700 hover:bg-orange-50"
-  >
-    + Add Another Manufacturing Stage
-  </button>
-</div>
-
-
-        
-
-        <div className="rounded-lg bg-orange-50 p-4 text-sm text-gray-600">
-          New recipes start at version 1. You can save a draft or submit it for approval.
-        </div>
-      </div>
-
-      <div className="flex flex-col-reverse gap-2 border-t bg-gray-50 p-4 sm:flex-row sm:justify-end">
-        <button
-          type="button"
-          disabled={saving}
-          onClick={() => {
-            setShowAddRecipe(false);
-            resetRecipeForm();
-          }}
-          className="rounded-lg border bg-white px-4 py-2.5 text-sm"
-        >
-          Cancel
-        </button>
-
-        <button
-          type="button"
-          disabled={saving}
-          onClick={() => saveRecipe('draft')}
-          className="rounded-lg border border-orange-500 px-4 py-2.5 text-sm text-orange-600"
-        >
-          {saving ? 'Saving...' : 'Save as Draft'}
-        </button>
-
-        <button
-          type="button"
-          disabled={saving}
-          onClick={() => saveRecipe('pending_approval')}
-          className="rounded-lg bg-orange-500 px-4 py-2.5 text-sm text-white"
-        >
-          {saving ? 'Saving...' : 'Submit for Approval'}
-        </button>
-      </div>
-    </div>
-  </div>
-)}
-<Dialog
-  open={showRecipeDetails}
-  onOpenChange={(open) => {
-    setShowRecipeDetails(open);
-
-    if (!open) {
-      setSelectedRecipe(null);
-    }
-  }}
->
-  <DialogContent className="max-w-5xl max-h-[90vh] overflow-y-auto">
-    <DialogHeader>
-      <DialogTitle className="text-xl">
-        {selectedRecipe?.product_name || 'Recipe Details'}
-      </DialogTitle>
-
-      <DialogDescription>
-        Approved Recipe
-        {selectedRecipe?.version
-          ? ` - Version ${selectedRecipe.version}`
-          : ''}
-      </DialogDescription>
-    </DialogHeader>
-
-    {selectedRecipe && (
-      <div className="space-y-6">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div>
-            <p className="text-sm text-muted-foreground">Product Code</p>
-            <p className="font-medium">
-              {selectedRecipe.product_code || 'Not specified'}
-            </p>
-          </div>
-
-          <div>
-            <p className="text-sm text-muted-foreground">Category</p>
-            <p className="font-medium">
-              {selectedRecipe.product_category || 'Not specified'}
-            </p>
-          </div>
-
-          <div>
-            <p className="text-sm text-muted-foreground">Version</p>
-            <p className="font-medium">{selectedRecipe.version}</p>
-          </div>
-
-          <div>
-            <p className="text-sm text-muted-foreground">Approval Date</p>
-            <p className="font-medium">
-              {selectedRecipe.approved_at
-                ? new Date(selectedRecipe.approved_at).toLocaleDateString()
-                : 'Not available'}
-            </p>
-          </div>
-        </div>
-
-        {selectedRecipe.description && (
-          <div>
-            <h3 className="font-semibold mb-2">Product Description</h3>
-            <p className="text-sm whitespace-pre-wrap">
-              {selectedRecipe.description}
-            </p>
-          </div>
-        )}
-
-        <div>
-          <h3 className="font-semibold text-lg mb-3">
-            Recipe Ingredients
-          </h3>
-
-          <div className="rounded-md border overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-muted">
-                <tr>
-                  <th className="text-left p-3">Ingredient</th>
-                  <th className="text-left p-3">Quantity</th>
-                  <th className="text-left p-3">Unit</th>
-                </tr>
-              </thead>
-
-              <tbody>
-                {(selectedRecipe.recipe_data?.ingredients || []).map(
-                  (ingredient: any, index: number) => (
-                    <tr key={ingredient.id || index} className="border-t">
-                      <td className="p-3">
-                        {ingredient.ingredient_name || 'Unnamed ingredient'}
-                      </td>
-                      <td className="p-3">{ingredient.quantity ?? '-'}</td>
-                      <td className="p-3">
-                        {ingredient.unit || '-'}
-                      </td>
-                    </tr>
-                  )
-                )}
-
-                {(!selectedRecipe.recipe_data?.ingredients ||
-                  selectedRecipe.recipe_data.ingredients.length === 0) && (
-                  <tr>
-                    <td
-                      colSpan={3}
-                      className="p-4 text-center text-muted-foreground"
-                    >
-                      No ingredients recorded.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        <div>
-          <h3 className="font-semibold text-lg mb-3">
-            Manufacturing Process
-          </h3>
-
-          <div className="space-y-4">
-            {(selectedRecipe.recipe_data?.stages || []).map(
-              (stage: any, index: number) => (
-                <div
-                  key={stage.id || index}
-                  className="border rounded-lg p-4 space-y-2"
-                >
-                  <h4 className="font-semibold">
-                    Stage {stage.stage_number || index + 1}: {stage.stage_name}
-                  </h4>
-
-                  <p className="text-sm whitespace-pre-wrap">
-                    {stage.instructions || 'No instructions recorded.'}
-                  </p>
-
-                  <div className="flex flex-wrap gap-4 text-sm text-muted-foreground">
-                    {stage.duration_minutes > 0 && (
-                      <span>
-                        Duration: {stage.duration_minutes} minutes
-                      </span>
-                    )}
-
-                    {stage.temperature && (
-                      <span>
-                        Temperature: {stage.temperature}
-                      </span>
-                    )}
+                  <div>
+                    <p className="text-xs text-gray-500">
+                      Status
+                    </p>
+                    <p className="mt-1 font-medium capitalize text-green-700">
+                      {selectedRecipe.status}
+                    </p>
                   </div>
                 </div>
-              )
-            )}
 
-            {(!selectedRecipe.recipe_data?.stages ||
-              selectedRecipe.recipe_data.stages.length === 0) && (
-              <p className="text-sm text-muted-foreground">
-                No manufacturing stages recorded.
-              </p>
-            )}
-          </div>
-        </div>
+                {selectedRecipe.description && (
+                  <div className="mt-4 border-t pt-4">
+                    <p className="text-xs text-gray-500">
+                      Product Description
+                    </p>
 
-        {selectedRecipe.specifications_data?.preparation_stage && (
-          <div>
-            <h3 className="font-semibold mb-2">Preparation Instructions</h3>
-            <p className="text-sm whitespace-pre-wrap">
-              {selectedRecipe.specifications_data.preparation_stage}
-            </p>
-          </div>
-        )}
-      </div>
-    )}
-  </DialogContent>
-</Dialog>
+                    <p className="mt-1 whitespace-pre-wrap text-sm">
+                      {selectedRecipe.description}
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {/* MANUFACTURING STAGES */}
+              <div className="space-y-5">
+                <div>
+                  <h3 className="text-lg font-semibold text-gray-900">
+                    Manufacturing Formulation
+                  </h3>
+
+                  <p className="mt-1 text-sm text-gray-500">
+                    Ingredients and process instructions are displayed under the stage where they are used.
+                  </p>
+                </div>
+
+                {getStages(selectedRecipe).length > 0 ? (
+                  getStages(selectedRecipe).map((stage, index) => (
+                    <div
+                      key={stage.id || index}
+                      className="overflow-hidden rounded-xl border"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2 bg-orange-50 px-4 py-3">
+                        <h4 className="font-semibold text-orange-800">
+                          Stage {stage.stage_number || index + 1}:{' '}
+                          {stage.stage_name || 'Untitled Stage'}
+                        </h4>
+
+                        <span className="text-xs text-gray-500">
+                          {getIngredients(stage).length} ingredients
+                        </span>
+                      </div>
+
+                      {/* STAGE INGREDIENTS */}
+                      <div className="p-4">
+                        <h5 className="mb-3 text-sm font-semibold text-gray-800">
+                          Ingredients
+                        </h5>
+
+                        <div className="overflow-x-auto rounded-lg border">
+                          <table className="w-full min-w-[550px] text-sm">
+                            <thead className="bg-gray-50">
+                              <tr className="text-left text-gray-600">
+                                <th className="p-3">Stock Code</th>
+                                <th className="p-3">RM Description</th>
+                                <th className="p-3">Quantity</th>
+                                <th className="p-3">UOM</th>
+                              </tr>
+                            </thead>
+
+                            <tbody>
+                              {getIngredients(stage).length > 0 ? (
+                                getIngredients(stage).map(
+                                  (ingredient, ingredientIndex) => (
+                                    <tr
+                                      key={ingredient.id || ingredientIndex}
+                                      className="border-t"
+                                    >
+                                      <td className="p-3">
+                                        {ingredient.stock_code || '—'}
+                                      </td>
+
+                                      <td className="p-3 font-medium">
+                                        {ingredient.ingredient_name ||
+                                          'Unnamed ingredient'}
+                                      </td>
+
+                                      <td className="p-3">
+                                        {getQuantity(ingredient)}
+                                      </td>
+
+                                      <td className="p-3">
+                                        {getUnit(ingredient)}
+                                      </td>
+                                    </tr>
+                                  )
+                                )
+                              ) : (
+                                <tr>
+                                  <td
+                                    colSpan={4}
+                                    className="p-4 text-center text-gray-500"
+                                  >
+                                    No ingredients recorded for this stage.
+                                  </td>
+                                </tr>
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+
+                      {/* STAGE PROCESS */}
+                      <div className="border-t bg-gray-50 p-4">
+                        <h5 className="mb-2 text-sm font-semibold text-gray-800">
+                          Process Instructions
+                        </h5>
+
+                        <p className="whitespace-pre-wrap text-sm leading-6 text-gray-700">
+                          {getStageProcess(stage) ||
+                            'No process instructions recorded.'}
+                        </p>
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="rounded-lg border border-dashed p-6 text-center text-sm text-gray-500">
+                    No manufacturing stages have been recorded for this recipe.
+                  </div>
+                )}
+              </div>
+
+              {/* LEGACY INGREDIENT FALLBACK */}
+              {getStages(selectedRecipe).length === 0 &&
+                getAllIngredients(selectedRecipe).length > 0 && (
+                  <div>
+                    <h3 className="mb-3 font-semibold">
+                      Recipe Ingredients
+                    </h3>
+
+                    <div className="overflow-x-auto rounded-lg border">
+                      <table className="w-full text-sm">
+                        <thead className="bg-gray-50">
+                          <tr className="text-left">
+                            <th className="p-3">Stock Code</th>
+                            <th className="p-3">RM Description</th>
+                            <th className="p-3">Quantity</th>
+                            <th className="p-3">UOM</th>
+                          </tr>
+                        </thead>
+
+                        <tbody>
+                          {getAllIngredients(selectedRecipe).map(
+                            (ingredient, index) => (
+                              <tr
+                                key={ingredient.id || index}
+                                className="border-t"
+                              >
+                                <td className="p-3">
+                                  {ingredient.stock_code || '—'}
+                                </td>
+                                <td className="p-3">
+                                  {ingredient.ingredient_name || '—'}
+                                </td>
+                                <td className="p-3">
+                                  {getQuantity(ingredient)}
+                                </td>
+                                <td className="p-3">
+                                  {getUnit(ingredient)}
+                                </td>
+                              </tr>
+                            )
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </section>
   );
 };

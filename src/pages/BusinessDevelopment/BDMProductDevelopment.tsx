@@ -14,7 +14,6 @@ import {
   Loader2,
   CheckCircle2,
   XCircle,
-  Clock,
   ClipboardList,
   FlaskConical,
   Copy,
@@ -40,6 +39,7 @@ type Status =
 type Ingredient = {
   id: string;
   stock_code_id: string | null;
+  stock_code: string;
   ingredient_name: string;
   quantity: number;
   unit: string;
@@ -57,6 +57,7 @@ type RecipeStage = {
   instructions: string;
   duration_minutes: number;
   temperature: string;
+  ingredients: Ingredient[];
 };
 
 type StockItem = {
@@ -105,6 +106,7 @@ const makeId = () =>
 const createIngredient = (): Ingredient => ({
   id: makeId(),
   stock_code_id: null,
+  stock_code: '',
   ingredient_name: '',
   quantity: 0,
   unit: 'kg',
@@ -122,6 +124,7 @@ const createStage = (number: number): RecipeStage => ({
   instructions: '',
   duration_minutes: 0,
   temperature: '',
+  ingredients: [createIngredient()],
 });
 
 const statusLabel = (status: string) => {
@@ -159,7 +162,6 @@ const formatDate = (value?: string | null) => {
   });
 };
 
-// Converts an ingredient quantity into the unit used by the supplier price.
 const convertQuantity = (
   quantity: number,
   fromUnit: string,
@@ -172,7 +174,6 @@ const convertQuantity = (
 
   if (from === 'g' && to === 'kg') return quantity / 1000;
   if (from === 'kg' && to === 'g') return quantity * 1000;
-
   if (from === 'ml' && to === 'l') return quantity / 1000;
   if (from === 'l' && to === 'ml') return quantity * 1000;
 
@@ -181,40 +182,34 @@ const convertQuantity = (
 
 const BDMProductDevelopment = () => {
   const [view, setView] = useState<View>('overview');
-
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+
   const [stockItems, setStockItems] = useState<StockItem[]>([]);
   const [developments, setDevelopments] = useState<Development[]>([]);
   const [versions, setVersions] = useState<Development[]>([]);
+  const [allApprovedVersions, setAllApprovedVersions] = useState<Development[]>([]);
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
 
   const [search, setSearch] = useState('');
-  const [stockSearch, setStockSearch] = useState('');
 
-  // Recipe folder information
   const [productName, setProductName] = useState('');
   const [productCategory, setProductCategory] = useState('');
   const [description, setDescription] = useState('');
   const [owner, setOwner] = useState('');
-
   const [showRecipeForm, setShowRecipeForm] = useState(false);
 
-  // Version formulation
   const [batchSize, setBatchSize] = useState(100);
-  const [ingredients, setIngredients] = useState<Ingredient[]>([]);
   const [recipeStages, setRecipeStages] = useState<RecipeStage[]>([]);
   const [versionNote, setVersionNote] = useState('');
 
-  // Trial and review
   const [trialNotes, setTrialNotes] = useState('');
   const [rejectionReason, setRejectionReason] = useState('');
   const [correctionPlan, setCorrectionPlan] = useState('');
   const [showRejectionForm, setShowRejectionForm] = useState(false);
 
-  // Costing
   const [costingNotes, setCostingNotes] = useState('');
 
   const selectedRecipe = developments.find(
@@ -228,6 +223,11 @@ const BDMProductDevelopment = () => {
   const nextVersionNumber =
     Math.max(0, ...versions.map((item) => Number(item.version || 0))) + 1;
 
+  const allIngredients = useMemo(
+    () => recipeStages.flatMap((stage) => stage.ingredients || []),
+    [recipeStages]
+  );
+
   const ingredientCost = (ingredient: Ingredient) => {
     const converted = convertQuantity(
       Number(ingredient.quantity || 0),
@@ -240,11 +240,11 @@ const BDMProductDevelopment = () => {
 
   const totalIngredientCost = useMemo(
     () =>
-      ingredients.reduce(
+      allIngredients.reduce(
         (total, ingredient) => total + ingredientCost(ingredient),
         0
       ),
-    [ingredients]
+    [allIngredients]
   );
 
   const costPerKg =
@@ -256,26 +256,22 @@ const BDMProductDevelopment = () => {
       .includes(search.toLowerCase())
   );
 
-  const filteredStock = stockItems.filter((item) =>
-    `${item.stock_code} ${item.description}`
-      .toLowerCase()
-      .includes(stockSearch.toLowerCase())
-  );
-
-  const approvedVersions = versions.filter(
-    (item) => item.status === 'approved'
-  );
-
-  const currentVersion = versions.find((item) => item.is_current);
-
-  const benchVersions = developments.flatMap((recipe) =>
-    []
+  const renderStatus = (status: string) => (
+    <span
+      className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ${statusStyle(status)}`}
+    >
+      {statusLabel(status)}
+    </span>
   );
 
   useEffect(() => {
     const initialise = async () => {
       setLoading(true);
-      await Promise.all([loadDevelopments(), loadStockItems()]);
+      await Promise.all([
+        loadDevelopments(),
+        loadStockItems(),
+        loadAllApprovedVersions(),
+      ]);
       setLoading(false);
     };
 
@@ -365,10 +361,25 @@ const BDMProductDevelopment = () => {
     return result;
   };
 
+  const loadAllApprovedVersions = async () => {
+    const { data, error } = await (supabase as any)
+      .from('fms_bdm_developments')
+      .select('*')
+      .eq('record_type', 'revision')
+      .eq('status', 'approved')
+      .order('approved_at', { ascending: false });
+
+    if (error) {
+      console.error(error);
+      return;
+    }
+
+    setAllApprovedVersions((data || []) as Development[]);
+  };
+
   const clearVersionForm = () => {
     setSelectedVersionId(null);
     setBatchSize(100);
-    setIngredients([]);
     setRecipeStages([]);
     setVersionNote('');
     setTrialNotes('');
@@ -392,9 +403,7 @@ const BDMProductDevelopment = () => {
 
     setView('workspace');
 
-    if (current) {
-      openVersion(current);
-    }
+    if (current) openVersion(current);
   };
 
   const openVersion = (version: Development) => {
@@ -404,31 +413,50 @@ const BDMProductDevelopment = () => {
 
     setBatchSize(Number(recipe.batch_size_kg || 100));
 
-    const savedIngredients = Array.isArray(recipe.ingredients)
-      ? recipe.ingredients
-      : [];
-
     const savedStages = Array.isArray(recipe.stages)
       ? recipe.stages
       : [];
 
-    setIngredients(
-      savedIngredients.map((item: any) => ({
-        ...createIngredient(),
-        ...item,
-        price: Number(item.price || 0),
-        quantity: Number(item.quantity || 0),
-        price_unit: item.price_unit || item.unit || 'kg',
-      }))
+    let loadedStages: RecipeStage[] = savedStages.map(
+      (stage: any, index: number) => ({
+        ...createStage(index + 1),
+        ...stage,
+        id: stage.id || makeId(),
+        stage_number: index + 1,
+        instructions: stage.instructions || stage.process || '',
+        ingredients: Array.isArray(stage.ingredients)
+          ? stage.ingredients.map((item: any) => ({
+              ...createIngredient(),
+              ...item,
+              id: item.id || makeId(),
+              stock_code: item.stock_code || '',
+              quantity: Number(item.quantity || 0),
+              price: Number(item.price || 0),
+              price_unit: item.price_unit || item.unit || 'kg',
+            }))
+          : [],
+      })
     );
 
-    setRecipeStages(
-      savedStages.map((item: any, index: number) => ({
-        ...createStage(index + 1),
+    // Support older versions where ingredients were stored outside stages.
+    if (
+      loadedStages.length &&
+      !loadedStages.some((stage) => stage.ingredients.length) &&
+      Array.isArray(recipe.ingredients) &&
+      recipe.ingredients.length
+    ) {
+      loadedStages[0].ingredients = recipe.ingredients.map((item: any) => ({
+        ...createIngredient(),
         ...item,
-        stage_number: index + 1,
-      }))
-    );
+        id: item.id || makeId(),
+        stock_code: item.stock_code || '',
+        quantity: Number(item.quantity || 0),
+        price: Number(item.price || 0),
+        price_unit: item.price_unit || item.unit || 'kg',
+      }));
+    }
+
+    setRecipeStages(loadedStages);
 
     const trial = version.trial_data || {};
 
@@ -458,7 +486,11 @@ const BDMProductDevelopment = () => {
           product_code: null,
           product_category: productCategory.trim() || null,
           description: description.trim() || null,
-          recipe_data: [],
+          recipe_data: {
+            batch_size_kg: 100,
+            ingredients: [],
+            stages: [],
+          },
           costing_data: {},
           trial_data: {},
           specifications_data: {
@@ -478,13 +510,13 @@ const BDMProductDevelopment = () => {
       if (error) throw error;
 
       toast.success('Recipe folder created.');
-
       await loadDevelopments();
 
       setShowRecipeForm(false);
       setSelectedId(data.id);
       setVersions([]);
       clearVersionForm();
+      setRecipeStages([createStage(1)]);
       setView('workspace');
     } catch (error: any) {
       console.error(error);
@@ -502,7 +534,6 @@ const BDMProductDevelopment = () => {
 
     clearVersionForm();
     setBatchSize(100);
-    setIngredients([createIngredient()]);
     setRecipeStages([createStage(1)]);
     setView('workspace');
   };
@@ -517,20 +548,18 @@ const BDMProductDevelopment = () => {
 
     setBatchSize(Number(recipe.batch_size_kg || 100));
 
-    setIngredients(
-      (recipe.ingredients || []).map((item: any) => ({
-        ...createIngredient(),
-        ...item,
-        id: makeId(),
-      }))
-    );
-
     setRecipeStages(
-      (recipe.stages || []).map((item: any, index: number) => ({
+      (recipe.stages || []).map((stage: any, index: number) => ({
         ...createStage(index + 1),
-        ...item,
+        ...stage,
         id: makeId(),
         stage_number: index + 1,
+        instructions: stage.instructions || stage.process || '',
+        ingredients: (stage.ingredients || []).map((item: any) => ({
+          ...createIngredient(),
+          ...item,
+          id: makeId(),
+        })),
       }))
     );
 
@@ -543,23 +572,53 @@ const BDMProductDevelopment = () => {
   };
 
   const updateIngredient = (
-    id: string,
+    stageId: string,
+    ingredientId: string,
     field: keyof Ingredient,
     value: string | number | null
   ) => {
-    setIngredients((previous) =>
-      previous.map((item) =>
-        item.id === id ? { ...item, [field]: value } : item
+    setRecipeStages((previous) =>
+      previous.map((stage) =>
+        stage.id === stageId
+          ? {
+              ...stage,
+              ingredients: stage.ingredients.map((item) =>
+                item.id === ingredientId
+                  ? { ...item, [field]: value }
+                  : item
+              ),
+            }
+          : stage
       )
     );
   };
 
-  const addIngredient = () => {
-    setIngredients((previous) => [...previous, createIngredient()]);
+  const addIngredient = (stageId: string) => {
+    setRecipeStages((previous) =>
+      previous.map((stage) =>
+        stage.id === stageId
+          ? {
+              ...stage,
+              ingredients: [...stage.ingredients, createIngredient()],
+            }
+          : stage
+      )
+    );
   };
 
-  const removeIngredient = (id: string) => {
-    setIngredients((previous) => previous.filter((item) => item.id !== id));
+  const removeIngredient = (stageId: string, ingredientId: string) => {
+    setRecipeStages((previous) =>
+      previous.map((stage) =>
+        stage.id === stageId
+          ? {
+              ...stage,
+              ingredients: stage.ingredients.filter(
+                (item) => item.id !== ingredientId
+              ),
+            }
+          : stage
+      )
+    );
   };
 
   const addStage = () => {
@@ -592,24 +651,24 @@ const BDMProductDevelopment = () => {
     );
   };
 
-  const selectStockIngredient = (ingredientId: string, stockId: string) => {
+  const selectStockIngredient = (
+    stageId: string,
+    ingredientId: string,
+    stockId: string
+  ) => {
     const stock = stockItems.find((item) => item.id === stockId);
     if (!stock) return;
 
-    setIngredients((previous) =>
-      previous.map((item) =>
-        item.id === ingredientId
-          ? {
-              ...item,
-              stock_code_id: stock.id,
-              ingredient_name: stock.description,
-              unit: stock.unit_of_measure || 'kg',
-              source: 'stock',
-              supplier: item.supplier,
-            }
-          : item
-      )
+    updateIngredient(stageId, ingredientId, 'stock_code_id', stock.id);
+    updateIngredient(stageId, ingredientId, 'stock_code', stock.stock_code);
+    updateIngredient(stageId, ingredientId, 'ingredient_name', stock.description);
+    updateIngredient(
+      stageId,
+      ingredientId,
+      'unit',
+      stock.unit_of_measure || 'kg'
     );
+    updateIngredient(stageId, ingredientId, 'source', 'stock');
   };
 
   const saveVersion = async () => {
@@ -623,20 +682,24 @@ const BDMProductDevelopment = () => {
       return;
     }
 
-    if (
-      ingredients.length === 0 ||
-      ingredients.some((item) => !item.ingredient_name.trim())
-    ) {
-      toast.error('Please complete or remove empty ingredient rows.');
+    if (!recipeStages.length) {
+      toast.error('Please add at least one production stage.');
       return;
     }
 
     if (
-      recipeStages.some(
-        (stage) => !stage.stage_name.trim() || !stage.instructions.trim()
+      recipeStages.some((stage) => !stage.stage_name.trim())
+    ) {
+      toast.error('Please enter a name for every production stage.');
+      return;
+    }
+
+    if (
+      recipeStages.some((stage) =>
+        stage.ingredients.some((item) => !item.ingredient_name.trim())
       )
     ) {
-      toast.error('Please complete the name and instructions for every stage.');
+      toast.error('Please complete or remove empty ingredient rows.');
       return;
     }
 
@@ -651,18 +714,25 @@ const BDMProductDevelopment = () => {
         ? existing.version
         : nextVersionNumber;
 
-      const recipeData = {
-        batch_size_kg: Number(batchSize),
-        ingredients: ingredients.map((item) => ({
+      const savedStages = recipeStages.map((stage, index) => ({
+        ...stage,
+        stage_number: index + 1,
+        duration_minutes: Number(stage.duration_minutes || 0),
+        ingredients: stage.ingredients.map((item) => ({
           ...item,
           quantity: Number(item.quantity || 0),
           price: Number(item.price || 0),
         })),
-        stages: recipeStages.map((stage, index) => ({
-          ...stage,
-          stage_number: index + 1,
-          duration_minutes: Number(stage.duration_minutes || 0),
-        })),
+      }));
+
+      const flattenedIngredients = savedStages.flatMap(
+        (stage) => stage.ingredients
+      );
+
+      const recipeData = {
+        batch_size_kg: Number(batchSize),
+        ingredients: flattenedIngredients,
+        stages: savedStages,
       };
 
       const costingData = {
@@ -695,7 +765,6 @@ const BDMProductDevelopment = () => {
         updated_at: new Date().toISOString(),
       };
 
-      // Only one revision can be marked as current.
       const { error: currentError } = await (supabase as any)
         .from('fms_bdm_developments')
         .update({ is_current: false })
@@ -703,6 +772,8 @@ const BDMProductDevelopment = () => {
         .eq('record_type', 'revision');
 
       if (currentError) throw currentError;
+
+      let savedId = selectedVersionId;
 
       if (selectedVersionId) {
         const { error } = await (supabase as any)
@@ -723,25 +794,32 @@ const BDMProductDevelopment = () => {
 
         if (error) throw error;
 
+        savedId = data.id;
         setSelectedVersionId(data.id);
       }
 
       const loaded = await loadVersions(selectedId);
+      const saved = loaded.find((item) => item.id === savedId);
 
-      const saved = loaded.find(
-        (item) => item.id === selectedVersionId
-      );
-
-      if (!saved && loaded.length) {
-        const latest = loaded.find((item) => item.is_current);
-        if (latest) setSelectedVersionId(latest.id);
-      }
+      if (saved) setSelectedVersionId(saved.id);
 
       toast.success(`Version V${versionNumber} saved.`);
-    } catch (error: any) {
-      console.error('Version save error:', error);
-      toast.error(error.message || 'Could not save version.');
-    } finally {
+   } catch (error: any) {
+  console.error('VERSION SAVE ERROR DETAILS:', {
+    message: error?.message,
+    code: error?.code,
+    details: error?.details,
+    hint: error?.hint,
+    status: error?.status,
+    fullError: error,
+  });
+
+  toast.error(
+    error?.message ||
+    error?.details ||
+    'Could not save version. Check the console for details.'
+  );
+} finally {
       setSaving(false);
     }
   };
@@ -815,6 +893,8 @@ const BDMProductDevelopment = () => {
 
       if (updated) openVersion(updated);
 
+      await loadAllApprovedVersions();
+
       toast.success(`Version moved to ${statusLabel(newStatus)}.`);
     } catch (error: any) {
       console.error(error);
@@ -822,6 +902,23 @@ const BDMProductDevelopment = () => {
     } finally {
       setSaving(false);
     }
+  };
+  
+  const updateCostingIngredient = (
+    ingredientId: string,
+    field: keyof Ingredient,
+    value: string | number
+  ) => {
+    setRecipeStages((previous) =>
+      previous.map((stage) => ({
+        ...stage,
+        ingredients: stage.ingredients.map((item) =>
+          item.id === ingredientId
+            ? { ...item, [field]: value }
+            : item
+        ),
+      }))
+    );
   };
 
   const saveCosting = async () => {
@@ -839,10 +936,18 @@ const BDMProductDevelopment = () => {
       setSaving(true);
 
       const recipe = selectedVersion.recipe_data || {};
-      const savedIngredients = ingredients.map((item) => ({
-        ...item,
-        price: Number(item.price || 0),
+
+      const savedStages = recipeStages.map((stage) => ({
+        ...stage,
+        ingredients: stage.ingredients.map((item) => ({
+          ...item,
+          price: Number(item.price || 0),
+        })),
       }));
+
+      const savedIngredients = savedStages.flatMap(
+        (stage) => stage.ingredients
+      );
 
       const total = savedIngredients.reduce(
         (sum, item) => sum + ingredientCost(item),
@@ -863,6 +968,7 @@ const BDMProductDevelopment = () => {
         ...recipe,
         batch_size_kg: Number(batchSize),
         ingredients: savedIngredients,
+        stages: savedStages,
       };
 
       const { error } = await (supabase as any)
@@ -877,6 +983,7 @@ const BDMProductDevelopment = () => {
       if (error) throw error;
 
       await loadVersions(selectedId!);
+      await loadAllApprovedVersions();
 
       toast.success('Costing saved successfully.');
     } catch (error: any) {
@@ -889,11 +996,14 @@ const BDMProductDevelopment = () => {
 
   const refreshAll = async () => {
     setLoading(true);
-    await Promise.all([loadDevelopments(), loadStockItems()]);
 
-    if (selectedId) {
-      await loadVersions(selectedId);
-    }
+    await Promise.all([
+      loadDevelopments(),
+      loadStockItems(),
+      loadAllApprovedVersions(),
+    ]);
+
+    if (selectedId) await loadVersions(selectedId);
 
     setLoading(false);
     toast.success('Data refreshed.');
@@ -933,14 +1043,6 @@ const BDMProductDevelopment = () => {
     }
   };
 
-  const renderStatus = (status: string) => (
-    <span
-      className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ${statusStyle(status)}`}
-    >
-      {statusLabel(status)}
-    </span>
-  );
-
   const renderRecipeRow = (recipe: Development) => (
     <button
       key={recipe.id}
@@ -964,7 +1066,9 @@ const BDMProductDevelopment = () => {
     return (
       <div className="flex min-h-[400px] items-center justify-center">
         <Loader2 className="mr-3 h-6 w-6 animate-spin text-orange-600" />
-        <span className="text-sm text-slate-500">Loading Product Development...</span>
+        <span className="text-sm text-slate-500">
+          Loading Product Development...
+        </span>
       </div>
     );
   }
@@ -972,8 +1076,6 @@ const BDMProductDevelopment = () => {
   return (
     <section className="min-h-screen bg-[#f8f8f6]">
       <div className="mx-auto max-w-[1500px] space-y-6 p-4 md:p-6">
-
-        {/* Header */}
         <div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-end">
           <div>
             <div className="mb-2 flex items-center gap-2 text-xs font-bold uppercase tracking-[0.16em] text-orange-600">
@@ -1003,7 +1105,6 @@ const BDMProductDevelopment = () => {
           </div>
         </div>
 
-        {/* Navigation */}
         <div className="flex flex-wrap gap-2 border-b border-slate-200 pb-3">
           {([
             ['overview', 'Overview', Layers],
@@ -1031,27 +1132,27 @@ const BDMProductDevelopment = () => {
             </button>
           )}
         </div>
-
-        {/* OVERVIEW */}
+     <div>
+   </div>
         {view === 'overview' && (
           <div className="space-y-6">
             <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
               {[
                 {
-                  label: 'Draft versions',
+                  label: 'Recipe folders',
                   count: developments.length,
                   icon: ClipboardList,
                   style: 'bg-slate-100 text-slate-700',
                 },
                 {
                   label: 'In trial',
-                  count: versions.filter((item) => item.status === 'testing').length,
+                  count: allApprovedVersions.filter((item) => item.status === 'testing').length,
                   icon: Beaker,
                   style: 'bg-amber-100 text-amber-800',
                 },
                 {
                   label: 'Approved',
-                  count: versions.filter((item) => item.status === 'approved').length,
+                  count: allApprovedVersions.length,
                   icon: CheckCircle2,
                   style: 'bg-green-100 text-green-800',
                 },
@@ -1098,7 +1199,6 @@ const BDMProductDevelopment = () => {
                   </div>
                 )}
               </div>
-
               <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
                 <div className="flex items-center justify-between border-b border-slate-100 p-5">
                   <div>
@@ -1127,7 +1227,6 @@ const BDMProductDevelopment = () => {
           </div>
         )}
 
-        {/* RECIPES */}
         {view === 'recipes' && (
           <div className="space-y-5">
             {showRecipeForm ? (
@@ -1276,7 +1375,6 @@ const BDMProductDevelopment = () => {
           </div>
         )}
 
-        {/* VERSION WORKSPACE */}
         {view === 'workspace' && (
           <div className="space-y-6">
             <div className="flex flex-wrap items-center justify-between gap-3">
@@ -1322,627 +1420,593 @@ const BDMProductDevelopment = () => {
                 </Button>
               </div>
             ) : (
-              <>
-                <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
-                  <div className="space-y-6">
-                    {/* Version selector */}
-                    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div>
-                          <h3 className="font-semibold text-slate-900">Version history</h3>
-                          <p className="mt-1 text-xs text-slate-500">
-                            Each version retains its own formulation and trial history.
-                          </p>
-                        </div>
-                        <span className="text-xs text-slate-500">
-                          {versions.length} saved version(s)
-                        </span>
-                      </div>
-
-                      <div className="mt-4 flex flex-wrap gap-2">
-                        {versions.map((version) => (
-                          <button
-                            key={version.id}
-                            onClick={() => openVersion(version)}
-                            className={`rounded-xl border px-3 py-2 text-left transition ${
-                              selectedVersionId === version.id
-                                ? 'border-orange-500 bg-orange-50'
-                                : 'border-slate-200 hover:border-orange-300'
-                            }`}
-                          >
-                            <div className="flex items-center gap-2">
-                              <span className="text-sm font-bold text-slate-800">
-                                V{version.version}
-                              </span>
-                              {version.is_current && (
-                                <span className="text-[10px] font-semibold uppercase text-orange-600">
-                                  Current
-                                </span>
-                              )}
-                            </div>
-                            <div className="mt-1">
-                              {renderStatus(version.status)}
-                            </div>
-                          </button>
-                        ))}
-                        {versions.length === 0 && (
-                          <p className="text-sm text-slate-500">
-                            No versions yet. Start the first version.
-                          </p>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Version editor */}
-                    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-                      <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-                        <div>
-                          <p className="text-xs font-semibold uppercase tracking-wider text-orange-600">
-                            Formulation
-                          </p>
-                          <h3 className="text-lg font-semibold text-slate-900">
-                            {selectedVersion ? `Version V${selectedVersion.version}` : `New version V${nextVersionNumber}`}
-                          </h3>
-                        </div>
-                        {selectedVersion && renderStatus(selectedVersion.status)}
-                      </div>
-
-                      <div className="mb-6 grid gap-4 md:grid-cols-2">
-                        <div className="space-y-2">
-                          <Label>Batch size (kg) *</Label>
-                          <Input
-                            type="number"
-                            min="0.001"
-                            step="0.001"
-                            value={batchSize}
-                            onChange={(e) => setBatchSize(Number(e.target.value))}
-                          />
-                          <p className="text-xs text-slate-500">
-                            Used to calculate the final cost per kg.
-                          </p>
-                        </div>
-                        <div className="space-y-2">
-                          <Label>Version change notes</Label>
-                          <Input
-                            value={versionNote}
-                            onChange={(e) => setVersionNote(e.target.value)}
-                            placeholder="What changed in this attempt?"
-                          />
-                        </div>
-                      </div>
-
-                      {/* Ingredients */}
-                      <div className="mb-7">
-                        <div className="mb-3 flex items-center justify-between gap-3">
-                          <div>
-                            <h4 className="font-semibold text-slate-900">Ingredients</h4>
-                            <p className="text-xs text-slate-500">
-                              Enter quantities now. Supplier prices are entered after approval.
-                            </p>
-                          </div>
-                          <Button size="sm" variant="outline" onClick={addIngredient}>
-                            <Plus size={14} className="mr-1" />
-                            Add ingredient
-                          </Button>
-                        </div>
-
-                        <div className="space-y-3">
-                          {ingredients.map((item, index) => (
-                            <div
-                              key={item.id}
-                              className="rounded-xl border border-slate-200 bg-slate-50/60 p-4"
-                            >
-                              <div className="mb-3 flex items-center justify-between">
-                                <span className="text-xs font-bold uppercase tracking-wide text-slate-500">
-                                  Ingredient {index + 1}
-                                </span>
-                                <Button
-                                  size="icon"
-                                  variant="ghost"
-                                  onClick={() => removeIngredient(item.id)}
-                                >
-                                  <Trash2 size={15} className="text-red-500" />
-                                </Button>
-                              </div>
-
-                                                            
-                              <div className="grid gap-3 md:grid-cols-2">
-                                <div className="space-y-1.5 md:col-span-2">
-                                  <Label>Ingredient name</Label>
-                                  <Input
-                                    value={item.ingredient_name}
-                                    onChange={(e) => {
-                                  const value = e.target.value;
-
-                                  const matchedStock = stockItems.find(
-                                    (stock) =>
-                                      stock.description.toLowerCase() === value.trim().toLowerCase()
-                                  );
-
-                                  updateIngredient(item.id, 'ingredient_name', value);
-
-                                  if (matchedStock) {
-                                    updateIngredient(item.id, 'stock_code_id', matchedStock.id);
-                                    updateIngredient(item.id, 'source', 'stock');
-                                    updateIngredient(
-                                      item.id,
-                                      'unit',
-                                      matchedStock.unit_of_measure || 'kg'
-                                    );
-                                  } else {
-                                    updateIngredient(item.id, 'stock_code_id', null);
-                                    updateIngredient(item.id, 'source', 'manual');
-                                  }
-                                }}
-                                    placeholder="Search ERP ingredients or enter manually..."
-                                    list={`ingredient-options-${item.id}`}
-                                  />
-                                  <datalist id={`ingredient-options-${item.id}`}>
-                                    {stockItems.map((stock) => (
-                                      <option
-                                        key={stock.id}
-                                        value={stock.description}
-                                      />
-                                    ))}
-                                  </datalist>
-                                  {item.stock_code_id ? (
-                                    <p className="text-xs font-medium text-green-700">
-                                      ✓ Linked to ERP stock
-                                    </p>
-                                  ) : item.ingredient_name.trim() ? (
-                                    <p className="text-xs text-slate-500">
-                                      Manual ingredient
-                                    </p>
-                                  ) : null}
-
-                                  <p className="text-xs text-slate-500">
-                                    Select an existing ERP ingredient or enter a new ingredient name.
-                                  </p>
-                                </div>
-
-                                <div className="space-y-1.5">
-                                  <Label>Quantity</Label>
-                                  <Input
-                                    type="number"
-                                    min="0"
-                                    step="0.001"
-                                    value={item.quantity}
-                                    onChange={(e) =>
-                                      updateIngredient(item.id, 'quantity', Number(e.target.value))
-                                    }
-                                  />
-                                </div>
-
-                                <div className="space-y-1.5">
-                                  <Label>Unit</Label>
-                                  <select
-                                    value={item.unit}
-                                    onChange={(e) =>
-                                      updateIngredient(item.id, 'unit', e.target.value)
-                                    }
-                                    className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-                                  >
-                                    {UNIT_OPTIONS.map((unit) => (
-                                      <option key={unit} value={unit}>
-                                        {unit}
-                                      </option>
-                                    ))}
-                                  </select>
-                                </div>
-                              </div>
-
-
-                              {item.source === 'stock' && (
-                                <div className="mt-3 space-y-2">
-                                  <Label>Choose ERP stock item</Label>
-                                  <select
-                                    value={item.stock_code_id || ''}
-                                    onChange={(e) =>
-                                      selectStockIngredient(item.id, e.target.value)
-                                    }
-                                    className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-                                  >
-                                    <option value="">Select stock item</option>
-                                    {stockItems.map((stock) => (
-                                      <option key={stock.id} value={stock.id}>
-                                        {stock.stock_code} · {stock.description}
-                                      </option>
-                                    ))}
-                                  </select>
-                                </div>
-                              )}
-                            </div>
-                          ))}
-
-                          {ingredients.length === 0 && (
-                            <div className="rounded-xl border border-dashed p-8 text-center">
-                              <p className="text-sm text-slate-500">No ingredients added yet.</p>
-                              <Button className="mt-3" variant="outline" onClick={addIngredient}>
-                                <Plus size={14} className="mr-2" />
-                                Add first ingredient
-                              </Button>
-                            </div>
-                          )}
-                        </div>
-
-                        <div className="mt-3 rounded-xl bg-slate-100 p-3 text-right">
-                          <span className="text-xs text-slate-500">
-                            Ingredient quantities: formulation only
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* Stages */}
-                      
+              <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
+                <div className="space-y-6">
+                  <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
                       <div>
-                        <div className="mb-4">
-                          <h4 className="font-semibold text-slate-900">Production process</h4>
-                          <p className="text-xs text-slate-500">
-                            Complete each production stage in the order it must be performed.
-                          </p>
-                        </div>
-
-                        <div className="space-y-4">
-                          {recipeStages.map((stage, index) => (
-                            <div
-                              key={stage.id}
-                              className="rounded-xl border border-slate-200 p-4"
-                            >
-                              <div className="mb-4 flex items-center justify-between gap-3">
-                                <div>
-                                  <p className="text-xs font-bold uppercase tracking-wide text-orange-600">
-                                    Production stage {index + 1}
-                                  </p>
-                                  <h5 className="mt-1 font-semibold text-slate-900">
-                                    {stage.stage_name || `Stage ${index + 1}`}
-                                  </h5>
-                                </div>
-
-                                <Button
-                                  size="icon"
-                                  variant="ghost"
-                                  onClick={() => removeStage(stage.id)}
-                                >
-                                  <Trash2 size={15} className="text-red-500" />
-                                </Button>
-                              </div>
-
-                              <div className="space-y-3">
-                                <div className="space-y-1.5">
-                                  <Label>Stage {index + 1} name</Label>
-                                  <Input
-                                    value={stage.stage_name}
-                                    onChange={(e) =>
-                                      updateStage(stage.id, 'stage_name', e.target.value)
-                                    }
-                                    placeholder={
-                                      index === 0
-                                        ? "e.g. Ingredient preparation"
-                                        : `e.g. Production stage ${index + 1}`
-                                    }
-                                  />
-                                </div>
-
-                                <div className="space-y-1.5">
-                                  <Label>Recipe / Process instructions</Label>
-                                  <Textarea
-                                    rows={4}
-                                    value={stage.instructions}
-                                    onChange={(e) =>
-                                      updateStage(stage.id, 'instructions', e.target.value)
-                                    }
-                                    placeholder="Explain exactly what needs to be done during this stage, including ingredients, measurements, mixing instructions and processing steps..."
-                                  />
-                                </div>
-
-                                <div className="grid gap-3 md:grid-cols-2">
-                                  <div className="space-y-1.5">
-                                    <Label>Duration (minutes)</Label>
-                                    <Input
-                                      type="number"
-                                      min="0"
-                                      value={stage.duration_minutes}
-                                      onChange={(e) =>
-                                        updateStage(
-                                          stage.id,
-                                          'duration_minutes',
-                                          Number(e.target.value)
-                                        )
-                                      }
-                                    />
-                                  </div>
-
-                                  <div className="space-y-1.5">
-                                    <Label>Temperature</Label>
-                                    <Input
-                                      value={stage.temperature}
-                                      onChange={(e) =>
-                                        updateStage(stage.id, 'temperature', e.target.value)
-                                      }
-                                      placeholder="e.g. 80°C or Room temperature"
-                                    />
-                                  </div>
-                                </div>
-                              </div>
-                            </div>
-                          ))}
-
-                          <Button
-                            type="button"
-                            className="w-full"
-                            variant="outline"
-                            onClick={addStage}
-                          >
-                            <Plus size={15} className="mr-2" />
-                            Add Stage {recipeStages.length + 1}
-                          </Button>
-                        </div>
+                        <h3 className="font-semibold text-slate-900">Version history</h3>
+                        <p className="mt-1 text-xs text-slate-500">
+                          Each version retains its own formulation and trial history.
+                        </p>
                       </div>
-
-
-                      <div className="mt-6 flex justify-end">
-                        <Button
-                          onClick={saveVersion}
-                          disabled={saving}
-                          className="bg-orange-600 text-white hover:bg-orange-700"
-                        >
-                          {saving ? (
-                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                          ) : (
-                            <Save size={15} className="mr-2" />
-                          )}
-                          Save version
-                        </Button>
-                      </div>
+                      <span className="text-xs text-slate-500">
+                        {versions.length} saved version(s)
+                      </span>
                     </div>
 
-                    {/* Trial notes */}
-                    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-                      <h3 className="font-semibold text-slate-900">Trial notes</h3>
-                      <p className="mt-1 text-xs text-slate-500">
-                        Record observations from making and testing this formulation.
-                      </p>
-                      <Textarea
-                        className="mt-4"
-                        rows={4}
-                        value={trialNotes}
-                        onChange={(e) => setTrialNotes(e.target.value)}
-                        placeholder="Record trial results, taste, texture, appearance and observations..."
-                      />
-                      <div className="mt-3 flex justify-end">
-                        <Button
-                          variant="outline"
-                          onClick={saveVersion}
-                          disabled={saving || !selectedVersionId}
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      {versions.map((version) => (
+                        <button
+                          key={version.id}
+                          onClick={() => openVersion(version)}
+                          className={`rounded-xl border px-3 py-2 text-left transition ${
+                            selectedVersionId === version.id
+                              ? 'border-orange-500 bg-orange-50'
+                              : 'border-slate-200 hover:border-orange-300'
+                          }`}
                         >
-                          <Save size={14} className="mr-2" />
-                          Save trial notes
-                        </Button>
-                      </div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-bold text-slate-800">
+                              V{version.version}
+                            </span>
+                            {version.is_current && (
+                              <span className="text-[10px] font-semibold uppercase text-orange-600">
+                                Current
+                              </span>
+                            )}
+                          </div>
+                          <div className="mt-1">{renderStatus(version.status)}</div>
+                        </button>
+                      ))}
+                      {versions.length === 0 && (
+                        <p className="text-sm text-slate-500">
+                          No versions yet. Start the first version.
+                        </p>
+                      )}
                     </div>
                   </div>
 
-                  {/* Review panel */}
-                  <aside className="space-y-5">
-                    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-                      <div className="mb-4 flex items-center gap-2">
-                        <ClipboardList size={19} className="text-orange-600" />
-                        <h3 className="font-semibold text-slate-900">Review</h3>
+                  <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                    <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-wider text-orange-600">
+                          Formulation
+                        </p>
+                        <h3 className="text-lg font-semibold text-slate-900">
+                          {selectedVersion
+                            ? `Version V${selectedVersion.version}`
+                            : `New version V${nextVersionNumber}`}
+                        </h3>
+                      </div>
+                      {selectedVersion && renderStatus(selectedVersion.status)}
+                    </div>
+
+                    <div className="mb-6 grid gap-4 md:grid-cols-2">
+                      <div className="space-y-2">
+                        <Label>Batch size (kg) *</Label>
+                        <Input
+                          type="number"
+                          min="0.001"
+                          step="0.001"
+                          value={batchSize}
+                          onChange={(e) => setBatchSize(Number(e.target.value))}
+                        />
+                        <p className="text-xs text-slate-500">
+                          Used to calculate the final cost per kg.
+                        </p>
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Version change notes</Label>
+                        <Input
+                          value={versionNote}
+                          onChange={(e) => setVersionNote(e.target.value)}
+                          placeholder="What changed in this attempt?"
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="mb-4">
+                        <h4 className="font-semibold text-slate-900">Production stages</h4>
+                        <p className="text-xs text-slate-500">
+                          Add the ingredients and process instructions separately for each stage.
+                        </p>
                       </div>
 
-                      {selectedVersion ? (
-                        <>
-                          <div className="mb-4 rounded-xl bg-slate-50 p-3">
-                            <p className="text-xs text-slate-500">Current status</p>
-                            <div className="mt-2">{renderStatus(selectedVersion.status)}</div>
-                          </div>
+                      <div className="space-y-5">
+                        {recipeStages.map((stage, index) => (
+                          <div
+                            key={stage.id}
+                            className="rounded-xl border border-slate-200 p-4"
+                          >
+                            <div className="mb-4 flex items-center justify-between gap-3">
+                              <div>
+                                <p className="text-xs font-bold uppercase tracking-wide text-orange-600">
+                                  Stage {index + 1}
+                                </p>
+                                <h5 className="mt-1 font-semibold text-slate-900">
+                                  {stage.stage_name || `Stage ${index + 1}`}
+                                </h5>
+                              </div>
 
-                          {selectedVersion.status === 'draft' && (
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                onClick={() => removeStage(stage.id)}
+                                disabled={recipeStages.length === 1}
+                              >
+                                <Trash2 size={15} className="text-red-500" />
+                              </Button>
+                            </div>
+
+                            <div className="mb-5 space-y-1.5">
+                              <Label>Stage name</Label>
+                              <Input
+                                value={stage.stage_name}
+                                onChange={(e) =>
+                                  updateStage(stage.id, 'stage_name', e.target.value)
+                                }
+                                placeholder="e.g. WPIC001 Salt Brine"
+                              />
+                            </div>
+
+                            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                              <div>
+                                <h6 className="text-sm font-semibold text-slate-800">
+                                  Stage ingredients
+                                </h6>
+                                <p className="text-xs text-slate-500">
+                                  Select an ERP raw material or enter a manual ingredient.
+                                </p>
+                              </div>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => addIngredient(stage.id)}
+                              >
+                                <Plus size={14} className="mr-1" />
+                                Add ingredient
+                              </Button>
+                            </div>
+
+                            <div className="overflow-x-auto rounded-lg border border-slate-200">
+                              <table className="w-full min-w-[680px] text-sm">
+                                <thead className="bg-slate-50 text-left text-xs font-semibold uppercase text-slate-500">
+                                  <tr>
+                                    <th className="p-3">Stock code</th>
+                                    <th className="p-3">RM description</th>
+                                    <th className="p-3">Quantity</th>
+                                    <th className="p-3">UOM</th>
+                                    <th className="p-3 text-center">Action</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {stage.ingredients.map((item) => (
+                                    <tr key={item.id} className="border-t border-slate-100">
+                                      <td className="p-2">
+                                        <select
+                                          value={item.stock_code_id || ''}
+                                          onChange={(e) => {
+                                            if (e.target.value) {
+                                              selectStockIngredient(
+                                                stage.id,
+                                                item.id,
+                                                e.target.value
+                                              );
+                                            } else {
+                                              updateIngredient(stage.id, item.id, 'stock_code_id', null);
+                                              updateIngredient(stage.id, item.id, 'stock_code', '');
+                                              updateIngredient(stage.id, item.id, 'source', 'manual');
+                                            }
+                                          }}
+                                          className="h-9 w-full min-w-[145px] rounded-md border border-input bg-background px-2 text-sm"
+                                        >
+                                          <option value="">Manual / select stock</option>
+                                          {stockItems.map((stock) => (
+                                            <option key={stock.id} value={stock.id}>
+                                              {stock.stock_code}
+                                            </option>
+                                          ))}
+                                        </select>
+                                        {!item.stock_code_id && (
+                                          <Input
+                                            className="mt-1 h-8"
+                                            value={item.stock_code}
+                                            onChange={(e) =>
+                                              updateIngredient(stage.id, item.id, 'stock_code', e.target.value)
+                                            }
+                                            placeholder="Manual code"
+                                          />
+                                        )}
+                                      </td>
+                                      <td className="p-2">
+                                        <Input
+                                          value={item.ingredient_name}
+                                          onChange={(e) => {
+                                            const value = e.target.value;
+                                            const match = stockItems.find(
+                                              (stock) =>
+                                                stock.description.toLowerCase() ===
+                                                value.trim().toLowerCase()
+                                            );
+
+                                            updateIngredient(stage.id, item.id, 'ingredient_name', value);
+
+                                            if (match) {
+                                              selectStockIngredient(stage.id, item.id, match.id);
+                                            } else if (item.stock_code_id) {
+                                              updateIngredient(stage.id, item.id, 'stock_code_id', null);
+                                              updateIngredient(stage.id, item.id, 'stock_code', '');
+                                              updateIngredient(stage.id, item.id, 'source', 'manual');
+                                            }
+                                          }}
+                                          list={`stock-options-${stage.id}-${item.id}`}
+                                          placeholder="Search or enter description"
+                                        />
+                                        <datalist id={`stock-options-${stage.id}-${item.id}`}>
+                                          {stockItems.map((stock) => (
+                                            <option key={stock.id} value={stock.description} />
+                                          ))}
+                                        </datalist>
+                                      </td>
+                                      <td className="p-2">
+                                        <Input
+                                          type="number"
+                                          min="0"
+                                          step="0.001"
+                                          value={item.quantity}
+                                          onChange={(e) =>
+                                            updateIngredient(
+                                              stage.id,
+                                              item.id,
+                                              'quantity',
+                                              Number(e.target.value)
+                                            )
+                                          }
+                                          className="min-w-[100px]"
+                                        />
+                                      </td>
+                                      <td className="p-2">
+                                        <select
+                                          value={item.unit}
+                                          onChange={(e) =>
+                                            updateIngredient(stage.id, item.id, 'unit', e.target.value)
+                                          }
+                                          className="h-9 w-full min-w-[75px] rounded-md border border-input bg-background px-2 text-sm"
+                                        >
+                                          {UNIT_OPTIONS.map((unit) => (
+                                            <option key={unit} value={unit}>{unit}</option>
+                                          ))}
+                                        </select>
+                                      </td>
+                                      <td className="p-2 text-center">
+                                        <Button
+                                          size="icon"
+                                          variant="ghost"
+                                          onClick={() => removeIngredient(stage.id, item.id)}
+                                        >
+                                          <Trash2 size={15} className="text-red-500" />
+                                        </Button>
+                                      </td>
+                                    </tr>
+                                  ))}
+                                  {stage.ingredients.length === 0 && (
+                                    <tr>
+                                      <td colSpan={5} className="p-5 text-center text-sm text-slate-500">
+                                        No ingredients added to this stage.
+                                      </td>
+                                    </tr>
+                                  )}
+                                </tbody>
+                              </table>
+                            </div>
+
+                            <div className="mt-5 space-y-1.5">
+                              <Label>Process / Instructions</Label>
+                              <Textarea
+                                rows={4}
+                                value={stage.instructions}
+                                onChange={(e) =>
+                                  updateStage(stage.id, 'instructions', e.target.value)
+                                }
+                                placeholder="Describe the process for this stage..."
+                              />
+                            </div>
+
+                            <div className="mt-4 grid gap-3 md:grid-cols-2">
+                              <div className="space-y-1.5">
+                                <Label>Duration (minutes)</Label>
+                                <Input
+                                  type="number"
+                                  min="0"
+                                  value={stage.duration_minutes}
+                                  onChange={(e) =>
+                                    updateStage(
+                                      stage.id,
+                                      'duration_minutes',
+                                      Number(e.target.value)
+                                    )
+                                  }
+                                />
+                              </div>
+                              <div className="space-y-1.5">
+                                <Label>Temperature</Label>
+                                <Input
+                                  value={stage.temperature}
+                                  onChange={(e) =>
+                                    updateStage(stage.id, 'temperature', e.target.value)
+                                  }
+                                  placeholder="e.g. 80°C or Room temperature"
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+
+                      <Button
+                        type="button"
+                        className="mt-4 w-full"
+                        variant="outline"
+                        onClick={addStage}
+                      >
+                        <Plus size={15} className="mr-2" />
+                        Add Stage {recipeStages.length + 1}
+                      </Button>
+                    </div>
+
+                    <div className="mt-6 flex justify-end">
+                      <Button
+                        onClick={saveVersion}
+                        disabled={saving}
+                        className="bg-orange-600 text-white hover:bg-orange-700"
+                      >
+                        {saving ? (
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        ) : (
+                          <Save size={15} className="mr-2" />
+                        )}
+                        Save version
+                      </Button>
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                    <h3 className="font-semibold text-slate-900">Trial notes</h3>
+                    <p className="mt-1 text-xs text-slate-500">
+                      Record observations from making and testing this formulation.
+                    </p>
+                    <Textarea
+                      className="mt-4"
+                      rows={4}
+                      value={trialNotes}
+                      onChange={(e) => setTrialNotes(e.target.value)}
+                      placeholder="Record trial results, taste, texture, appearance and observations..."
+                    />
+                    <div className="mt-3 flex justify-end">
+                      <Button
+                        variant="outline"
+                        onClick={saveVersion}
+                        disabled={saving || !selectedVersionId}
+                      >
+                        <Save size={14} className="mr-2" />
+                        Save trial notes
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+
+                <aside className="space-y-5">
+                  <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                    <div className="mb-4 flex items-center gap-2">
+                      <ClipboardList size={19} className="text-orange-600" />
+                      <h3 className="font-semibold text-slate-900">Review</h3>
+                    </div>
+
+                    {selectedVersion ? (
+                      <>
+                        <div className="mb-4 rounded-xl bg-slate-50 p-3">
+                          <p className="text-xs text-slate-500">Current status</p>
+                          <div className="mt-2">{renderStatus(selectedVersion.status)}</div>
+                        </div>
+
+                        {selectedVersion.status === 'draft' && (
+                          <Button
+                            className="w-full bg-amber-600 text-white hover:bg-amber-700"
+                            onClick={() => changeStatus('testing')}
+                            disabled={saving}
+                          >
+                            <Beaker size={15} className="mr-2" />
+                            Move to trial
+                          </Button>
+                        )}
+
+                        {selectedVersion.status === 'testing' && (
+                          <div className="space-y-2">
+                            <Button
+                              className="w-full bg-green-700 text-white hover:bg-green-800"
+                              onClick={() => changeStatus('approved')}
+                              disabled={saving}
+                            >
+                              <CheckCircle2 size={15} className="mr-2" />
+                              Approve version
+                            </Button>
+                            <Button
+                              variant="outline"
+                              className="w-full border-red-200 text-red-700 hover:bg-red-50"
+                              onClick={() => setShowRejectionForm(true)}
+                            >
+                              <XCircle size={15} className="mr-2" />
+                              Reject version
+                            </Button>
+                          </div>
+                        )}
+
+                        {selectedVersion.status === 'rejected' && (
+                          <div className="space-y-3">
                             <Button
                               className="w-full bg-amber-600 text-white hover:bg-amber-700"
                               onClick={() => changeStatus('testing')}
-                              disabled={saving}
                             >
-                              <Beaker size={15} className="mr-2" />
-                              Move to trial
+                              <RefreshCw size={15} className="mr-2" />
+                              Reopen for trial
                             </Button>
-                          )}
-
-                          {selectedVersion.status === 'testing' && (
-                            <div className="space-y-2">
-                              <Button
-                                className="w-full bg-green-700 text-white hover:bg-green-800"
-                                onClick={() => changeStatus('approved')}
-                                disabled={saving}
-                              >
-                                <CheckCircle2 size={15} className="mr-2" />
-                                Approve version
-                              </Button>
-                              <Button
-                                variant="outline"
-                                className="w-full border-red-200 text-red-700 hover:bg-red-50"
-                                onClick={() => setShowRejectionForm(true)}
-                              >
-                                <XCircle size={15} className="mr-2" />
-                                Reject version
-                              </Button>
-                            </div>
-                          )}
-
-                          {selectedVersion.status === 'rejected' && (
-                            <div className="space-y-3">
-                              <Button
-                                className="w-full bg-amber-600 text-white hover:bg-amber-700"
-                                onClick={() => changeStatus('testing')}
-                              >
-                                <RefreshCw size={15} className="mr-2" />
-                                Reopen for trial
-                              </Button>
-                              <Button
-                                variant="outline"
-                                className="w-full"
-                                onClick={() => copyVersion(selectedVersion)}
-                              >
-                                <Copy size={15} className="mr-2" />
-                                Copy to a new version
-                              </Button>
-                            </div>
-                          )}
-
-                          {selectedVersion.status === 'approved' && (
-                            <div className="space-y-3">
-                              <p className="text-sm text-green-700">
-                                This version is approved and can now be costed.
-                              </p>
-                              <Button
-                                className="w-full"
-                                onClick={() => setView('costing')}
-                              >
-                                <Calculator size={15} className="mr-2" />
-                                Open costing
-                              </Button>
-                              <Button
-                                variant="outline"
-                                className="w-full"
-                                onClick={() => changeStatus('testing')}
-                              >
-                                Reopen for trial
-                              </Button>
-                            </div>
-                          )}
-
-                          {selectedVersion.status === 'rejected' && (
-                            <div className="mt-5 rounded-xl border border-red-200 bg-red-50 p-4">
-                              <p className="text-xs font-bold uppercase tracking-wide text-red-700">
-                                Previous rejection
-                              </p>
-                              <p className="mt-3 text-xs font-semibold text-red-800">
-                                Reason
-                              </p>
-                              <p className="mt-1 whitespace-pre-wrap text-sm text-red-900">
-                                {selectedVersion.trial_data?.rejection_reason || 'No reason recorded.'}
-                              </p>
-                              <p className="mt-3 text-xs font-semibold text-red-800">
-                                Correction plan
-                              </p>
-                              <p className="mt-1 whitespace-pre-wrap text-sm text-red-900">
-                                {selectedVersion.trial_data?.correction_plan || 'No correction plan recorded.'}
-                              </p>
-                            </div>
-                          )}
-
-                          {showRejectionForm && (
-                            <div className="mt-5 space-y-4 rounded-xl border border-red-200 bg-red-50 p-4">
-                              <h4 className="font-semibold text-red-800">
-                                Reject this version
-                              </h4>
-                              <div className="space-y-1.5">
-                                <Label className="text-red-900">Why was it rejected? *</Label>
-                                <Textarea
-                                  rows={3}
-                                  value={rejectionReason}
-                                  onChange={(e) => setRejectionReason(e.target.value)}
-                                  placeholder="Explain what failed..."
-                                />
-                              </div>
-                              <div className="space-y-1.5">
-                                <Label className="text-red-900">
-                                  What will we do differently? *
-                                </Label>
-                                <Textarea
-                                  rows={3}
-                                  value={correctionPlan}
-                                  onChange={(e) => setCorrectionPlan(e.target.value)}
-                                  placeholder="Describe the correction plan..."
-                                />
-                              </div>
-                              <Button
-                                className="w-full bg-red-700 text-white hover:bg-red-800"
-                                onClick={() => changeStatus('rejected')}
-                                disabled={
-                                  saving ||
-                                  !rejectionReason.trim() ||
-                                  !correctionPlan.trim()
-                                }
-                              >
-                                Confirm rejection
-                              </Button>
-                              <Button
-                                variant="ghost"
-                                className="w-full"
-                                onClick={() => setShowRejectionForm(false)}
-                              >
-                                Cancel
-                              </Button>
-                            </div>
-                          )}
-
-                          <div className="mt-5 border-t border-slate-100 pt-4">
-                            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                              Review history
-                            </p>
-                            {(selectedVersion.trial_data?.status_history || []).length ? (
-                              [...selectedVersion.trial_data.status_history]
-                                .reverse()
-                                .map((entry: any, index: number) => (
-                                  <div key={index} className="border-l-2 border-orange-200 py-2 pl-3">
-                                    <p className="text-xs font-semibold text-slate-800">
-                                      {statusLabel(entry.from)} → {statusLabel(entry.to)}
-                                    </p>
-                                    <p className="mt-1 text-[11px] text-slate-500">
-                                      {formatDate(entry.changed_at)}
-                                    </p>
-                                  </div>
-                                ))
-                            ) : (
-                              <p className="text-xs text-slate-500">
-                                No status changes recorded yet.
-                              </p>
-                            )}
+                            <Button
+                              variant="outline"
+                              className="w-full"
+                              onClick={() => copyVersion(selectedVersion)}
+                            >
+                              <Copy size={15} className="mr-2" />
+                              Copy to a new version
+                            </Button>
                           </div>
+                        )}
 
-                          {selectedVersion.approved_at && (
-                            <div className="mt-3 rounded-lg bg-green-50 p-3 text-xs text-green-800">
-                              Approved on {formatDate(selectedVersion.approved_at)}
+                        {selectedVersion.status === 'approved' && (
+                          <div className="space-y-3">
+                            <p className="text-sm text-green-700">
+                              This version is approved and can now be costed.
+                            </p>
+                            <Button
+                              className="w-full"
+                              onClick={() => setView('costing')}
+                            >
+                              <Calculator size={15} className="mr-2" />
+                              Open costing
+                            </Button>
+                            <Button
+                              variant="outline"
+                              className="w-full"
+                              onClick={() => changeStatus('testing')}
+                            >
+                              Reopen for trial
+                            </Button>
+                          </div>
+                        )}
+
+                        {selectedVersion.status === 'rejected' && (
+                          <div className="mt-5 rounded-xl border border-red-200 bg-red-50 p-4">
+                            <p className="text-xs font-bold uppercase tracking-wide text-red-700">
+                              Previous rejection
+                            </p>
+                            <p className="mt-3 text-xs font-semibold text-red-800">Reason</p>
+                            <p className="mt-1 whitespace-pre-wrap text-sm text-red-900">
+                              {selectedVersion.trial_data?.rejection_reason || 'No reason recorded.'}
+                            </p>
+                            <p className="mt-3 text-xs font-semibold text-red-800">Correction plan</p>
+                            <p className="mt-1 whitespace-pre-wrap text-sm text-red-900">
+                              {selectedVersion.trial_data?.correction_plan || 'No correction plan recorded.'}
+                            </p>
+                          </div>
+                        )}
+
+                        {showRejectionForm && (
+                          <div className="mt-5 space-y-4 rounded-xl border border-red-200 bg-red-50 p-4">
+                            <h4 className="font-semibold text-red-800">
+                              Reject this version
+                            </h4>
+                            <div className="space-y-1.5">
+                              <Label className="text-red-900">Why was it rejected? *</Label>
+                              <Textarea
+                                rows={3}
+                                value={rejectionReason}
+                                onChange={(e) => setRejectionReason(e.target.value)}
+                                placeholder="Explain what failed..."
+                              />
                             </div>
-                          )}
-                        </>
-                      ) : (
-                        <div className="rounded-xl bg-slate-50 p-4 text-sm text-slate-500">
-                          Save a version before using the review controls.
-                        </div>
-                      )}
-                    </div>
+                            <div className="space-y-1.5">
+                              <Label className="text-red-900">
+                                What will we do differently? *
+                              </Label>
+                              <Textarea
+                                rows={3}
+                                value={correctionPlan}
+                                onChange={(e) => setCorrectionPlan(e.target.value)}
+                                placeholder="Describe the correction plan..."
+                              />
+                            </div>
+                            <Button
+                              className="w-full bg-red-700 text-white hover:bg-red-800"
+                              onClick={() => changeStatus('rejected')}
+                              disabled={saving || !rejectionReason.trim() || !correctionPlan.trim()}
+                            >
+                              Confirm rejection
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              className="w-full"
+                              onClick={() => setShowRejectionForm(false)}
+                            >
+                              Cancel
+                            </Button>
+                          </div>
+                        )}
 
-                    <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-                      <h3 className="font-semibold text-slate-900">Recipe information</h3>
-                      <div className="mt-4 space-y-3 text-sm">
-                        <div>
-                          <p className="text-xs text-slate-500">Category</p>
-                          <p className="font-medium text-slate-800">
-                            {productCategory || 'Not specified'}
+                        <div className="mt-5 border-t border-slate-100 pt-4">
+                          <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                            Review history
                           </p>
+                          {(selectedVersion.trial_data?.status_history || []).length ? (
+                            [...selectedVersion.trial_data.status_history]
+                              .reverse()
+                              .map((entry: any, index: number) => (
+                                <div key={index} className="border-l-2 border-orange-200 py-2 pl-3">
+                                  <p className="text-xs font-semibold text-slate-800">
+                                    {statusLabel(entry.from)} → {statusLabel(entry.to)}
+                                  </p>
+                                  <p className="mt-1 text-[11px] text-slate-500">
+                                    {formatDate(entry.changed_at)}
+                                  </p>
+                                </div>
+                              ))
+                          ) : (
+                            <p className="text-xs text-slate-500">
+                              No status changes recorded yet.
+                            </p>
+                          )}
                         </div>
-                        <div>
-                          <p className="text-xs text-slate-500">Owner</p>
-                          <p className="font-medium text-slate-800">
-                            {owner || 'Not specified'}
-                          </p>
-                        </div>
-                        <div>
-                          <p className="text-xs text-slate-500">Versions created</p>
-                          <p className="font-medium text-slate-800">{versions.length}</p>
-                        </div>
+
+                        {selectedVersion.approved_at && (
+                          <div className="mt-3 rounded-lg bg-green-50 p-3 text-xs text-green-800">
+                            Approved on {formatDate(selectedVersion.approved_at)}
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      <div className="rounded-xl bg-slate-50 p-4 text-sm text-slate-500">
+                        Save a version before using the review controls.
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                    <h3 className="font-semibold text-slate-900">Recipe information</h3>
+                    <div className="mt-4 space-y-3 text-sm">
+                      <div>
+                        <p className="text-xs text-slate-500">Category</p>
+                        <p className="font-medium text-slate-800">
+                          {productCategory || 'Not specified'}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-slate-500">Owner</p>
+                        <p className="font-medium text-slate-800">
+                          {owner || 'Not specified'}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-slate-500">Versions created</p>
+                        <p className="font-medium text-slate-800">{versions.length}</p>
                       </div>
                     </div>
-                  </aside>
-                </div>
-              </>
+                  </div>
+                </aside>
+              </div>
             )}
           </div>
         )}
 
-        {/* COSTING */}
         {view === 'costing' && (
           <div className="space-y-6">
             <div>
@@ -1958,14 +2022,14 @@ const BDMProductDevelopment = () => {
                   <h3 className="font-semibold text-slate-900">Approved versions</h3>
                 </div>
 
-                {developments.map((recipe) => {
-                  const recipeVersions = versions.filter(
-                    (item) =>
-                      item.parent_id === recipe.id &&
-                      item.status === 'approved'
+                {allApprovedVersions.map((version) => {
+                  const recipe = developments.find(
+                    (item) => item.id === version.parent_id
                   );
 
-                  return recipeVersions.map((version) => (
+                  if (!recipe) return null;
+
+                  return (
                     <button
                       key={version.id}
                       onClick={() => openCostingVersion(version)}
@@ -1983,12 +2047,14 @@ const BDMProductDevelopment = () => {
                         Approved
                       </span>
                     </button>
-                  ));
+                  );
                 })}
 
-                <div className="p-4 text-xs text-slate-500">
-                  If an approved version is not listed, return to its recipe and check its review status.
-                </div>
+                {!allApprovedVersions.length && (
+                  <p className="p-4 text-sm text-slate-500">
+                    No approved versions are available yet.
+                  </p>
+                )}
               </div>
 
               <div className="space-y-5">
@@ -2034,73 +2100,99 @@ const BDMProductDevelopment = () => {
                           Ingredient costing sheet
                         </h3>
                         <p className="mt-1 text-xs text-slate-500">
-                          Supplier prices are converted to the ingredient quantity unit automatically.
+                          Ingredients remain grouped under their production stages.
                         </p>
                       </div>
 
-                      <div className="overflow-x-auto">
-                        <table className="w-full min-w-[850px] text-sm">
-                          <thead className="bg-slate-50 text-left text-xs text-slate-500">
-                            <tr>
-                              <th className="p-3">Ingredient</th>
-                              <th className="p-3">Quantity</th>
-                              <th className="p-3">Price</th>
-                              <th className="p-3">Price quoted per</th>
-                              <th className="p-3">Supplier</th>
-                              <th className="p-3 text-right">Line cost</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {ingredients.map((item) => (
-                              <tr key={item.id} className="border-t border-slate-100">
-                                <td className="p-3 font-medium text-slate-800">
-                                  {item.ingredient_name}
-                                </td>
-                                <td className="p-3">
-                                  {item.quantity} {item.unit}
-                                </td>
-                                <td className="p-3">
-                                  <Input
-                                    type="number"
-                                    min="0"
-                                    step="0.01"
-                                    value={item.price}
-                                    onChange={(e) =>
-                                      updateIngredient(item.id, 'price', Number(e.target.value))
-                                    }
-                                    className="w-28"
-                                  />
-                                </td>
-                                <td className="p-3">
-                                  <select
-                                    value={item.price_unit}
-                                    onChange={(e) =>
-                                      updateIngredient(item.id, 'price_unit', e.target.value)
-                                    }
-                                    className="h-9 rounded-md border border-input bg-background px-2"
-                                  >
-                                    {UNIT_OPTIONS.map((unit) => (
-                                      <option key={unit} value={unit}>{unit}</option>
-                                    ))}
-                                  </select>
-                                </td>
-                                <td className="p-3">
-                                  <Input
-                                    value={item.supplier}
-                                    onChange={(e) =>
-                                      updateIngredient(item.id, 'supplier', e.target.value)
-                                    }
-                                    placeholder="Supplier"
-                                    className="w-36"
-                                  />
-                                </td>
-                                <td className="p-3 text-right font-semibold tabular-nums">
-                                  {CURRENCY.format(ingredientCost(item))}
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
+                      <div className="space-y-6 p-5">
+                        {recipeStages.map((stage, index) => (
+                          <div key={stage.id}>
+                            <h4 className="mb-3 font-semibold text-slate-800">
+                              Stage {index + 1}: {stage.stage_name}
+                            </h4>
+                            <div className="overflow-x-auto">
+                              <table className="w-full min-w-[800px] text-sm">
+                                <thead className="bg-slate-50 text-left text-xs text-slate-500">
+                                  <tr>
+                                    <th className="p-3">Ingredient</th>
+                                    <th className="p-3">Quantity</th>
+                                    <th className="p-3">Price</th>
+                                    <th className="p-3">Price quoted per</th>
+                                    <th className="p-3">Supplier</th>
+                                    <th className="p-3 text-right">Line cost</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {stage.ingredients.map((item) => (
+                                    <tr key={item.id} className="border-t border-slate-100">
+                                      <td className="p-3">
+                                        <p className="font-medium text-slate-800">
+                                          {item.ingredient_name}
+                                        </p>
+                                        <p className="text-xs text-slate-500">
+                                          {item.stock_code || 'Manual ingredient'}
+                                        </p>
+                                      </td>
+                                      <td className="p-3">
+                                        {item.quantity} {item.unit}
+                                      </td>
+                                      <td className="p-3">
+                                        <Input
+                                          type="number"
+                                          min="0"
+                                          step="0.01"
+                                          value={item.price}
+                                          onChange={(e) =>
+                                            updateCostingIngredient(
+                                              item.id,
+                                              'price',
+                                              Number(e.target.value)
+                                            )
+                                          }
+                                          className="w-28"
+                                        />
+                                      </td>
+                                      <td className="p-3">
+                                        <select
+                                          value={item.price_unit}
+                                          onChange={(e) =>
+                                            updateCostingIngredient(
+                                              item.id,
+                                              'price_unit',
+                                              e.target.value
+                                            )
+                                          }
+                                          className="h-9 rounded-md border border-input bg-background px-2"
+                                        >
+                                          {UNIT_OPTIONS.map((unit) => (
+                                            <option key={unit} value={unit}>{unit}</option>
+                                          ))}
+                                        </select>
+                                      </td>
+                                      <td className="p-3">
+                                        <Input
+                                          value={item.supplier}
+                                          onChange={(e) =>
+                                            updateCostingIngredient(
+                                              item.id,
+                                              'supplier',
+                                              e.target.value
+                                            )
+                                          }
+                                          placeholder="Supplier"
+                                          className="w-36"
+                                        />
+                                      </td>
+                                      <td className="p-3 text-right font-semibold tabular-nums">
+                                        {CURRENCY.format(ingredientCost(item))}
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        ))}
                       </div>
 
                       <div className="space-y-4 border-t border-slate-100 p-5">

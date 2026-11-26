@@ -110,7 +110,9 @@ const documentGroups = [
       { label: 'Document Control Distribution', category: 'Document Control Distribution' },
       { label: 'Obsolete Document List', category: 'Obsolete Document List' },
       { label: 'Non-Conformance Report', category: 'Non-Conformance Report' },
-      { label: 'Quarantine Tag', category: 'Quarantine Tag',}
+      { label: 'Quarantine Tag', category: 'Quarantine Tag'},
+      { label: 'Quarantine Register', category: 'Quarantine Register'},
+      { label: 'Concession Record', category: 'Concession Record'},
     ],
   },
   

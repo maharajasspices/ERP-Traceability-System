@@ -62,6 +62,8 @@ type SavedNCR = {
   batchNumber: string;
   problemDescription: string;
   critically : string;
+  ncrNumber: string;
+  
 };
 
 const emptyForm = (): NCRFormData => ({
@@ -280,7 +282,7 @@ export default function QualityNCRForm() {
   };
 
   const filteredRecords = savedRecords.filter((record) => {
-    const data: Partial<NCRFormData> = record.form_data || {};
+    const data = record.form_data || {};
     const searchable = [
       record.record_number,
       record.factory,

@@ -598,6 +598,7 @@ export default function NonConformanceForm() {
                       updateField("ncrNumber", "");
                     }}
                   >
+                    
                     <option value="Rockwood">Rockwood</option>
                     <option value="Nguni">Nguni</option>
                   </select>
